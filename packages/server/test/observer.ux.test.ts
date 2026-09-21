@@ -71,6 +71,19 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     expect(html).toContain("【我的席位凭证】");
   });
 
+  it("页面含帮助体系：右上角帮助按钮/帮助弹窗/未登录 agent 接入指引/列表页脚帮助速览", async () => {
+    const html = await (await fetch(base + "/")).text();
+    expect(html).toContain("helpBtn"); // 右上角帮助按钮
+    expect(html).toContain("helpModal"); // 帮助弹窗（body 级）
+    expect(html).toContain("系统帮助"); // 弹窗标题 / 按钮 title
+    expect(html).toContain("agentAccessText"); // agent 接入指令构造器（安装+注册）
+    expect(html).toContain("复制 agent 接入指令"); // 未登录页/页脚/弹窗共用复制按钮文案
+    expect(html).toContain("让 agent 接入本系统"); // 未登录页接入卡
+    expect(html).toContain("/api/users"); // 指令含注册端点
+    expect(html).toContain("帮助速览"); // 已登录列表页底部帮助卡
+    expect(html).not.toContain("不开放注册"); // systemadmin 不开放注册信息已移除
+  });
+
   it("/api/me 返回 role（默认 user）", async () => {
     const t = (await call("POST", "/api/users", { body: { name: "ux-甲" } })).data.token;
     const me = await call("GET", "/api/me", { token: t });
@@ -112,15 +125,17 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     });
   });
 
-  it("列表 mySeatRole：持席位用户标到角色，路人为 null", async () => {
+  it("列表 mySeatRole：持席位用户标到角色；未参与路人列表即不可见（收权）", async () => {
     const own = await call("GET", "/api/observer/tables", { token: ownerUser });
     const mine = own.data.tables.find((t: { tableId: string }) => t.tableId === tableId);
     expect(mine.mySeatRole).toBe("proposer");
     expect(mine.mySeatName).toBe("建桌人A");
     const st = await call("GET", "/api/observer/tables", { token: stranger });
     const other = st.data.tables.find((t: { tableId: string }) => t.tableId === tableId);
-    expect(other.mySeatRole).toBeNull();
-    expect(other.mySeatName).toBeNull();
+    expect(other).toBeUndefined(); // 路人不再看到他人桌
+    const stDetail = await call("GET", `/api/observer/tables/${tableId}`, { token: stranger });
+    expect(stDetail.status).toBe(403);
+    expect(stDetail.error.code).toBe("not_participant");
   });
 
   it("my/start：路人 403；未全员就绪 409；非建桌人 403；就绪后建桌人成功开局", async () => {

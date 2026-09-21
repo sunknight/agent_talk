@@ -151,16 +151,52 @@ export class Hub {
     return { tableId, ownerSeatId, ownerSeatToken, inviteCodes };
   }
 
+  /** 邀请码预检（Web 凭码入桌）：裸码或「完整邀请」整段文本均可，服务端提取码；只读不消费次数 */
+  previewInvite(userToken: string, raw: string): {
+    code: string; tableId: string; topic: string; phase: string;
+    role: string; usesLeft: number; expiresAt: number; seatCount: number;
+    mySeat: { seatId: string; name: string; role: string } | null;
+  } {
+    const u = this.requireUser(userToken);
+    // 邀请码 = 10 位大写 hex；完整邀请文本里的 tableId / token 均为更长整词，词边界可精确命中
+    const m = /\b[0-9A-Fa-f]{10}\b/.exec(String(raw ?? "").trim());
+    if (!m) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
+    const code = m[0].toUpperCase();
+    const inv = this.store.peekInvite(code);
+    if (!inv) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
+    let meta: TableMeta;
+    try {
+      meta = this.requireTable(inv.tableId);
+    } catch {
+      throw new ApiError(403, "bad_invite", "邀请码无效或已用尽"); // 所属桌已删除
+    }
+    const seatId = this.activeSeatOfUser(inv.tableId, u.userId);
+    const seat = seatId ? this.store.getSeat(inv.tableId, seatId) : null;
+    return {
+      code, tableId: meta.tableId, topic: meta.topic, phase: meta.phase,
+      role: inv.role, usesLeft: inv.usesLeft, expiresAt: inv.expiresAt, seatCount: meta.seatCount,
+      mySeat: seat ? { seatId: seat.seatId, name: seat.name, role: seat.role } : null,
+    };
+  }
+
   joinTable(userToken: string, tableId: string, p: {
     inviteCode: string; seatName: string; role: "proposer" | "reviewer" | "observer"; agentLabel: string;
     capsOverride?: Partial<Record<"canPublish" | "canModifyOwn" | "canExecuteRequests" | "canSendRequests" | "canVote", boolean>>;
   }): { seatId: string; token: string; seat: SeatInfo } {
     const user = this.requireUser(userToken);
     const meta = this.requireTable(tableId);
-    if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，中途加入请经建桌人人工安排（observer 邀请码）");
+    if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，不再接受凭码入席");
+    // 同一用户已持有本桌 active 席位：拒绝重复入席并引导进桌（退席 left 后可重新凭码入席）
+    const existed = this.activeSeatOfUser(tableId, user.userId);
+    if (existed) {
+      const s = this.store.getSeat(tableId, existed);
+      throw new ApiError(409, "already_seated", `你已在本桌持有席位「${s?.name ?? existed}」，无需重复入席`);
+    }
     // 增减参与人：open 阶段自由入席；开始后由建桌人人工协调
-    const inv = this.store.consumeInvite(p.inviteCode);
+    // 先只读校验码有效性与归属（消费前）：无效或跨桌的尝试不扣减次数
+    const inv = this.store.peekInvite(p.inviteCode);
     if (!inv) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
+    if (inv.tableId !== tableId) throw new ApiError(403, "bad_invite", "邀请码不属于本圆桌");
     // 角色由邀请码固定（身份安排权在建桌人），席位不能自封
     if (inv.role !== "any" && inv.role !== p.role) {
       throw new ApiError(403, "role_mismatch", `该邀请码的角色为 ${inv.role}，与声明的 ${p.role} 不符`);
@@ -170,6 +206,8 @@ export class Hub {
       throw new ApiError(409, "proposer_exists", "本桌已有提案人（建桌人）");
     }
     if (!p.seatName?.trim()) throw new ApiError(422, "bad_payload", "seatName 必填");
+    // 校验全过才真正消费次数（并发下恰好被用尽则拒绝）
+    if (!this.store.consumeInvite(p.inviteCode)) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
     const seatId = newId("seat");
     const seat: ServerSeat = {
       seatId, name: p.seatName.trim(), role: p.role, caps: resolveCaps(p.role, p.capsOverride),
@@ -1086,9 +1124,23 @@ export class Hub {
 
   // ================= 观察端（Web 控制台） =================
 
-  /** 观察端桌列表：全桌摘要 + 当前用户在各桌的席位标记（null = 无席位，供「我的席位」徽章/筛选） */
-  observerTables(userId: string) {
-    return this.store.listTables().map((t) => {
+  /** 参与判定：用户在本桌持有 active 席位（left 视为不再参与，与 requireSeat 拒 left 一致） */
+  private activeSeatOfUser(tableId: string, userId: string): string | null {
+    const seatId = this.store.seatOfUser(tableId, userId);
+    if (!seatId) return null;
+    const s = this.store.getSeat(tableId, seatId);
+    return s && s.status !== "left" ? seatId : null;
+  }
+
+  /** 桌列表（按角色收权）：systemadmin 全量；普通用户仅自己持有 active 席位的桌 */
+  tablesForUser(user: { userId: string; role: string }) {
+    if (user.role === "systemadmin") return this.store.listTables();
+    return this.store.listTables().filter((t) => this.activeSeatOfUser(t.tableId, user.userId));
+  }
+
+  /** 观察端桌列表：可见桌摘要 + 当前用户在各桌的席位标记（null = 无席位，供「我的席位」徽章/筛选） */
+  observerTables(userId: string, role: "user" | "systemadmin" = "user") {
+    return this.tablesForUser({ userId, role }).map((t) => {
       const seatId = this.store.seatOfUser(t.tableId, userId);
       const seat = seatId ? this.store.getSeat(t.tableId, seatId) : null;
       return { ...t, mySeatRole: seat ? seat.role : null, mySeatName: seat ? seat.name : null };
@@ -1104,9 +1156,13 @@ export class Hub {
     return this.startTable(tableId, seat);
   }
 
-  /** 桌详情（观察者视角）：状态 + 席位 + 产物 + 资料 + 请求 + 全量消息 + 变动记录 + 下一步动作；userId 给出时附 mySeatId（单方视角面板用） */
-  observerDetail(tableId: string, userId?: string) {
+  /** 桌详情（观察者视角）：状态 + 席位 + 产物 + 资料 + 请求 + 全量消息 + 变动记录 + 下一步动作；userId 给出时附 mySeatId（单方视角面板用）。
+   *  收权：普通用户仅可查看自己参与的圆桌（systemadmin 全量观察） */
+  observerDetail(tableId: string, userId?: string, role: "user" | "systemadmin" = "user") {
     const meta = this.requireTable(tableId);
+    if (userId && role !== "systemadmin" && !this.activeSeatOfUser(tableId, userId)) {
+      throw new ApiError(403, "not_participant", "仅可查看自己参与的圆桌（你在本桌没有席位）");
+    }
     return {
       table: this.tableInfo(tableId),
       documents: this.listDocuments(tableId),
@@ -1116,7 +1172,7 @@ export class Hub {
       minutes: this.store.getMessages(tableId).filter((m) => m.type === "MINUTES").at(-1)?.payload ?? null,
       recentChanges: this.changesOf(tableId, 0).slice(-50),
       meta: { createdAt: meta.createdAt, closedAt: meta.closedAt ?? null, goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, rolePlan: meta.rolePlan },
-      mySeatId: userId ? this.store.seatOfUser(tableId, userId) : null,
+      mySeatId: userId ? this.activeSeatOfUser(tableId, userId) : null,
     };
   }
 

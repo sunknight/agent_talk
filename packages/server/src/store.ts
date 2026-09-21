@@ -512,6 +512,12 @@ export class Store extends EventEmitter {
     this.st.inviteDecr.run(code);
     return { tableId: String(r.table_id), role: String(r.role) };
   }
+  /** 只读查码（不消费次数）：预检 / 入席前校验归属用 */
+  peekInvite(code: string): { tableId: string; role: string; usesLeft: number; expiresAt: number } | null {
+    const r = this.st.inviteGet.get(code) as Row | undefined;
+    if (!r || Number(r.expires_at) < Date.now() || Number(r.uses_left) <= 0) return null;
+    return { tableId: String(r.table_id), role: String(r.role), usesLeft: Number(r.uses_left), expiresAt: Number(r.expires_at) };
+  }
 
   // ---------- audit ----------
   appendAudit(rec: AuditRecord) {

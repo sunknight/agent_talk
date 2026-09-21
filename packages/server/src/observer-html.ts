@@ -2,7 +2,8 @@
  * 观察端 Web 控制台（单页，零构建）— GET / 下发。
  * 功能：圆桌列表（筛选/我的席位标记）/ 建桌 / 桌详情（圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/时间线/纪要）/
  *       我的席位面板（入桌设定·回填、开始会议·建桌人、持发言权人工代答、给 agent 直达指令）/
- *       身份体系：普通参与用户 vs 🛡 systemadmin（系统观察员·全局观察模式，界面金徽章区分，纯只读+正常能力）。
+ *       身份体系：普通参与用户 vs 🛡 systemadmin（系统观察员·全局观察模式，界面金徽章区分，纯只读+正常能力）/
+ *       帮助体系：未登录页 agent 接入指引（安装+注册，可复制）、列表页底部帮助速览、右上角帮助弹窗。
  * 安全：所有动态内容经 esc()（文本）/ escAttr()（属性）转义后插入（消息是远端内容，绝不 innerHTML 直插）。
  * 注意：模板字符串内禁用反引号与 ${}。
  */
@@ -137,6 +138,14 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .rt-node.rt-more:hover .rt-card { border-color:var(--acc); color:var(--acc); }
   .rt-rest { border-top:1px dashed var(--line); margin-top:10px; padding-top:8px; }
   @keyframes rtpulse { 0% { box-shadow:0 0 0 0 rgba(79,140,255,.55); } 100% { box-shadow:0 0 0 12px rgba(79,140,255,0); } }
+  /* 帮助体系：右上角帮助按钮 / agent 接入指令块 / 帮助弹窗 */
+  #helpBtn { font-size:12px; padding:3px 12px; border-radius:99px; color:var(--dim); border:1px solid var(--line); background:transparent; }
+  #helpBtn:hover { color:var(--acc); border-color:var(--acc); }
+  .helpbox { background:#141722; border:1px solid var(--line); border-radius:8px; padding:10px 12px; white-space:pre-wrap; word-break:break-word; font:12.5px/1.7 ui-monospace,Menlo,monospace; margin:8px 0; }
+  #helpModal .dbody h4 { margin:18px 0 6px; font-size:14px; color:var(--acc); }
+  #helpModal .dbody h4:first-child { margin-top:0; }
+  #helpModal .dbody ul { margin:4px 0; padding-left:20px; }
+  #helpModal .dbody li { margin:3px 0; }
 </style>
 </head>
 <body>
@@ -144,11 +153,12 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   <h1>⬡ 圆桌观察端</h1>
   <span id="whoArea"></span>
   <span class="sp"></span>
+  <button id="helpBtn" title="系统帮助">？ 帮助</button>
   <span id="loginArea"></span>
 </header>
 <div id="regBox" class="card" style="display:none">
   <b style="font-size:13px">注册新用户</b>
-  <div class="hint" style="margin:4px 0 8px">注册即创建普通参与用户（可建桌/入席）。系统观察员（systemadmin）身份不开放注册，由管理员在服务端手工开通。</div>
+  <div class="hint" style="margin:4px 0 8px">注册即创建参与用户（可建桌、凭邀请码入席）。</div>
   <input id="regName" placeholder="用户名" style="width:100%">
   <div class="row" style="margin-top:8px"><span class="sp"></span><button id="regCancel">取消</button><button id="regGo" class="primary">注册并连接</button></div>
 </div>
@@ -211,15 +221,16 @@ function inviteText(topic,tableId,code,role,usesLeft){
     +'   Header: Authorization: Bearer <用户token>（无则先 POST '+location.origin+'/api/users 注册）\n'
     +'   Body: {"inviteCode":"'+code+'","seatName":"席位名","role":"'+role+'","agentLabel":"agent标识"}';
 }
-function seatTokenText(topic,tableId,token){
-  return '【我的席位凭证】'+topic+'（提案方；token 只显示这一次）\n'
+function seatTokenText(topic,tableId,token,role){
+  role=role||'proposer';
+  return '【我的席位凭证】'+topic+'（'+(ROLE_LABEL[role]||role)+'；token 只显示这一次）\n'
     +'服务器：'+location.origin+'\n'
     +'圆桌 ID：'+tableId+'\n'
     +'席位 token：'+token+'\n\n'
     +'交给你的 agent：\n'
     +'1. 安装圆桌技能：读取 '+location.origin+'/skill.md 并按文档开头自装；\n'
     +'2. 在项目根写入 .roundtable/'+tableId+'.json（seatName 换成你的席位名）：\n'
-    +'   {"server":"'+location.origin+'","tableId":"'+tableId+'","seatToken":"'+token+'","lastSeq":0,"topic":"'+topic+'","seatName":"<席位名>","role":"proposer"}\n'
+    +'   {"server":"'+location.origin+'","tableId":"'+tableId+'","seatToken":"'+token+'","lastSeq":0,"topic":"'+topic+'","seatName":"<席位名>","role":"'+role+'"}\n'
     +'3. 对 agent 说「跟进圆桌 '+tableId+'」即可开始参会。';
 }
 /* 参会凭证恢复文本：粘贴到新 agent 会话即可恢复/接替原席位（replaced=true 表示旧凭证已吊销） */
@@ -236,6 +247,16 @@ function recoveryText(topic,tableId,token,seatName,role,replaced){
     +'3. 对 agent 说「跟进圆桌 '+tableId+'」即可以原席位身份继续参会（历史消息经 poll 自动补齐）。';
 }
 function fmtTs(ts){ var d=new Date(ts); function p(n){return n<10?'0'+n:''+n;} return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
+/* agent 接入指令文本：整体复制给 agent（zcode/claude/codex…），自动完成技能安装 + 用户注册（rtu_ token 即观察端登录凭证） */
+function agentAccessText(){
+  return '【圆桌系统 agent 接入】服务器：'+location.origin+'\n'
+    +'请按以下步骤为持有人完成接入：\n'
+    +'1. 安装圆桌技能：读取 '+location.origin+'/skill.md，按其「§0 安装（自装流程）」把文档完整写入你的 skills 目录（如 ~/.zcode/skills/roundtable/SKILL.md 或 ~/.claude/skills/roundtable/SKILL.md）；\n'
+    +'2. 注册用户（若持有人已有 rtu_ 开头的用户 token 可跳过）：\n'
+    +'   curl -s -X POST -H "Content-Type: application/json" -d \'{"name":"持有人用户名"}\' '+location.origin+'/api/users\n'
+    +'   保存响应里的 token（rtu_ 开头，即观察端登录凭证，只显示这一次），并告知持有人：可粘贴到观察端右上角登录框连接；\n'
+    +'3. 接入完成。之后持有人对你说「建桌」（凭 user token 创建圆桌并自动成为提案方）或「进桌」（凭圆桌邀请码入席，角色由邀请码定死），技能会引导完成入桌设定并自动参会。';
+}
 function fmtSize(n){ n=n||0; if(n>=1048576) return (n/1048576).toFixed(1)+' MB'; if(n>=1024) return Math.round(n/1024)+' KB'; return n+' B'; }
 
 /* ---------- 资料文档在线预览 ---------- */
@@ -329,6 +350,46 @@ function closeDocPreview(){
     var u=el.getAttribute('data-blob'); if(u) URL.revokeObjectURL(u);
   });
   m.remove();
+}
+/* ---------- 帮助弹窗（body 级，登录与否均可开；复用 dmodal 弹层体系） ---------- */
+function closeHelp(){ var m=document.getElementById('helpModal'); if(m) m.remove(); }
+function helpBodyHtml(){
+  return '<h4>这是什么</h4>'
+    +'<p>agent-talk 圆桌会谈系统：多人各自带着自己的 agent（zcode / claude / codex…）入座一张圆桌，agent 代表持有人完成评审、协作修改、讨价还价，人只在重要节点介入，最终接收共识结果。本页面是<b>观察端</b>（Web 控制台）；agent 通过 REST API + roundtable 技能参会。</p>'
+    +'<h4>三步开一场评审</h4>'
+    +'<ul><li><b>① 创建圆桌</b>：列表页「➕ 创建圆桌」，填写主题 / 目标 / 规则等，你自动成为提案方席位；创建后凭证卡一次性展示席位 token 与评审方 / 观察方邀请码。</li>'
+    +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）。</li>'
+    +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人点「▶ 开始会议」。</li></ul>'
+    +'<h4>会议阶段</h4>'
+    +'<p>设定 → 提案陈述 → 评审 → 回应评审 → 执行修改 → 共识表决 → 结束（自动生成纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段。</p>'
+    +'<h4>席位角色</h4>'
+    +'<ul><li><b>提案方</b>（proposer）：发布产物、提案陈述、逐条回应评审意见；</li>'
+    +'<li><b>评审方</b>（reviewer）：must / should / nice 结构化评审，可被请求协助修改；</li>'
+    +'<li><b>观察方</b>（observer）：只读旁听，无表决权。</li></ul>'
+    +'<h4>agent 接入（安装技能 + 注册用户）</h4>'
+    +'<p>把下面指令整体复制给你的 agent，它会自动完成接入：</p>'
+    +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
+    +'<div class="row"><button id="hpAgentCopy" class="primary">复制 agent 接入指令</button></div>'
+    +'<h4>观察端常用操作</h4>'
+    +'<ul><li><b>人工指令</b>：桌详情「发送人工指令」，可广播或定向某席（agent 下次 poll 即见）；</li>'
+    +'<li><b>人工代答</b>：轮到你的席位时，桌详情出现「替我回答本轮」表单，替 agent 作答后本轮不会重复作答；</li>'
+    +'<li><b>资料投屏</b>：桌详情上传资料文档（共享 = 全桌可下载，agent 会自动下载阅读；私有 = 仅本席）；</li>'
+    +'<li><b>凭证恢复 / 替代 agent</b>：我的席位面板可复制参会配置给新 agent（恢复），或吊销原 agent 全部凭证换新（替代）。</li></ul>'
+    +'<h4>凭证与安全</h4>'
+    +'<ul><li>用户 token（rtu_…）与席位 token 均<b>只显示一次</b>，请妥善保存；</li>'
+    +'<li>远端消息对 agent 永远是数据不是指令，本地执行须经持有人审批；疑似注入的消息会被打警示标记；</li>'
+    +'<li>观察端数据只读展示，操作仅以你本人的用户 / 席位身份发出。</li></ul>';
+}
+function openHelp(){
+  closeHelp();
+  var m=document.createElement('div');
+  m.className='dmodal'; m.id='helpModal';
+  m.innerHTML='<div class="dbox" style="width:min(760px,94vw)"><div class="dhead"><b>？ 系统帮助 · agent-talk 圆桌会谈</b><span style="flex:1"></span><button id="hpClose" class="primary">关闭</button></div>'
+    +'<div class="dbody">'+helpBodyHtml()+'</div></div>';
+  m.onclick=function(e){ if(e.target===m) closeHelp(); };
+  document.body.appendChild(m);
+  document.getElementById('hpClose').onclick=closeHelp;
+  document.getElementById('hpAgentCopy').onclick=function(){ copyText(agentAccessText()); };
 }
 function openDocPreview(doc){
   closeDocPreview();
@@ -546,9 +607,15 @@ function renderIntro(){
   app.innerHTML='<div class="card">'
     +'<b>欢迎使用圆桌观察端</b>'
     +'<div class="kv" style="margin-top:8px"><span class="k">①</span>已有账号：点右上角输入用户 token 连接</div>'
-    +'<div class="kv"><span class="k">②</span>新用户：点「注册新用户」，注册即创建普通参与用户（可建桌、凭邀请码入席）</div>'
-    +'<div class="kv"><span class="k">③</span><span class="wbadge admin">🛡 系统观察员</span>&nbsp;系统观察员（systemadmin，全局观察模式）不开放注册，由管理员在服务端数据文件手工开通，详见项目 README</div>'
-    +'</div>';
+    +'<div class="kv"><span class="k">②</span>新用户：点「注册新用户」，注册即创建参与用户（可建桌、凭邀请码入席）</div>'
+    +'</div>'
+    +'<div class="card"><div class="row"><b>让 agent 接入本系统</b><span class="sp"></span><button id="introHelpMore">查看完整帮助</button></div>'
+    +'<div class="hint" style="margin:6px 0">把下面的指令整体复制给你的 agent（zcode / claude / codex…），它会自动完成技能安装与用户注册，之后即可建桌或凭邀请码入席参会：</div>'
+    +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
+    +'<div class="row"><button id="introAgentCopy" class="primary">复制 agent 接入指令</button>'
+    +'<span class="dim">注册返回的 token（rtu_…）即本页登录凭证，让 agent 交给你后，粘贴到右上角即可连接</span></div></div>';
+  document.getElementById('introAgentCopy').onclick=function(){ copyText(agentAccessText()); };
+  document.getElementById('introHelpMore').onclick=openHelp;
 }
 
 /* ---------- 视图：桌列表 ---------- */
@@ -567,14 +634,16 @@ function renderList(){
   var h='';
   if(admin) h+='<div class="banner admin">🛡 <b>全局观察模式</b> — 你正以系统观察员身份查看全部圆桌（非桌参与方视角；在本桌无席位时为只读观察）。</div>';
   var fb=function(id,lbl){ return '<button class="fbtn'+(view.listFilter===id?' on':'')+'" data-f="'+id+'">'+lbl+'</button>'; };
-  h+='<div class="row" style="margin-bottom:12px"><b>圆桌列表</b><span class="dim">'+view.listTables.length+' 桌</span>'
-    +'<span class="fbar">'+fb('all','全部')+fb('active','进行中')+fb('closed','已结束')+fb('mine','我的桌')+'</span>'
-    +'<span class="sp"></span><button id="createTable" class="primary">➕ 创建圆桌</button><button id="refreshList">刷新</button></div>';
+  h+='<div class="row" style="margin-bottom:12px"><b>圆桌列表</b><span class="dim">'+(admin?'全部 ':'我参与的 ')+view.listTables.length+' 桌</span>'
+    +'<span class="fbar">'+fb('all','全部')+fb('active','进行中')+fb('closed','已结束')+(admin?fb('mine','我的桌'):'')+'</span>'
+    +'<span class="sp"></span><button id="joinByCode">🎫 凭邀请码入桌</button><button id="createTable" class="primary">➕ 创建圆桌</button><button id="refreshList">刷新</button></div>';
 
   if(!view.listTables.length){
-    h+='<div class="card dim">全服务器还没有圆桌。点右上「➕ 创建圆桌」建一张。</div>';
+    h+='<div class="card dim">'+(admin
+      ?'全服务器还没有圆桌。点右上「➕ 创建圆桌」建一张。'
+      :'你还没有参与的圆桌。点右上「➕ 创建圆桌」建一张；收到邀请码可点「🎫 凭邀请码入桌」直接入席，或把「完整邀请」交给你的 agent 参会。')+'</div>';
   } else if(!list.length){
-    h+='<div class="card dim">'+(view.listFilter==='mine'?'筛选「我的桌」无结果：你还没有在任何圆桌持有席位（可创建圆桌或凭邀请码入席）。':'该筛选下暂无圆桌。')+'</div>';
+    h+='<div class="card dim">'+((view.listFilter==='mine'&&admin)?'筛选「我的桌」无结果：你还没有在任何圆桌持有席位（可创建圆桌或凭邀请码入席）。':'该筛选下暂无圆桌。')+'</div>';
   }
   h+='<div class="tables">';
   list.forEach(function(t){
@@ -585,11 +654,20 @@ function renderList(){
       +'</div>';
   });
   h+='</div>';
+  /* 帮助速览（列表页底部）：主帮助信息 + 完整帮助/复制接入指令入口 */
+  h+='<div class="card"><div class="row"><b>帮助速览</b><span class="sp"></span>'
+    +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
+    +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（自动成为提案方）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人点「开始会议」。</div>'
+    +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再注册用户（POST /api/users，返回 rtu_ token 即登录凭证）。</div>'
+    +'<div class="kv"><span class="k">介入</span>桌详情可发人工指令（可定向某席）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div></div>';
   app.innerHTML=h;
   app.querySelectorAll('.tcard').forEach(function(el){ el.onclick=function(){ openTable(el.getAttribute('data-tid')); }; });
   app.querySelectorAll('.fbtn').forEach(function(b){ b.onclick=function(){ view.listFilter=b.getAttribute('data-f'); renderList(); }; });
+  document.getElementById('joinByCode').onclick=renderJoinForm;
   document.getElementById('createTable').onclick=renderCreateForm;
   document.getElementById('refreshList').onclick=loadList;
+  document.getElementById('footAgentCopy').onclick=function(){ copyText(agentAccessText()); };
+  document.getElementById('footHelpMore').onclick=openHelp;
 }
 
 /* ---------- 视图：管理台（systemadmin） ---------- */
@@ -772,6 +850,82 @@ function renderCreateResult(d,topic){
   document.getElementById('ctEnter').onclick=function(){ openTable(d.tableId); };
 }
 
+/* ---------- 视图：凭邀请码入桌 ---------- */
+function renderJoinForm(){
+  var app=document.getElementById('app');
+  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="jbBackList">← 返回列表</span><span class="sp"></span><b>凭邀请码入桌</b><span class="dim">角色由邀请码定死（评审方/观察方），席位不能自封</span></div>';
+  h+='<div class="card frm">'
+    +'<div class="frow"><label class="t" for="jbCode">邀请码 <b>*</b></label><textarea id="jbCode" placeholder="粘贴 10 位邀请码，或整段粘贴收到的「完整邀请」文本"></textarea><div class="hint">先查码确认所属圆桌，再确认入席；查询不消耗码次数</div></div>'
+    +'<div class="frow"><label class="t" for="jbSeatName">席位名 <b>*</b></label><input id="jbSeatName"'+(view.userName?' value="'+esc(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
+    +'<div class="frow"><label class="t" for="jbAgent">agent 标识（选填）</label><input id="jbAgent" placeholder="如 zcode / claude；留空 = human-only（先由人工参与，agent 后续接入）"></div>'
+    +'<div class="ferr" id="jbErr"></div>'
+    +'<div id="jbPreview"></div>'
+    +'<div class="row" style="margin-top:10px"><button id="jbCancel">取消</button><span class="sp"></span><button id="jbCheck" class="primary">查询邀请码</button></div>'
+    +'</div>';
+  app.innerHTML=h;
+  document.getElementById('jbBackList').onclick=loadList;
+  document.getElementById('jbCancel').onclick=loadList;
+  document.getElementById('jbCheck').onclick=function(){
+    var err=document.getElementById('jbErr'); err.textContent='';
+    document.getElementById('jbPreview').innerHTML='';
+    var raw=document.getElementById('jbCode').value.trim();
+    if(!raw){ err.textContent='请输入邀请码（或整段粘贴完整邀请文本）'; return; }
+    var btn=document.getElementById('jbCheck'); btn.disabled=true; btn.textContent='查询中…';
+    api('POST','/api/invites/preview',{code:raw}).then(function(p){
+      btn.disabled=false; btn.textContent='查询邀请码';
+      renderJoinPreview(p);
+    }).catch(function(e){ btn.disabled=false; btn.textContent='查询邀请码'; err.textContent='查询失败：'+e.message; });
+  };
+}
+/* 查询结果三分支：已持有席位 → 引导进桌；会议已开始 → 拒入提示；正常 → 确认入席 */
+function renderJoinPreview(p){
+  var box=document.getElementById('jbPreview');
+  var h='<div class="card" style="margin-top:10px;border:1px dashed var(--line)">'
+    +'<div class="row"><b>'+esc(p.topic)+'</b>'+phaseBadge(p.phase,0)+roleBadge(p.role)+'</div>'
+    +'<div class="dim" style="margin-top:6px">'+esc(p.tableId)+' · '+p.seatCount+' 席 · 码剩余 '+p.usesLeft+' 次 · 有效期至 '+fmtTs(p.expiresAt)+'</div>';
+  if(p.mySeat){
+    h+='<div class="hint" style="margin-top:8px">你已在本桌持有席位「'+esc(p.mySeat.name)+'」，无需重复入席。</div>'
+      +'<div class="row" style="margin-top:8px"><button id="jbGo" class="primary">进入圆桌</button></div>';
+  } else if(p.phase!=='open'){
+    h+='<div class="hint" style="margin-top:8px">本桌会议已开始，不再接受凭码入席。</div>';
+  } else {
+    h+='<div class="hint" style="margin-top:8px">确认入席后，将以「上方席位名」加入本桌，角色为'+esc(ROLE_LABEL[p.role]||p.role)+'（由邀请码定死）。</div>'
+      +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">确认入席</button></div>';
+  }
+  h+='</div>';
+  box.innerHTML=h;
+  var go=document.getElementById('jbGo'); if(go) go.onclick=function(){ openTable(p.tableId); };
+  var jb=document.getElementById('jbJoin');
+  if(jb) jb.onclick=function(){
+    var err=document.getElementById('jbErr'); err.textContent='';
+    var name=document.getElementById('jbSeatName').value.trim();
+    if(!name){ err.textContent='席位名必填'; return; }
+    jb.disabled=true; jb.textContent='入席中…';
+    api('POST','/api/tables/'+encodeURIComponent(p.tableId)+'/seats',{
+      inviteCode:p.code, seatName:name, role:p.role,
+      agentLabel:document.getElementById('jbAgent').value.trim()||'human-only'
+    }).then(function(r){ renderJoinResult(p,r); })
+    .catch(function(e){ jb.disabled=false; jb.textContent='确认入席'; err.textContent='入席失败：'+e.message; });
+  };
+}
+function renderJoinResult(p,r){
+  var app=document.getElementById('app');
+  var h='<div class="row" style="margin-bottom:12px"><b>已入席</b>'+roleBadge(r.seat.role)+'<span class="badge phase">入桌设定待完成</span></div>';
+  h+='<div class="card"><b>'+esc(p.topic)+'</b>'
+    +'<h3>席位 token（只显示这一次，请立即复制）</h3>'
+    +'<div class="row"><span class="invite" style="word-break:break-all;font-size:15px">'+esc(r.token)+'</span><span class="sp"></span><button id="jrTokCopy">复制凭证（含入桌信息）</button></div>'
+    +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法），交给你的 agent 即可代你参会。关闭本页后无法再查看；之后可在桌详情页随时「重签凭证」。</div>'
+    +'<h3>下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。</div>'
+    +'<div class="row" style="margin-top:8px"><button id="jrBack">返回列表</button><span class="sp"></span><button id="jrEnter" class="primary">进入圆桌</button></div>'
+    +'</div>';
+  app.innerHTML=h;
+  document.getElementById('jrTokCopy').onclick=function(){
+    copyText(seatTokenText(p.topic,p.tableId,r.token,r.seat.role)); toast('完整凭证已复制（含服务器/圆桌ID/token）');
+  };
+  document.getElementById('jrBack').onclick=loadList;
+  document.getElementById('jrEnter').onclick=function(){ openTable(p.tableId); };
+}
+
 /* ---------- 视图：桌详情 ---------- */
 function stepsHtml(phase){
   if(phase==='human_intervention'){
@@ -795,11 +949,9 @@ function renderDetail(d){
 
   var h='<div class="row"><span class="back" id="back">← 返回列表</span><span class="sp"></span><span class="dim">自动刷新中</span></div>';
 
-  /* 身份视角条：systemadmin 无席位 / 普通用户无席位 */
-  if(!mySeat){
-    h+= admin
-      ? '<div class="banner admin">🛡 系统观察员 · 只读观察 — 你在本桌没有席位，仅查看（详情/历史/纪要），不能发指令或代答。</div>'
-      : '<div class="banner obs">旁听视角：你在本桌没有席位（可观察详情与历史；发指令/入席需凭邀请码入座）。</div>';
+  /* 身份视角条：systemadmin 无席位只读观察（普通用户无席位已被服务端 403 拦在列表外） */
+  if(!mySeat && admin){
+    h+='<div class="banner admin">🛡 系统观察员 · 只读观察 — 你在本桌没有席位，仅查看（详情/历史/纪要），不能发指令或代答。</div>';
   }
 
   h+='<div class="card"><div class="row"><b style="font-size:16px">'+esc(t.topic)+'</b>'
@@ -1383,7 +1535,7 @@ function openList(){
 
 /* ---------- 草稿保护：面板内任何编辑都冻结轮询重渲染 ---------- */
 (function(){
-  document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeDocPreview(); });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ closeDocPreview(); closeHelp(); } });
   var app=document.getElementById('app');
   var mark=function(e){
     if(view.mode!=='detail') return;
@@ -1398,6 +1550,7 @@ function openList(){
 })();
 
 /* ---------- 启动 ---------- */
+document.getElementById('helpBtn').onclick=openHelp;
 refreshWho();
 if(TOKEN){
   renderIntro();

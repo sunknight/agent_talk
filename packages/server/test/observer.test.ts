@@ -7,6 +7,7 @@ import { start } from "../src";
 
 let base = "";
 let http: import("node:http").Server;
+let hub: Awaited<ReturnType<typeof start>>["hub"];
 
 async function call(method: string, path: string, opts: { token?: string; body?: unknown } = {}) {
   const res = await fetch(base + path, {
@@ -25,7 +26,7 @@ const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 
 beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), "rt-obs-"));
-  ({ http } = await start({ port: 0, dataDir: dir, host: "127.0.0.1" }));
+  ({ http, hub } = await start({ port: 0, dataDir: dir, host: "127.0.0.1" }));
   base = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
 });
 afterAll(() => new Promise<void>((r) => { http.closeIdleConnections?.(); http.close(() => r()); }));
@@ -83,16 +84,26 @@ describe("观察端 Web 控制台", () => {
     await call("POST", `/api/tables/${tableId}/messages`, { token: ownerSeatToken, body: { type: "STATEMENT", payload: { text: "提案陈述" } } });
   });
 
-  it("桌列表：任何 user token 可见全桌", async () => {
-    const r = await call("GET", "/api/observer/tables", { token: otherUser });
-    expect(r.ok).toBe(true);
-    expect(r.data.tables.some((t: { tableId: string }) => t.tableId === tableId)).toBe(true);
+  it("桌列表：普通用户仅见参与的桌，systemadmin 全量", async () => {
+    const own = await call("GET", "/api/observer/tables", { token: ownerUser });
+    expect(own.ok).toBe(true);
+    expect(own.data.tables.some((t: { tableId: string }) => t.tableId === tableId)).toBe(true);
+    const mine = own.data.tables.find((t: { tableId: string }) => t.tableId === tableId);
+    expect(mine.mySeatRole).toBe("proposer"); // 我的席位标记仍在
+    const stranger = await call("GET", "/api/observer/tables", { token: otherUser });
+    expect(stranger.ok).toBe(true);
+    expect(stranger.data.tables.some((t: { tableId: string }) => t.tableId === tableId)).toBe(false);
     const noAuth = await call("GET", "/api/observer/tables");
     expect(noAuth.status).toBe(401);
+    // systemadmin（hub 授角色，等价 bootstrap）看全量
+    const adminTok = (await call("POST", "/api/users", { body: { name: "观察-管理员" } })).data.token;
+    hub.store.setUserRole((await call("GET", "/api/me", { token: adminTok })).data.userId, "systemadmin");
+    const admin = await call("GET", "/api/observer/tables", { token: adminTok });
+    expect(admin.data.tables.some((t: { tableId: string }) => t.tableId === tableId)).toBe(true);
   });
 
   it("桌详情：进展 + 下一步动作（taskHint 指向轮到的评审席）", async () => {
-    const r = await call("GET", `/api/observer/tables/${tableId}`, { token: otherUser });
+    const r = await call("GET", `/api/observer/tables/${tableId}`, { token: ownerUser });
     expect(r.ok).toBe(true);
     expect(r.data.table.phase).toBe("review");
     expect(r.data.table.activeTurn.seatId).toBe(reviewerSeatId);
@@ -122,7 +133,7 @@ describe("观察端 Web 控制台", () => {
     });
     expect(send.ok).toBe(true);
 
-    const detail = await call("GET", `/api/observer/tables/${tableId}`, { token: otherUser });
+    const detail = await call("GET", `/api/observer/tables/${tableId}`, { token: ownerUser });
     const hi = detail.data.messages.filter((m: { type: string }) => m.type === "HUMAN_INPUT").pop();
     expect(hi.payload.text).toContain("错误码");
     expect(hi.payload.toSeat).toBe(reviewerSeatId);
@@ -134,5 +145,44 @@ describe("观察端 Web 控制台", () => {
       token: ownerUser, body: { text: "x", toSeat: "seat_nope" },
     });
     expect(bad.status).toBe(404);
+  });
+
+  it("收权：未参与用户详情 403 not_participant，agent 端 GET /api/tables 同步过滤，退席后不可见", async () => {
+    // 路人看他人桌详情 → 403
+    const deny = await call("GET", `/api/observer/tables/${tableId}`, { token: otherUser });
+    expect(deny.status).toBe(403);
+    expect(deny.error.code).toBe("not_participant");
+    // systemadmin 无席位仍可看（只读观察）
+    const adminTok = (await call("POST", "/api/users", { body: { name: "观察-管理员2" } })).data.token;
+    hub.store.setUserRole((await call("GET", "/api/me", { token: adminTok })).data.userId, "systemadmin");
+    const adminView = await call("GET", `/api/observer/tables/${tableId}`, { token: adminTok });
+    expect(adminView.ok).toBe(true);
+    expect(adminView.data.mySeatId).toBeNull(); // 无席位但可看
+    // agent REST 列表同样收权
+    const strangerList = await call("GET", "/api/tables", { token: otherUser });
+    expect(strangerList.data.tables.some((t: { tableId: string }) => t.tableId === tableId)).toBe(false);
+    const ownList = await call("GET", "/api/tables", { token: ownerUser });
+    expect(ownList.data.tables.some((t: { tableId: string }) => t.tableId === tableId)).toBe(true);
+    const adminList = await call("GET", "/api/tables", { token: adminTok });
+    expect(adminList.data.tables.some((t: { tableId: string }) => t.tableId === tableId)).toBe(true);
+    // 退席后不再可见：新建 open 桌（进行中的桌不能入席），观察方入席 → 列表可见 → leave → 列表/详情双拒
+    const st = (await call("POST", "/api/users", { body: { name: "观察-退席者" } })).data.token;
+    const t2 = (await call("POST", "/api/tables", {
+      token: ownerUser, body: { topic: "退席可见性测试桌", owner: { seatName: "建桌人A", agentLabel: "zcode" } },
+    })).data;
+    const oc = t2.inviteCodes.find((c: { role: string }) => c.role === "observer").code;
+    const join = await call("POST", `/api/tables/${t2.tableId}/seats`, {
+      token: st, body: { inviteCode: oc, seatName: "退席席", role: "observer", agentLabel: "zcode" },
+    });
+    expect(join.ok).toBe(true);
+    const before = await call("GET", "/api/observer/tables", { token: st });
+    expect(before.data.tables.some((t: { tableId: string }) => t.tableId === t2.tableId)).toBe(true);
+    const leave = await call("POST", `/api/tables/${t2.tableId}/leave`, { token: join.data.token });
+    expect(leave.ok).toBe(true);
+    const after = await call("GET", "/api/observer/tables", { token: st });
+    expect(after.data.tables.some((t: { tableId: string }) => t.tableId === t2.tableId)).toBe(false);
+    const afterDetail = await call("GET", `/api/observer/tables/${t2.tableId}`, { token: st });
+    expect(afterDetail.status).toBe(403);
+    expect(afterDetail.error.code).toBe("not_participant");
   });
 });

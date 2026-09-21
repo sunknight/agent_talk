@@ -71,7 +71,7 @@ export function createHttpServer(hub: Hub) {
       // ---------- 观察端（Web 控制台，user token 鉴权） ----------
       if (path === "/api/observer/tables" && method === "GET") {
         const u = hub.requireUser(bearer(req));
-        return ok(res, { tables: hub.observerTables(u.userId) });
+        return ok(res, { tables: hub.observerTables(u.userId, u.role) });
       }
       if (seg[0] === "api" && seg[1] === "observer" && seg[2] === "tables" && seg[3]) {
         const tableId = seg[3];
@@ -80,7 +80,7 @@ export function createHttpServer(hub: Hub) {
         }
         if (!seg[4] && method === "GET") {
           const u = hub.requireUser(bearer(req));
-          return ok(res, hub.observerDetail(tableId, u.userId));
+          return ok(res, hub.observerDetail(tableId, u.userId, u.role));
         }
       }
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "human-input" && method === "POST" && !seg[4]) {
@@ -195,6 +195,11 @@ export function createHttpServer(hub: Hub) {
         const u = hub.requireUser(bearer(req));
         return ok(res, { userId: u.userId, name: u.name, role: u.role });
       }
+      // 邀请码预检（Web 凭码入桌；user token 鉴权，只读不消费次数）
+      if (path === "/api/invites/preview" && method === "POST") {
+        const body = await readJson(req);
+        return ok(res, hub.previewInvite(bearer(req), String(body.code ?? "")));
+      }
 
       // ---------- 桌 ----------
       if (path === "/api/tables" && method === "POST") {
@@ -215,8 +220,8 @@ export function createHttpServer(hub: Hub) {
         }));
       }
       if (path === "/api/tables" && method === "GET") {
-        hub.requireUser(bearer(req));
-        return ok(res, { tables: hub.store.listTables() });
+        const u = hub.requireUser(bearer(req));
+        return ok(res, { tables: hub.tablesForUser(u) }); // 按角色收权：user 仅参与的桌，systemadmin 全量
       }
 
       // /api/tables/:id/...

@@ -170,12 +170,13 @@ describe("参与引导（poll myTask）与我的席位通道", () => {
     expect(deny.status).toBe(409);
   });
 
-  it("observerDetail.mySeatId：席位持有人映射到己席，路人为空", async () => {
+  it("observerDetail.mySeatId：席位持有人映射到己席；未参与路人 403 not_participant（收权）", async () => {
     const own = await call("GET", `/api/observer/tables/${tableId}`, { token: ownerUser });
     expect(own.data.mySeatId).toBe(ownerSeatId);
     const rev = await call("GET", `/api/observer/tables/${tableId}`, { token: revUser });
     expect(rev.data.mySeatId).toBe(revSeatId);
     const st = await call("GET", `/api/observer/tables/${tableId}`, { token: stranger });
-    expect(st.data.mySeatId).toBeNull();
+    expect(st.status).toBe(403);
+    expect(st.error.code).toBe("not_participant");
   });
 });
