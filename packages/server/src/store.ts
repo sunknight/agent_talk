@@ -1,0 +1,538 @@
+/**
+ * 存储层 — SQLite（node:sqlite）+ 内容寻址 blob 文件。
+ * 结构化数据（用户/圆桌/席位/用户↔席位归属/token/邀请/消息/请求/产物/文档/审计）
+ * 落 <dataDir>/roundtable.db；文档与产物版本内容落 <dataDir>/blobs/<sha256>，库内只存元数据与 hash。
+ * 旧格式 state.json：构造时发现且库为空 → 自动迁移（migrateLegacy），成功后改名 .migrated 备份。
+ */
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import { DatabaseSync } from "node:sqlite";
+import { sha256, type AuditRecord, type Envelope, type SeatInfo, type TableSummary } from "@rt/shared";
+import type { ArtifactRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+
+const SCHEMA_VERSION = 1;
+
+const DDL = `
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users (
+  user_id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL DEFAULT 'user', disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS tables (
+  table_id TEXT PRIMARY KEY, topic TEXT NOT NULL, template TEXT NOT NULL, goals TEXT NOT NULL,
+  deliverables TEXT NOT NULL, rules TEXT NOT NULL, role_plan TEXT NOT NULL, owner_seat TEXT NOT NULL,
+  phase TEXT NOT NULL, round_no INTEGER NOT NULL, deadlock_count INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, closed_at INTEGER, seat_count INTEGER NOT NULL,
+  max_review_rounds INTEGER NOT NULL, turn_timeout_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS seats (
+  table_id TEXT NOT NULL, seat_id TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (table_id, seat_id));
+CREATE TABLE IF NOT EXISTS seat_tokens (token_hash TEXT PRIMARY KEY, table_id TEXT NOT NULL, seat_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS seat_owners (
+  table_id TEXT NOT NULL, seat_id TEXT NOT NULL, user_id TEXT NOT NULL,
+  PRIMARY KEY (table_id, seat_id));
+CREATE TABLE IF NOT EXISTS invites (
+  code TEXT PRIMARY KEY, table_id TEXT NOT NULL, role TEXT NOT NULL,
+  expires_at INTEGER NOT NULL, uses_left INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS messages (
+  table_id TEXT NOT NULL, seq INTEGER NOT NULL, msg_id TEXT NOT NULL UNIQUE,
+  from_seat TEXT NOT NULL, to_seat TEXT NOT NULL, type TEXT NOT NULL, ts INTEGER NOT NULL,
+  flags TEXT, payload TEXT NOT NULL, sig TEXT,
+  PRIMARY KEY (table_id, seq));
+CREATE TABLE IF NOT EXISTS requests (
+  table_id TEXT NOT NULL, request_id TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (table_id, request_id));
+CREATE TABLE IF NOT EXISTS artifacts (
+  table_id TEXT NOT NULL, artifact_id TEXT NOT NULL, name TEXT NOT NULL, format TEXT NOT NULL,
+  owner_seat TEXT NOT NULL, locked_by TEXT, locked_at INTEGER,
+  PRIMARY KEY (table_id, artifact_id));
+CREATE TABLE IF NOT EXISTS artifact_versions (
+  table_id TEXT NOT NULL, artifact_id TEXT NOT NULL, v INTEGER NOT NULL,
+  sha256 TEXT NOT NULL, size INTEGER NOT NULL, change_note TEXT NOT NULL,
+  published_by TEXT NOT NULL, ts INTEGER NOT NULL, diff_from_prev TEXT, request_id TEXT, request_ids TEXT,
+  PRIMARY KEY (table_id, artifact_id, v));
+CREATE TABLE IF NOT EXISTS documents (
+  table_id TEXT NOT NULL, doc_id TEXT NOT NULL, name TEXT NOT NULL, purpose TEXT NOT NULL,
+  visibility TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+  uploaded_by TEXT NOT NULL, uploaded_at INTEGER NOT NULL,
+  PRIMARY KEY (table_id, doc_id));
+CREATE TABLE IF NOT EXISTS audit (
+  id TEXT PRIMARY KEY, ts INTEGER NOT NULL, table_id TEXT NOT NULL, seat_id TEXT NOT NULL,
+  event TEXT NOT NULL, detail TEXT NOT NULL);
+`;
+
+/** node:sqlite 行类型（.get/.all 返回的原样记录） */
+type Row = Record<string, string | number | bigint | null>;
+
+/** 旧 state.json 的实体形状（迁移用；版本/文档内容仍是 contentBase64） */
+interface LegacyState {
+  users: Record<string, { userId: string; name: string; tokenHash: string; createdAt: number; role?: "user" | "systemadmin"; disabled?: boolean }>;
+  tables: Record<string, TableMeta>;
+  seats: Record<string, SeatInfo>;
+  artifacts: Record<string, { artifactId: string; tableId: string; name: string; format: string; ownerSeat: string; versions: Array<{ v: number; contentBase64: string; changeNote: string; publishedBy: string; ts: number; size: number; diffFromPrev?: string; requestId?: string }>; lockedBy: string | null; lockedAt?: number }>;
+  documents: Record<string, Array<{ docId: string; name: string; purpose: string; visibility: string; contentBase64: string; size: number; uploadedBy: string; uploadedAt: number }>>;
+  invites: Record<string, { code: string; tableId: string; role: string; expiresAt: number; usesLeft: number }>;
+  messages: Record<string, StoredMsg[]>;
+  requests: Record<string, RequestRecord[]> | RequestRecord[];
+  audit: AuditRecord[];
+  seatTokens: Record<string, { tableId: string; seatId: string }>;
+  seatOwners: Record<string, string>;
+}
+
+const J = (v: unknown) => JSON.stringify(v);
+const nullable = (v: string | number | null | undefined) => (v === undefined ? null : v);
+
+export class Store extends EventEmitter {
+  private readonly db: DatabaseSync;
+  private readonly dataDir: string;
+  private readonly blobDir: string;
+  private readonly st: {
+    [K: string]: ReturnType<DatabaseSync["prepare"]>;
+  };
+
+  constructor(dataDir: string) {
+    super();
+    mkdirSync(dataDir, { recursive: true });
+    this.dataDir = dataDir;
+    this.blobDir = join(dataDir, "blobs");
+    mkdirSync(this.blobDir, { recursive: true });
+    this.db = new DatabaseSync(join(dataDir, "roundtable.db"));
+    this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA synchronous = NORMAL;");
+    this.db.exec(DDL);
+    this.migrateSchema();
+    this.st = {
+      metaGet: this.db.prepare("SELECT value FROM meta WHERE key = ?"),
+      metaSet: this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)"),
+
+      userInsert: this.db.prepare("INSERT INTO users (user_id, name, token_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
+      userByToken: this.db.prepare("SELECT * FROM users WHERE token_hash = ?"),
+      userById: this.db.prepare("SELECT * FROM users WHERE user_id = ?"),
+      userAll: this.db.prepare("SELECT * FROM users ORDER BY created_at, rowid"),
+      userSetRole: this.db.prepare("UPDATE users SET role = ? WHERE user_id = ?"),
+      userSetDisabled: this.db.prepare("UPDATE users SET disabled = ? WHERE user_id = ?"),
+
+      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
+      tableAll: this.db.prepare("SELECT * FROM tables ORDER BY rowid"),
+
+      seatUpsert: this.db.prepare("INSERT OR REPLACE INTO seats (table_id, seat_id, data) VALUES (?, ?, ?)"),
+      seatsOfTable: this.db.prepare("SELECT * FROM seats WHERE table_id = ? ORDER BY rowid"),
+      seatGet: this.db.prepare("SELECT * FROM seats WHERE table_id = ? AND seat_id = ?"),
+
+      seatTokenUpsert: this.db.prepare("INSERT OR REPLACE INTO seat_tokens (token_hash, table_id, seat_id) VALUES (?, ?, ?)"),
+      seatTokenByHash: this.db.prepare("SELECT * FROM seat_tokens WHERE token_hash = ?"),
+      seatTokenRevoke: this.db.prepare("DELETE FROM seat_tokens WHERE table_id = ? AND seat_id = ?"),
+
+      ownerUpsert: this.db.prepare("INSERT OR REPLACE INTO seat_owners (table_id, seat_id, user_id) VALUES (?, ?, ?)"),
+      ownerGet: this.db.prepare("SELECT user_id FROM seat_owners WHERE table_id = ? AND seat_id = ?"),
+      ownerSeatOfUser: this.db.prepare("SELECT seat_id FROM seat_owners WHERE table_id = ? AND user_id = ? LIMIT 1"),
+      ownersByUser: this.db.prepare("SELECT table_id, seat_id FROM seat_owners WHERE user_id = ? ORDER BY rowid"),
+
+      inviteUpsert: this.db.prepare("INSERT OR REPLACE INTO invites (code, table_id, role, expires_at, uses_left) VALUES (?, ?, ?, ?, ?)"),
+      inviteGet: this.db.prepare("SELECT * FROM invites WHERE code = ?"),
+      inviteDecr: this.db.prepare("UPDATE invites SET uses_left = uses_left - 1 WHERE code = ?"),
+      invitesOfTable: this.db.prepare("SELECT * FROM invites WHERE table_id = ? ORDER BY rowid"),
+
+      msgNextSeq: this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM messages WHERE table_id = ?"),
+      msgInsert: this.db.prepare("INSERT INTO messages (table_id, seq, msg_id, from_seat, to_seat, type, ts, flags, payload, sig) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+      msgsAll: this.db.prepare("SELECT * FROM messages WHERE table_id = ? ORDER BY seq"),
+      msgsSince: this.db.prepare("SELECT * FROM messages WHERE table_id = ? AND seq > ? ORDER BY seq"),
+      msgLatestSeq: this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE table_id = ?"),
+
+      reqUpsert: this.db.prepare("INSERT OR REPLACE INTO requests (table_id, request_id, data) VALUES (?, ?, ?)"),
+      reqsOfTable: this.db.prepare("SELECT * FROM requests WHERE table_id = ? ORDER BY rowid"),
+
+      artUpsert: this.db.prepare("INSERT OR REPLACE INTO artifacts (table_id, artifact_id, name, format, owner_seat, locked_by, locked_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+      verUpsert: this.db.prepare("INSERT OR REPLACE INTO artifact_versions (table_id, artifact_id, v, sha256, size, change_note, published_by, ts, diff_from_prev, request_id, request_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+      artGet: this.db.prepare("SELECT * FROM artifacts WHERE table_id = ? AND artifact_id = ?"),
+      artAll: this.db.prepare("SELECT * FROM artifacts WHERE table_id = ? ORDER BY rowid"),
+      verAll: this.db.prepare("SELECT * FROM artifact_versions WHERE table_id = ? ORDER BY artifact_id, v"),
+
+      docUpsert: this.db.prepare("INSERT OR REPLACE INTO documents (table_id, doc_id, name, purpose, visibility, size, sha256, uploaded_by, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+      docAll: this.db.prepare("SELECT * FROM documents WHERE table_id = ? ORDER BY rowid"),
+      docGet: this.db.prepare("SELECT * FROM documents WHERE table_id = ? AND doc_id = ?"),
+
+      auditInsert: this.db.prepare("INSERT INTO audit (id, ts, table_id, seat_id, event, detail) VALUES (?, ?, ?, ?, ?, ?)"),
+      auditRecent: this.db.prepare("SELECT * FROM audit ORDER BY ts DESC, rowid DESC LIMIT ?"),
+
+      counts: this.db.prepare("SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM tables) + (SELECT COUNT(*) FROM messages) + (SELECT COUNT(*) FROM documents) AS n"),
+    };
+    const cur = (this.st.metaGet.get("schema_version") as Row | undefined)?.value;
+    if (cur === undefined) this.st.metaSet.run("schema_version", String(SCHEMA_VERSION));
+    this.migrateLegacy();
+  }
+
+  // ---------- meta ----------
+  private getMeta(key: string): string | null {
+    const r = this.st.metaGet.get(key) as Row | undefined;
+    return (r?.value as string | undefined) ?? null;
+  }
+  private setMeta(key: string, value: string) { this.st.metaSet.run(key, value); }
+
+  private dbIsEmpty(): boolean {
+    return Number((this.st.counts.get() as Row).n) === 0;
+  }
+
+  /** 轻量加列迁移：已存在的库无损升级（列已存在时 ALTER 报错，吞掉即可） */
+  private migrateSchema() {
+    try {
+      this.db.exec("ALTER TABLE artifact_versions ADD COLUMN request_ids TEXT");
+    } catch { /* duplicate column：已是新 schema */ }
+  }
+
+  // ---------- 旧 state.json 自动迁移 ----------
+  private migrateLegacy() {
+    const legacyFile = join(this.dataDir, "state.json");
+    if (!existsSync(legacyFile)) return;
+    if (!this.dbIsEmpty() || this.getMeta("migrated_from_state_json")) {
+      if (!this.getMeta("migrated_from_state_json")) {
+        process.stderr.write(`[store] ${legacyFile} 存在但 SQLite 库非空：忽略旧文件（如需重新迁移请先清空 roundtable.db）\n`);
+      }
+      return;
+    }
+    const raw = JSON.parse(readFileSync(legacyFile, "utf8")) as Partial<LegacyState>;
+    const legacy: LegacyState = {
+      users: raw.users ?? {}, tables: raw.tables ?? {}, seats: raw.seats ?? {}, artifacts: raw.artifacts ?? {},
+      documents: raw.documents ?? {}, invites: raw.invites ?? {}, messages: raw.messages ?? {},
+      requests: raw.requests ?? {}, audit: raw.audit ?? [], seatTokens: raw.seatTokens ?? {}, seatOwners: raw.seatOwners ?? {},
+    };
+    // blob 先落盘（库事务外）：失败直接中止启动，不留半迁移库
+    const artVerHash = new Map<string, string>();
+    for (const a of Object.values(legacy.artifacts)) {
+      for (const v of a.versions) artVerHash.set(`${a.tableId}:${a.artifactId}:${v.v}`, this.saveBlob(v.contentBase64));
+    }
+    const docHash = new Map<string, string>();
+    for (const [tid, docs] of Object.entries(legacy.documents)) {
+      for (const d of docs) docHash.set(`${tid}:${d.docId}`, this.saveBlob(d.contentBase64));
+    }
+    try {
+      this.db.exec("BEGIN");
+      for (const u of Object.values(legacy.users)) {
+        this.st.userInsert.run(u.userId, u.name, u.tokenHash, u.role ?? "user", u.disabled ? 1 : 0, u.createdAt);
+      }
+      for (const t of Object.values(legacy.tables)) this.upsertTableRow(t);
+      for (const [k, s] of Object.entries(legacy.seats)) {
+        const i = k.indexOf(":");
+        this.st.seatUpsert.run(k.slice(0, i), k.slice(i + 1), J(s));
+      }
+      for (const a of Object.values(legacy.artifacts)) {
+        this.st.artUpsert.run(a.tableId, a.artifactId, a.name, a.format, a.ownerSeat, nullable(a.lockedBy), nullable(a.lockedAt));
+        for (const v of a.versions) {
+          this.st.verUpsert.run(a.tableId, a.artifactId, v.v, artVerHash.get(`${a.tableId}:${a.artifactId}:${v.v}`)!, v.size, v.changeNote, v.publishedBy, v.ts, nullable(v.diffFromPrev), nullable(v.requestId), null);
+        }
+      }
+      for (const [tid, docs] of Object.entries(legacy.documents)) {
+        for (const d of docs) {
+          this.st.docUpsert.run(tid, d.docId, d.name, d.purpose, d.visibility, d.size, docHash.get(`${tid}:${d.docId}`)!, d.uploadedBy, d.uploadedAt);
+        }
+      }
+      for (const inv of Object.values(legacy.invites)) {
+        this.st.inviteUpsert.run(inv.code, inv.tableId, inv.role, inv.expiresAt, inv.usesLeft);
+      }
+      for (const [tid, msgs] of Object.entries(legacy.messages)) {
+        for (const m of msgs) {
+          this.st.msgInsert.run(tid, m.seq, m.msgId, m.fromSeat, m.toSeat, m.type, m.ts, m.flags ? J(m.flags) : null, J(m.payload), nullable(m.sig));
+        }
+      }
+      const reqLists = Array.isArray(legacy.requests) ? [] : Object.entries(legacy.requests);
+      for (const [tid, reqs] of reqLists) {
+        for (const r of reqs) this.st.reqUpsert.run(tid, r.req.requestId, J(r));
+      }
+      for (const a of legacy.audit) {
+        this.st.auditInsert.run(a.id, a.ts, a.tableId, a.seatId, a.event, J(a.detail));
+      }
+      for (const [h, t] of Object.entries(legacy.seatTokens)) {
+        this.st.seatTokenUpsert.run(h, t.tableId, t.seatId);
+      }
+      for (const [k, userId] of Object.entries(legacy.seatOwners)) {
+        const i = k.indexOf(":");
+        this.st.ownerUpsert.run(k.slice(0, i), k.slice(i + 1), userId);
+      }
+      this.setMeta("migrated_from_state_json", new Date().toISOString());
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw new Error(`旧 state.json 迁移失败（库已回滚，未破坏原文件）：${String(e)}`);
+    }
+    renameSync(legacyFile, `${legacyFile}.migrated`);
+    process.stdout.write(`[store] 旧 state.json 已迁移至 SQLite + blobs，原文件备份为 state.json.migrated\n`);
+  }
+
+  // ---------- blob（文档/产物内容：sha256 内容寻址，天然去重） ----------
+  saveBlob(contentBase64: string): string {
+    const buf = Buffer.from(contentBase64, "base64");
+    const hash = createHash("sha256").update(buf).digest("hex");
+    const file = join(this.blobDir, hash);
+    if (!existsSync(file)) {
+      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+      writeFileSync(tmp, buf);
+      renameSync(tmp, file);
+    }
+    return hash;
+  }
+  readBlob(hash: string): Buffer {
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`非法 blob hash：${hash}`);
+    const file = join(this.blobDir, hash);
+    if (!existsSync(file)) throw new Error(`blob 文件缺失：${hash}`);
+    return readFileSync(file);
+  }
+
+  // ---------- users ----------
+  addUser(name: string, tokenHash: string): string {
+    const userId = `u_${Math.random().toString(36).slice(2, 10)}`;
+    this.st.userInsert.run(userId, name, tokenHash, "user", 0, Date.now());
+    return userId;
+  }
+  private rowUser(r: Row): { userId: string; name: string; role: "user" | "systemadmin"; disabled: boolean; createdAt: number } {
+    return { userId: String(r.user_id), name: String(r.name), role: (r.role as "user" | "systemadmin") ?? "user", disabled: Number(r.disabled) === 1, createdAt: Number(r.created_at) };
+  }
+  findUserByToken(token: string): { userId: string; name: string; role: "user" | "systemadmin"; disabled: boolean } | null {
+    const r = this.st.userByToken.get(sha256(token)) as Row | undefined;
+    if (!r) return null;
+    const u = this.rowUser(r);
+    return { userId: u.userId, name: u.name, role: u.role, disabled: u.disabled };
+  }
+  listUsers(): Array<{ userId: string; name: string; role: "user" | "systemadmin"; disabled: boolean; createdAt: number }> {
+    return (this.st.userAll.all() as Row[]).map((r) => this.rowUser(r));
+  }
+  getUser(userId: string): { userId: string; name: string; role: "user" | "systemadmin"; disabled: boolean } | null {
+    const r = this.st.userById.get(userId) as Row | undefined;
+    return r ? this.rowUser(r) : null;
+  }
+  setUserRole(userId: string, role: "user" | "systemadmin") {
+    return this.st.userSetRole.run(role, userId).changes > 0;
+  }
+  /** 管理台强制下线：禁用后该用户 token 全部失效（席位 token 独立，不受影响） */
+  setUserDisabled(userId: string, disabled: boolean) {
+    return this.st.userSetDisabled.run(disabled ? 1 : 0, userId).changes > 0;
+  }
+  /** 重签用户登录 token（原始 token 只存 hash 不可取回，恢复登录 = 换新 token） */
+  resetUserToken(userId: string, tokenHash: string) {
+    return this.db.prepare("UPDATE users SET token_hash = ? WHERE user_id = ?").run(tokenHash, userId).changes > 0;
+  }
+
+  /** 用户参桌索引：seatOwners 反查（管理台参桌明细用） */
+  seatsOfUser(userId: string): Array<{ tableId: string; seatId: string }> {
+    return (this.st.ownersByUser.all(userId) as Row[]).map((r) => ({ tableId: String(r.table_id), seatId: String(r.seat_id) }));
+  }
+
+  /** 删除圆桌：连带清理全部关联数据（blob 内容寻址不可变，不随删；GC 见维护项） */
+  deleteTable(tableId: string) {
+    this.db.prepare("DELETE FROM tables WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM seats WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM seat_owners WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM seat_tokens WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM invites WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM messages WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM requests WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM artifact_versions WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM artifacts WHERE table_id = ?").run(tableId);
+    this.db.prepare("DELETE FROM documents WHERE table_id = ?").run(tableId);
+  }
+
+  // ---------- tables ----------
+  private upsertTableRow(t: TableMeta) {
+    this.st.tableUpsert.run(
+      t.tableId, t.topic, t.template, t.goals, t.deliverables, t.rules, t.rolePlan, t.ownerSeat,
+      t.phase, t.roundNo, t.deadlockCount, t.createdAt, nullable(t.closedAt), t.seatCount, t.maxReviewRounds, t.turnTimeoutMs,
+    );
+  }
+  private rowTable(r: Row): TableMeta {
+    return {
+      tableId: String(r.table_id), topic: String(r.topic), template: String(r.template) as TableMeta["template"],
+      goals: String(r.goals), deliverables: String(r.deliverables), rules: String(r.rules), rolePlan: String(r.role_plan),
+      ownerSeat: String(r.owner_seat), phase: String(r.phase) as TableMeta["phase"], roundNo: Number(r.round_no),
+      deadlockCount: Number(r.deadlock_count), createdAt: Number(r.created_at),
+      ...(r.closed_at === null ? {} : { closedAt: Number(r.closed_at) }),
+      seatCount: Number(r.seat_count), maxReviewRounds: Number(r.max_review_rounds), turnTimeoutMs: Number(r.turn_timeout_ms),
+    };
+  }
+  saveTable(meta: TableMeta) { this.upsertTableRow(meta); }
+  getTable(tableId: string): TableMeta | null {
+    const r = this.st.tableGet.get(tableId) as Row | undefined;
+    return r ? this.rowTable(r) : null;
+  }
+  listTableMetas(): TableMeta[] { return (this.st.tableAll.all() as Row[]).map((r) => this.rowTable(r)); }
+  listTables(): TableSummary[] {
+    return (this.st.tableAll.all() as Row[])
+      .sort((a, b) => Number(b.created_at) - Number(a.created_at))
+      .map((r) => {
+        const t = this.rowTable(r);
+        return { tableId: t.tableId, topic: t.topic, template: t.template, phase: t.phase, seatCount: t.seatCount, createdAt: t.createdAt };
+      });
+  }
+
+  // ---------- seats ----------
+  saveSeat(tableId: string, seat: SeatInfo) { this.st.seatUpsert.run(tableId, seat.seatId, J(seat)); }
+  getSeats(tableId: string): SeatInfo[] {
+    return (this.st.seatsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as SeatInfo);
+  }
+  getSeat(tableId: string, seatId: string): SeatInfo | null {
+    const r = this.st.seatGet.get(tableId, seatId) as Row | undefined;
+    return r ? JSON.parse(String(r.data)) as SeatInfo : null;
+  }
+
+  // ---------- seat tokens ----------
+  saveSeatToken(token: string, tableId: string, seatId: string) {
+    this.st.seatTokenUpsert.run(sha256(token), tableId, seatId);
+  }
+  findSeatByToken(token: string): { tableId: string; seatId: string } | null {
+    const r = this.st.seatTokenByHash.get(sha256(token)) as Row | undefined;
+    return r ? { tableId: String(r.table_id), seatId: String(r.seat_id) } : null;
+  }
+  /** 吊销某席位的全部 token（agent 替代场景：原 agent 立即失去访问权） */
+  revokeSeatTokens(tableId: string, seatId: string) {
+    this.st.seatTokenRevoke.run(tableId, seatId);
+  }
+
+  // ---------- seat owners（观察端：user ↔ 席位归属） ----------
+  bindSeatOwner(tableId: string, seatId: string, userId: string) {
+    this.st.ownerUpsert.run(tableId, seatId, userId);
+  }
+  seatOwnerOf(tableId: string, seatId: string): string | null {
+    const r = this.st.ownerGet.get(tableId, seatId) as Row | undefined;
+    return r ? String(r.user_id) : null;
+  }
+  seatOfUser(tableId: string, userId: string): string | null {
+    const r = this.st.ownerSeatOfUser.get(tableId, userId) as Row | undefined;
+    return r ? String(r.seat_id) : null;
+  }
+  invitesOfTable(tableId: string) {
+    return (this.st.invitesOfTable.all(tableId) as Row[]).map((r) => ({
+      code: String(r.code), tableId: String(r.table_id), role: String(r.role),
+      expiresAt: Number(r.expires_at), usesLeft: Number(r.uses_left),
+    }));
+  }
+
+  // ---------- messages ----------
+  private rowMsg(r: Row): StoredMsg {
+    const m: StoredMsg = {
+      v: 1, tableId: String(r.table_id), msgId: String(r.msg_id), fromSeat: String(r.from_seat),
+      toSeat: String(r.to_seat), type: String(r.type) as Envelope["type"], payload: JSON.parse(String(r.payload)),
+      ts: Number(r.ts), seq: Number(r.seq),
+    };
+    if (r.sig !== null) m.sig = String(r.sig);
+    if (r.flags !== null) m.flags = JSON.parse(String(r.flags));
+    return m;
+  }
+  addMessage(tableId: string, env: Envelope, flags?: string[]): StoredMsg {
+    const seq = Number((this.st.msgNextSeq.get(tableId) as Row).s);
+    const stored: StoredMsg = flags && flags.length ? { ...env, seq, flags } : { ...env, seq };
+    this.st.msgInsert.run(tableId, seq, env.msgId, env.fromSeat, env.toSeat, env.type, env.ts, flags && flags.length ? J(flags) : null, J(env.payload), nullable(env.sig));
+    this.emit("message", tableId, stored);
+    return stored;
+  }
+  getMessages(tableId: string): StoredMsg[] {
+    return (this.st.msgsAll.all(tableId) as Row[]).map((r) => this.rowMsg(r));
+  }
+  getMessagesSince(tableId: string, since: number): StoredMsg[] {
+    return (this.st.msgsSince.all(tableId, since) as Row[]).map((r) => this.rowMsg(r));
+  }
+  latestSeq(tableId: string): number {
+    return Number((this.st.msgLatestSeq.get(tableId) as Row).s);
+  }
+
+  // ---------- requests ----------
+  saveRequest(tableId: string, rec: RequestRecord) {
+    this.st.reqUpsert.run(tableId, rec.req.requestId, J(rec));
+  }
+  getRequests(tableId: string): RequestRecord[] {
+    return (this.st.reqsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as RequestRecord);
+  }
+
+  // ---------- artifacts ----------
+  saveArtifact(tableId: string, rec: ArtifactRecord) {
+    this.st.artUpsert.run(tableId, rec.artifactId, rec.name, rec.format, rec.ownerSeat, nullable(rec.lockedBy), nullable(rec.lockedAt));
+    for (const v of rec.versions) {
+      this.st.verUpsert.run(tableId, rec.artifactId, v.v, v.sha256, v.size, v.changeNote, v.publishedBy, v.ts, nullable(v.diffFromPrev), nullable(v.requestId), v.requestIds ? J(v.requestIds) : null);
+    }
+  }
+  private rowVersion(r: Row): StoredArtifactVersion {
+    const v: StoredArtifactVersion = {
+      v: Number(r.v), sha256: String(r.sha256), size: Number(r.size), changeNote: String(r.change_note),
+      publishedBy: String(r.published_by), ts: Number(r.ts),
+    };
+    if (r.diff_from_prev !== null) v.diffFromPrev = String(r.diff_from_prev);
+    if (r.request_id !== null) v.requestId = String(r.request_id);
+    if (r.request_ids !== null && r.request_ids !== undefined) v.requestIds = JSON.parse(String(r.request_ids));
+    return v;
+  }
+  private versionsOf(tableId: string): Map<string, StoredArtifactVersion[]> {
+    const byArt = new Map<string, StoredArtifactVersion[]>();
+    for (const r of this.st.verAll.all(tableId) as Row[]) {
+      const key = String(r.artifact_id);
+      const list = byArt.get(key);
+      if (list) list.push(this.rowVersion(r));
+      else byArt.set(key, [this.rowVersion(r)]);
+    }
+    return byArt;
+  }
+  getArtifacts(tableId: string): ArtifactRecord[] {
+    const versions = this.versionsOf(tableId);
+    return (this.st.artAll.all(tableId) as Row[]).map((r) => ({
+      artifactId: String(r.artifact_id), tableId, name: String(r.name),
+      format: String(r.format) as ArtifactRecord["format"], ownerSeat: String(r.owner_seat),
+      versions: versions.get(String(r.artifact_id)) ?? [],
+      ...(r.locked_by === null ? { lockedBy: null } : { lockedBy: String(r.locked_by) }),
+      ...(r.locked_at === null ? {} : { lockedAt: Number(r.locked_at) }),
+    }));
+  }
+  getArtifact(tableId: string, artifactId: string): ArtifactRecord | null {
+    return this.getArtifacts(tableId).find((a) => a.artifactId === artifactId) ?? null;
+  }
+
+  // ---------- documents（资料文档：上传阅资料/投屏） ----------
+  saveDocument(tableId: string, rec: TableDocumentRecord) {
+    this.st.docUpsert.run(tableId, rec.docId, rec.name, rec.purpose, rec.visibility, rec.size, rec.sha256, rec.uploadedBy, rec.uploadedAt);
+  }
+  private rowDoc(r: Row): TableDocumentRecord {
+    return {
+      docId: String(r.doc_id), name: String(r.name), purpose: String(r.purpose),
+      visibility: String(r.visibility) as TableDocumentRecord["visibility"], size: Number(r.size),
+      sha256: String(r.sha256), uploadedBy: String(r.uploaded_by), uploadedAt: Number(r.uploaded_at),
+    };
+  }
+  getDocuments(tableId: string): TableDocumentRecord[] {
+    return (this.st.docAll.all(tableId) as Row[]).map((r) => this.rowDoc(r));
+  }
+  getDocument(tableId: string, docId: string): TableDocumentRecord | null {
+    const r = this.st.docGet.get(tableId, docId) as Row | undefined;
+    return r ? this.rowDoc(r) : null;
+  }
+
+  // ---------- invites ----------
+  addInvite(code: string, tableId: string, role: string) {
+    this.st.inviteUpsert.run(code, tableId, role, Date.now() + 7 * 86400_000, 10);
+  }
+  consumeInvite(code: string): { tableId: string; role: string } | null {
+    const r = this.st.inviteGet.get(code) as Row | undefined;
+    if (!r || Number(r.expires_at) < Date.now() || Number(r.uses_left) <= 0) return null;
+    this.st.inviteDecr.run(code);
+    return { tableId: String(r.table_id), role: String(r.role) };
+  }
+
+  // ---------- audit ----------
+  appendAudit(rec: AuditRecord) {
+    this.st.auditInsert.run(rec.id, rec.ts, rec.tableId, rec.seatId, rec.event, J(rec.detail));
+  }
+  /** 审计/运行日志最近记录（运维排查用；API 暂未暴露） */
+  listAudit(limit = 200): AuditRecord[] {
+    return (this.st.auditRecent.all(limit) as Row[]).map((r) => ({
+      id: String(r.id), ts: Number(r.ts), tableId: String(r.table_id), seatId: String(r.seat_id),
+      event: String(r.event) as AuditRecord["event"], detail: JSON.parse(String(r.detail)),
+    }));
+  }
+
+  /**
+   * 兼容保留：SQLite 每写事务即持久，无需刷盘。
+   * （index.ts 关机路径与旧测试仍调用；新代码请用 close()）
+   */
+  flushSync() { /* no-op */ }
+
+  close() {
+    try { this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* 关机尽力而为 */ }
+    this.db.close();
+  }
+}

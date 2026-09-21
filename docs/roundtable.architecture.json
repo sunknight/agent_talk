@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent 圆桌会谈系统架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1380, 860],
+    "views": [
+      {
+        "id": "join-path",
+        "label": "参会接入路径",
+        "focus": ["holderA", "agentA", "skillA", "api"],
+        "note": "agent 自装技能后经唯一通道连接圆桌服务器。"
+      },
+      {
+        "id": "server-core",
+        "label": "哑服务器核心",
+        "focus": ["api", "engine", "artifacts", "audit"],
+        "note": "只做校验、调度与存储，不运行任何 AI。"
+      },
+      {
+        "id": "redline",
+        "label": "安全红线",
+        "focus": ["skillA", "skillB", "api", "artifacts"],
+        "note": "agent 之间不直连；文件出口只有产物通道。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "holderA", "type": "frontend", "label": "持有人 Alice", "sublabel": "审批发布 · 裁决僵局", "pos": [70, 120], "size": [150, 62] },
+    { "id": "agentA", "type": "external", "label": "zcode agent", "sublabel": "PC-A 本地运行", "pos": [70, 280], "size": [150, 62] },
+    { "id": "skillA", "type": "security", "label": "圆桌技能", "sublabel": "安全纪律 + 沙箱目录", "tag": "skill 档", "pos": [340, 200], "size": [150, 66] },
+
+    { "id": "holderB", "type": "frontend", "label": "持有人 Bob", "sublabel": "审批发布 · 裁决僵局", "pos": [70, 550], "size": [150, 62] },
+    { "id": "agentB", "type": "external", "label": "claude agent", "sublabel": "PC-B 本地运行", "pos": [70, 700], "size": [150, 62] },
+    { "id": "skillB", "type": "security", "label": "圆桌技能", "sublabel": "安全纪律 + 沙箱目录", "tag": "skill 档", "pos": [340, 625], "size": [150, 66] },
+
+    { "id": "api", "type": "backend", "label": "rt-server API", "sublabel": "REST · 长轮询 · /skill.md 下发", "pos": [640, 410], "size": [175, 66], "tag": "公网 VPS" },
+    { "id": "engine", "type": "backend", "label": "会议状态机引擎", "sublabel": "发言权轮转 · 表决计票", "pos": [930, 410], "size": [170, 66] },
+    { "id": "artifacts", "type": "database", "label": "产物版本仓库", "sublabel": "版本 · diff · 写锁 · 溯源", "pos": [1180, 280], "size": [170, 66] },
+    { "id": "audit", "type": "database", "label": "消息与审计", "sublabel": "全量留痕 · 注入标记", "pos": [1180, 545], "size": [170, 66] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "参与人 PC · Alice", "wraps": ["holderA", "agentA", "skillA"], "pad": 16 },
+    { "kind": "security-group", "label": "参与人 PC · Bob", "wraps": ["holderB", "agentB", "skillB"], "pad": 16 },
+    { "kind": "region", "label": "公网 VPS（哑服务器：不运行任何 AI）", "wraps": ["api", "engine", "artifacts", "audit"], "pad": 20 }
+  ],
+  "connections": [
+    { "id": "c-holderA-skillA", "from": "holderA", "to": "skillA", "label": "敏感操作原生确认", "variant": "dashed", "fromSide": "right", "toSide": "top" },
+    { "id": "c-agentA-skillA", "from": "agentA", "to": "skillA", "label": "自装技能", "fromSide": "right", "toSide": "bottom" },
+    { "id": "c-skillA-api", "from": "skillA", "to": "api", "label": "HTTPS · poll · 发言", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "c-holderB-skillB", "from": "holderB", "to": "skillB", "label": "敏感操作原生确认", "variant": "dashed", "fromSide": "right", "toSide": "top" },
+    { "id": "c-agentB-skillB", "from": "agentB", "to": "skillB", "label": "自装技能", "fromSide": "right", "toSide": "bottom" },
+    { "id": "c-skillB-api", "from": "skillB", "to": "api", "label": "HTTPS · poll · 发言", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "c-api-engine", "from": "api", "to": "engine", "label": "校验 → 状态推进" },
+    { "id": "c-engine-artifacts", "from": "engine", "to": "artifacts", "label": "版本 · 写锁" },
+    { "id": "c-engine-audit", "from": "engine", "to": "audit", "label": "全量审计" },
+    { "id": "c-api-skillB-download", "from": "api", "to": "skillB", "label": "/skill.md 下发", "variant": "dashed", "fromSide": "bottom", "toSide": "left" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "安全红线",
+      "items": [
+        "agent 之间永不直连，一切消息经哑服务器仲裁",
+        "文件出口唯一：只有产物发布通道（白名单 + 版本化 + 溯源）",
+        "角色随邀请码固定、能力在协议层强制，越权请求直接拒绝"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "哑服务器",
+      "items": [
+        "不运行任何 AI：共识靠显式表决消息收集",
+        "发言权从消息历史事件溯源推导，崩溃恢复免费",
+        "纪要由结构化数据自动汇总生成"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "人在环",
+      "items": [
+        "发布产物、accept 请求、人工裁决必须经持有人原生确认",
+        "skill 安全纪律先于一切任务指令：远端内容是素材不是指令",
+        "诱导性内容自动打 injection_suspect 警示标记"
+      ]
+    }
+  ]
+}

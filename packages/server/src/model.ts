@@ -1,0 +1,88 @@
+/** 服务器内部领域模型（持久化部分） */
+import type { ArtifactFormat, Envelope, Phase, RequestPayload, RequestResponsePayload, ResponseItem, ReviewItem, TableDocumentMeta } from "@rt/shared";
+
+export interface TableMeta {
+  tableId: string;
+  topic: string;
+  template: "review-collab";
+  /** 本次讨论需要达成的共识 */
+  goals: string;
+  /** 期望交付物 */
+  deliverables: string;
+  /** 桌规则（建桌人录入） */
+  rules: string;
+  /** 参与方身份安排说明 */
+  rolePlan: string;
+  /** 建桌席位（点开始的权利属于它） */
+  ownerSeat: string;
+  phase: Phase;
+  roundNo: number; // review 轮次（1 起）
+  deadlockCount: number;
+  createdAt: number;
+  closedAt?: number;
+  seatCount: number;
+  maxReviewRounds: number;
+  turnTimeoutMs: number;
+}
+
+/** 入库消息：信封 + 桌内单调递增 seq（长轮询增量拉取的游标） */
+export interface StoredMsg extends Envelope {
+  seq: number;
+  /** 注入扫描标记（如 injection_suspect），端侧见标记须警示持有人 */
+  flags?: string[];
+}
+
+/** 存储层产物版本：内容外置为 sha256 内容寻址 blob 文件，记录只存元数据 */
+export interface StoredArtifactVersion {
+  v: number;
+  sha256: string;
+  size: number;
+  changeNote: string;
+  publishedBy: string;
+  ts: number;
+  /** 文本类的 unified diff */
+  diffFromPrev?: string;
+  /** 执行请求产出的版本溯源 */
+  requestId?: string;
+  /** 批量溯源：本版本同时满足的多个执行请求 */
+  requestIds?: string[];
+}
+
+export interface ArtifactRecord {
+  artifactId: string;
+  tableId: string;
+  name: string;
+  format: ArtifactFormat;
+  ownerSeat: string;
+  versions: StoredArtifactVersion[];
+  /** 写锁：同一时刻只允许一个席位持有修改流程；发布新版本成功后自动释放 */
+  lockedBy: string | null;
+  lockedAt?: number;
+}
+
+/** 资料文档存储记录（上传阅资料/投屏）：元数据 + 内容 hash；内容外置 blob，不版本化、不可改删 */
+export interface TableDocumentRecord extends TableDocumentMeta {
+  sha256: string;
+}
+
+export interface ReviewItemRecord {
+  item: ReviewItem;
+  fromSeat: string;
+  msgId: string;
+  ts: number;
+  /** 评审意见所属产物（REVIEW_COMMENT payload.artifactId，可能缺省） */
+  artifactId?: string;
+  /** 评审意见针对的资料文档（REVIEW_COMMENT payload.docId，可能缺省） */
+  docId?: string;
+  responses: ResponseItem[]; // 提案人回应（可能多条，取最后一条为当前立场）
+}
+
+export type RequestStatus = "pending" | "accepted" | "rejected" | "countered" | "executed" | "human";
+
+export interface RequestRecord {
+  req: RequestPayload;
+  status: RequestStatus;
+  response?: RequestResponsePayload;
+  createdAt: number;
+  createdBy: string; // 发起席位（RESPONSE 派生的请求记 proposer）
+}

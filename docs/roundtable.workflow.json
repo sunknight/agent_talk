@@ -1,0 +1,304 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Agent 圆桌 · 评审协作会议流程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "setup",
+        "label": "开局设定",
+        "focus": [
+          "create",
+          "join",
+          "start"
+        ],
+        "note": "建桌录入、各方入席设定立场，全员就绪后建桌人点开始。"
+      },
+      {
+        "id": "review-loop",
+        "label": "评审与改稿",
+        "focus": [
+          "statement",
+          "review",
+          "response",
+          "request",
+          "execute"
+        ],
+        "note": "提案、逐条评审、四态回应与委派改稿的主循环。"
+      },
+      {
+        "id": "close",
+        "label": "收敛与人工介入",
+        "focus": [
+          "vote",
+          "minutes",
+          "deadlock",
+          "ruling"
+        ],
+        "note": "共识表决；僵局自动升级人工裁决。"
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "humans",
+      "label": "参与人（人）"
+    },
+    {
+      "id": "proposer",
+      "label": "提案方 agent"
+    },
+    {
+      "id": "server",
+      "label": "服务器 · 状态机"
+    },
+    {
+      "id": "reviewer",
+      "label": "评审方 agent"
+    }
+  ],
+  "groups": [
+    {
+      "id": "human_gate",
+      "label": "人工介入通道",
+      "lane": "humans",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "security"
+    },
+    {
+      "id": "server_work",
+      "label": "服务器仲裁",
+      "lane": "server",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "create",
+    "join",
+    "start",
+    "statement",
+    "review",
+    "response",
+    "request",
+    "execute",
+    "vote",
+    "minutes"
+  ],
+  "nodes": [
+    {
+      "id": "create",
+      "lane": "humans",
+      "col": 0,
+      "type": "frontend",
+      "label": "建桌",
+      "sublabel": "主题·目标·规则·角色邀请码",
+      "width": 148
+    },
+    {
+      "id": "join",
+      "lane": "proposer",
+      "col": 0,
+      "type": "backend",
+      "label": "入席 · 设定立场",
+      "sublabel": "预设+补充·范围/数据·就绪",
+      "width": 148
+    },
+    {
+      "id": "start",
+      "lane": "humans",
+      "col": 1,
+      "type": "frontend",
+      "label": "点开始",
+      "sublabel": "建桌人·全员就绪后",
+      "width": 128
+    },
+    {
+      "id": "statement",
+      "lane": "proposer",
+      "col": 2,
+      "type": "backend",
+      "label": "发布产物 v1 · 陈述",
+      "sublabel": "持 yourTurn",
+      "width": 148
+    },
+    {
+      "id": "review",
+      "lane": "reviewer",
+      "col": 3,
+      "type": "backend",
+      "label": "逐条评审",
+      "sublabel": "must / should / nice",
+      "width": 140
+    },
+    {
+      "id": "response",
+      "lane": "proposer",
+      "col": 4,
+      "type": "backend",
+      "label": "四态回应",
+      "sublabel": "accept·defer·reject·human",
+      "width": 148
+    },
+    {
+      "id": "request",
+      "lane": "server",
+      "col": 4,
+      "type": "messagebus",
+      "label": "派生执行请求",
+      "sublabel": "requestId 溯源·委派双方",
+      "width": 148
+    },
+    {
+      "id": "execute",
+      "lane": "reviewer",
+      "col": 4,
+      "type": "backend",
+      "label": "按请求改稿",
+      "sublabel": "发布溯源新版本→accept",
+      "width": 148
+    },
+    {
+      "id": "vote",
+      "lane": "proposer",
+      "col": 5,
+      "type": "backend",
+      "label": "共识表决",
+      "sublabel": "pass / conditional / reject",
+      "width": 148
+    },
+    {
+      "id": "minutes",
+      "lane": "server",
+      "col": 5,
+      "type": "database",
+      "label": "计票 · 纪要 · 终稿",
+      "sublabel": "closed·自动纪要",
+      "width": 148
+    },
+    {
+      "id": "deadlock",
+      "lane": "humans",
+      "col": 4,
+      "type": "security",
+      "label": "僵局升级",
+      "sublabel": "两轮未收敛→人工",
+      "width": 140
+    },
+    {
+      "id": "ruling",
+      "lane": "humans",
+      "col": 5,
+      "type": "frontend",
+      "label": "人工裁决",
+      "sublabel": "恢复阶段/强制收会出纪要",
+      "width": 140
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-create-join",
+      "from": "create",
+      "to": "join",
+      "label": "邀请码（角色固定）"
+    },
+    {
+      "id": "e-join-start",
+      "from": "join",
+      "to": "start",
+      "label": "全员就绪"
+    },
+    {
+      "id": "e-start-statement",
+      "from": "start",
+      "to": "statement",
+      "label": "开始会议",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-statement-review",
+      "from": "statement",
+      "to": "review",
+      "label": "自动进入评审"
+    },
+    {
+      "id": "e-review-response",
+      "from": "review",
+      "to": "response",
+      "label": "评审完毕"
+    },
+    {
+      "id": "e-response-request",
+      "from": "response",
+      "to": "request",
+      "label": "accept",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-request-execute",
+      "from": "request",
+      "to": "execute",
+      "label": "委派改稿"
+    },
+    {
+      "id": "e-execute-vote",
+      "from": "execute",
+      "to": "vote",
+      "label": "执行完成"
+    },
+    {
+      "id": "e-response-vote",
+      "from": "response",
+      "to": "vote",
+      "label": "无请求",
+      "variant": "dashed"
+    },
+    {
+      "id": "e-vote-minutes",
+      "from": "vote",
+      "to": "minutes",
+      "label": "全员通过",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-vote-deadlock",
+      "from": "vote",
+      "to": "deadlock",
+      "label": "连续反对",
+      "variant": "security",
+      "role": "error",
+      "route": "drop"
+    },
+    {
+      "id": "e-deadlock-ruling",
+      "from": "deadlock",
+      "to": "ruling",
+      "label": "升级人工"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "会议推进与安全",
+      "items": [
+        "发言权由服务器轮转下发（yourTurn）；accept 自动派生带 requestId 的执行请求",
+        "改他人产物仅此一途；改稿须先发布溯源新版本再 accept"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "人在环与交付",
+      "items": [
+        "开局点开始、发布/accept 原生确认、僵局人工裁决（恢复阶段或强制收会出纪要）",
+        "纪要自动生成：立场、四态处置、跟进清单、表决与终稿版本"
+      ]
+    }
+  ]
+}

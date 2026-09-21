@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+data/
+.env
+.DS_Store
+*.log
+roundtable_data/
+roundtables/
+.roundtable/
+.codegraph/
+.kanban/
