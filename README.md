@@ -47,6 +47,21 @@ curl -s -X POST $SERVER/api/tables/$TID/start -H "authorization: Bearer $OWNER_S
 
 会议流（服务器状态机自动推进）：`open（建桌/入席/设定立场，建桌人点开始）→ statements（提案人发布产物+陈述）→ review（评审人逐条 must/should/nice 意见）→ response（提案人四态回应：accept 接纳[可委派 self 或评审席修改] / defer 记录后续跟进 / reject 拒绝 / human 交人工）→ execution（被请求方发布带 requestId 的新版本后 accept；或 reject/counter/escalate_human）→ convergence（全员表决）→ closed（自动纪要：立场/处置/跟进清单/表决/人工记录）`。表决连续未通过 → `human_intervention`（人工裁决可 `forceConvergence` 收会或恢复指定阶段）。
 
+## 调度机制（发言权与执行次序）
+
+**事件溯源，无轮转指针**：服务端不维护发言队列，每次从「当前阶段 + 消息历史」重新推导该谁发言（`engine.computeTurn`）。发言权是消费型的——`STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE` 必须持有当前发言权才能发，发出后自动推导下一位；`QUESTION / REPLY / HUMAN_INPUT / ESCALATE` 等讨论类消息任何席位随时可发，不需要发言权。
+
+| 阶段 | 发言权 | 次序规则 |
+|---|---|---|
+| open | 建桌人独占 | 全员就绪后由建桌人显式点开始，不自动流转 |
+| statements | 提案人独占 | 发布产物 v1 + STATEMENT 两者齐备，自动进 review |
+| review | 评审人**依次** | 按**入席时间顺序**，跳过本轮已发言者（不是转圈，是"找下一个还没说的"）；全员出具意见自动进 response |
+| response | 提案人独占 | 逐条四态回应；accept 可指定执行人（`executeBy: self` 自己改 / `reviewerSeat` 让意见提出席改） |
+| execution | **按需指定** | 每条 accept 生成一个定向 REQUEST（`toSeat` = 指定执行席位），按请求生成顺序**逐个处理**：每次把发言权给第一个 pending 请求的目标席位，其发布带 `requestId` 溯源的新版本并 `RESPOND_REQUEST accept` 后，自动切下一个；同一次修订可满足多个请求时支持 `requestIds=[...]` 批量关闭。评审人也可在 review/response 阶段直接发 REQUEST，同样汇入本队列 |
+| convergence | 投票权席位**依次** | 按入席顺序找第一个未投票者；全员投完自动计票 |
+
+**推进与兜底**：阶段流转由消息事件触发自动判定（如 review → response 只需全部评审人本轮都已发言）。表决有 reject 且未达 `maxReviewRounds`（默认 2）→ 回 review 开下一轮；超上限 → 自动 `human_intervention`。执行目标席位超 2 分钟无心跳不授予执行发言权（不空耗在掉线席位上）。注意 `turnTimeoutMs`（默认 5 分钟）只是随 TURN_GRANT 下发的提示，服务端**不做超时强制剥夺**——持权方卡住时靠 agent 自觉 deadline、`TURN_RELEASE` 主动让权（`pass:true`）或 ESCALATE / 人工介入解卡。
+
 ## API 摘要（全部 Bearer token 鉴权）
 
 | 端点 | 说明 |

@@ -4,7 +4,7 @@
  * 落 <dataDir>/roundtable.db；文档与产物版本内容落 <dataDir>/blobs/<sha256>，库内只存元数据与 hash。
  * 旧格式 state.json：构造时发现且库为空 → 自动迁移（migrateLegacy），成功后改名 .migrated 备份。
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -127,7 +127,7 @@ export class Store extends EventEmitter {
 
       ownerUpsert: this.db.prepare("INSERT OR REPLACE INTO seat_owners (table_id, seat_id, user_id) VALUES (?, ?, ?)"),
       ownerGet: this.db.prepare("SELECT user_id FROM seat_owners WHERE table_id = ? AND seat_id = ?"),
-      ownerSeatOfUser: this.db.prepare("SELECT seat_id FROM seat_owners WHERE table_id = ? AND user_id = ? LIMIT 1"),
+      ownerSeatsOfUserInTable: this.db.prepare("SELECT seat_id FROM seat_owners WHERE table_id = ? AND user_id = ? ORDER BY rowid"),
       ownersByUser: this.db.prepare("SELECT table_id, seat_id FROM seat_owners WHERE user_id = ? ORDER BY rowid"),
 
       inviteUpsert: this.db.prepare("INSERT OR REPLACE INTO invites (code, table_id, role, expires_at, uses_left) VALUES (?, ?, ?, ?, ?)"),
@@ -281,7 +281,7 @@ export class Store extends EventEmitter {
 
   // ---------- users ----------
   addUser(name: string, tokenHash: string): string {
-    const userId = `u_${Math.random().toString(36).slice(2, 10)}`;
+    const userId = `u_${randomBytes(4).toString("hex")}`; // crypto 随机（Math.random 可预测且理论撞库）
     this.st.userInsert.run(userId, name, tokenHash, "user", 0, Date.now());
     return userId;
   }
@@ -320,16 +320,24 @@ export class Store extends EventEmitter {
 
   /** 删除圆桌：连带清理全部关联数据（blob 内容寻址不可变，不随删；GC 见维护项） */
   deleteTable(tableId: string) {
-    this.db.prepare("DELETE FROM tables WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM seats WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM seat_owners WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM seat_tokens WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM invites WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM messages WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM requests WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM artifact_versions WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM artifacts WHERE table_id = ?").run(tableId);
-    this.db.prepare("DELETE FROM documents WHERE table_id = ?").run(tableId);
+    // 单事务：中途失败整体回滚，不留半删的脏关联数据
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM tables WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM seats WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM seat_owners WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM seat_tokens WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM invites WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM messages WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM requests WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM artifact_versions WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM artifacts WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM documents WHERE table_id = ?").run(tableId);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   // ---------- tables ----------
@@ -396,8 +404,19 @@ export class Store extends EventEmitter {
     return r ? String(r.user_id) : null;
   }
   seatOfUser(tableId: string, userId: string): string | null {
-    const r = this.st.ownerSeatOfUser.get(tableId, userId) as Row | undefined;
-    return r ? String(r.seat_id) : null;
+    const rows = (this.st.ownerSeatsOfUserInTable.all(tableId, userId) as Row[]);
+    if (!rows.length) return null;
+    // 用户退席后可重新入席（多行 owner 并存）：优先返回非 left 的 active 席位，
+    // 否则 LIMIT 1 会命中旧 left 席，令 my 通道 / 列表可见性 / 防重复入席全部错判
+    for (const r of rows) {
+      const seatId = String(r.seat_id);
+      const seatRow = this.st.seatGet.get(tableId, seatId) as Row | undefined;
+      if (seatRow) {
+        const status = (JSON.parse(String(seatRow.data)) as SeatInfo).status;
+        if (status !== "left") return seatId;
+      }
+    }
+    return String(rows[0].seat_id);
   }
   invitesOfTable(tableId: string) {
     return (this.st.invitesOfTable.all(tableId) as Row[]).map((r) => ({

@@ -56,7 +56,7 @@ async function quickTable(topic: string, reviewerNames: string[]) {
   }
   const s = await call("POST", `/api/tables/${tableId}/start`, { token: ownerSeatToken });
   expect(s.ok, `start: ${JSON.stringify(s.error)}`).toBe(true);
-  return { tableId, owner: { seatId: ownerSeatId, token: ownerSeatToken }, reviewers };
+  return { tableId, owner: { seatId: ownerSeatId, token: ownerSeatToken, userToken: ownerUser }, reviewers };
 }
 
 beforeAll(async () => {
@@ -313,11 +313,21 @@ describe("僵局升级人工与裁决", () => {
 
     const hi = await call("POST", `/api/tables/${tableId}/messages`, { token: seatB, body: { type: "HUMAN_INPUT", payload: { text: "双方各让一步，按现状定稿", byHuman: "DB的人" } } });
     expect(hi.ok).toBe(true);
-    const ruling = await call("POST", `/api/tables/${tableId}/messages`, {
-      token: seatA,
+    // HUMAN_RULING 已收权为人工通道：席位 token（agent）直发被 403 拒绝
+    // （用 seatB 发起：该尝试也计入限频窗口，避免挤占 seatA 紧接着的人工裁决额度）
+    const agentRuling = await call("POST", `/api/tables/${tableId}/messages`, {
+      token: seatB,
+      body: { type: "HUMAN_RULING", payload: { instruction: "agent 越权裁决", forceConvergence: true } },
+    });
+    expect(agentRuling.status).toBe(403);
+    expect(agentRuling.error.code).toBe("human_only");
+    // 网页持有人通道（user token → my/message）携带 human_proxied 标记，人工介入阶段可裁决
+    const ruling = await call("POST", `/api/tables/${tableId}/my/message`, {
+      token: t.owner.userToken,
       body: { type: "HUMAN_RULING", payload: { instruction: "按 v1 定稿，后续另开桌讨论", forceConvergence: true } },
     });
     expect(ruling.ok).toBe(true);
+    expect(ruling.data.message.flags).toContain("human_proxied");
     info = (await call("GET", `/api/tables/${tableId}`, { token: seatA })).data;
     expect(info.phase).toBe("closed");
   });

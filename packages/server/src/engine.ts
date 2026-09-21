@@ -49,8 +49,25 @@ const PHASE_ALLOWS: Partial<Record<Phase, MsgType[]>> = {
   convergence: ["CONSENSUS_VOTE"],
   human_intervention: [],
 };
-/** 任何活跃阶段都允许的通用类型 */
-const COMMON_TYPES: MsgType[] = ["QUESTION", "REPLY", "HUMAN_INPUT", "HUMAN_RULING", "ESCALATE"];
+/** 任何活跃阶段都允许的通用类型（HUMAN_RULING 不在其中：仅人工介入阶段 + 人工通道可发，见 postMessage） */
+const COMMON_TYPES: MsgType[] = ["QUESTION", "REPLY", "HUMAN_INPUT", "ESCALATE"];
+/** 人工介入阶段额外放行的人工裁决（仍要求 human_proxied 通道标记） */
+const HUMAN_ONLY_TYPES: MsgType[] = ["HUMAN_RULING"];
+
+/** 字段长度/范围校验：超限即 422（防巨字段撑库、撑大 poll/changes 全量响应） */
+function checkField(value: string, field: string, max: number, min = 1): string {
+  const v = value.trim();
+  if (v.length < min) throw new ApiError(422, "bad_payload", `${field} 必填（≤${max} 字符）`);
+  if (v.length > max) throw new ApiError(422, "bad_payload", `${field} 超长（≤${max} 字符）`);
+  return v;
+}
+function checkIntField(value: number | undefined, field: string, min: number, max: number, dflt: number): number {
+  if (value === undefined) return dflt;
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new ApiError(422, "bad_payload", `${field} 须为 ${min}~${max} 的整数`);
+  }
+  return value;
+}
 
 export interface PollResult {
   table: TableInfoPayload;
@@ -70,6 +87,8 @@ export class Hub {
   private waiters = new Map<string, Set<() => void>>();
   /** 席位限频窗口：tableId:seatId → 时间戳数组 */
   private rateWindow = new Map<string, number[]>();
+  /** 限频审计去重：tableId:seatId → 上次写 rate_limit 审计的时间 */
+  private rateAuditTs = new Map<string, number>();
 
   constructor(public readonly store: Store) {
     this.store.on("message", (tableId: string) => this.notify(tableId));
@@ -78,9 +97,10 @@ export class Hub {
   // ================= 用户与桌 =================
 
   registerUser(name: string): { userId: string; token: string } {
+    const clean = checkField(name, "name", 64);
     const token = `rtu_${randomBytes(24).toString("base64url")}`;
-    const userId = this.store.addUser(name, sha256(token));
-    this.audit("-", "-", "auth_ok", { name });
+    const userId = this.store.addUser(clean, sha256(token));
+    this.audit("-", "-", "auth_ok", { name: clean });
     return { userId, token };
   }
 
@@ -112,22 +132,28 @@ export class Hub {
     inviteCodes: { code: string; role: "reviewer" | "observer" }[];
   } {
     const user = this.requireUser(userToken);
-    if (!p.topic?.trim()) throw new ApiError(422, "bad_payload", "topic 必填");
-    if (!p.owner?.seatName?.trim()) throw new ApiError(422, "bad_payload", "owner.seatName 必填");
+    const topic = checkField(p.topic, "topic", 300);
+    const ownerSeatName = checkField(p.owner?.seatName ?? "", "owner.seatName", 64);
+    const ownerAgentLabel = checkField(p.owner?.agentLabel || "unknown", "owner.agentLabel", 64, 0);
+    const goals = p.goals !== undefined ? checkField(p.goals, "goals", 4_000, 0) : "";
+    const deliverables = p.deliverables !== undefined ? checkField(p.deliverables, "deliverables", 4_000, 0) : "";
+    const rules = p.rules !== undefined ? checkField(p.rules, "rules", 4_000, 0) : "";
+    const rolePlan = p.rolePlan !== undefined ? checkField(p.rolePlan, "rolePlan", 4_000, 0) : "";
+    const maxReviewRounds = checkIntField(p.maxReviewRounds, "maxReviewRounds", 1, 10, 2);
+    const turnTimeoutMs = checkIntField(p.turnTimeoutMs, "turnTimeoutMs", 30_000, 3_600_000, 300_000);
     const tableId = newId("tbl");
     const meta: TableMeta = {
-      tableId, topic: p.topic.trim(), template: "review-collab", phase: "open",
-      goals: p.goals ?? "", deliverables: p.deliverables ?? "", rules: p.rules ?? "",
-      rolePlan: p.rolePlan ?? "", ownerSeat: "",
+      tableId, topic, template: "review-collab", phase: "open",
+      goals, deliverables, rules, rolePlan, ownerSeat: "",
       roundNo: 1, deadlockCount: 0, createdAt: Date.now(), seatCount: 0,
-      maxReviewRounds: p.maxReviewRounds ?? 2, turnTimeoutMs: p.turnTimeoutMs ?? 300_000,
+      maxReviewRounds, turnTimeoutMs,
     };
 
     // 建桌人席位（proposer，绑定用户身份）
     const ownerSeatId = newId("seat");
     const ownerSeat: ServerSeat = {
-      seatId: ownerSeatId, name: p.owner.seatName.trim(), role: "proposer",
-      caps: resolveCaps("proposer", undefined), agentLabel: p.owner.agentLabel || "unknown",
+      seatId: ownerSeatId, name: ownerSeatName, role: "proposer",
+      caps: resolveCaps("proposer", undefined), agentLabel: ownerAgentLabel,
       joinedAt: Date.now(), status: "active", lastSeenAt: Date.now(),
       config: { stance: "", scope: "", dataScope: [], ready: false },
     };
@@ -146,8 +172,8 @@ export class Hub {
     for (const inv of inviteCodes) this.store.addInvite(inv.code, tableId, inv.role);
 
     this.sysMsg(tableId, "SEAT_JOINED", { seat: ownerSeat });
-    this.audit(tableId, ownerSeatId, "table_open", { topic: p.topic, by: user.name });
-    this.audit(tableId, ownerSeatId, "seat_join", { name: p.owner.seatName, role: "proposer", owner: true });
+    this.audit(tableId, ownerSeatId, "table_open", { topic, by: user.name });
+    this.audit(tableId, ownerSeatId, "seat_join", { name: ownerSeatName, role: "proposer", owner: true });
     return { tableId, ownerSeatId, ownerSeatToken, inviteCodes };
   }
 
@@ -205,13 +231,15 @@ export class Hub {
     if (p.role === "proposer" && seats.some((s) => s.role === "proposer")) {
       throw new ApiError(409, "proposer_exists", "本桌已有提案人（建桌人）");
     }
-    if (!p.seatName?.trim()) throw new ApiError(422, "bad_payload", "seatName 必填");
+    const seatName = checkField(p.seatName ?? "", "seatName", 64);
+    const agentLabel = checkField(p.agentLabel || "unknown", "agentLabel", 64, 0);
+    checkField(p.inviteCode, "inviteCode", 64);
     // 校验全过才真正消费次数（并发下恰好被用尽则拒绝）
     if (!this.store.consumeInvite(p.inviteCode)) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
     const seatId = newId("seat");
     const seat: ServerSeat = {
-      seatId, name: p.seatName.trim(), role: p.role, caps: resolveCaps(p.role, p.capsOverride),
-      agentLabel: p.agentLabel || "unknown", joinedAt: Date.now(), status: "active", lastSeenAt: Date.now(),
+      seatId, name: seatName, role: p.role, caps: resolveCaps(p.role, p.capsOverride),
+      agentLabel, joinedAt: Date.now(), status: "active", lastSeenAt: Date.now(),
       config: { stance: "", scope: "", dataScope: [], ready: false },
     };
     this.store.saveSeat(tableId, seat);
@@ -221,7 +249,7 @@ export class Hub {
     const token = `rts_${randomBytes(24).toString("base64url")}`;
     this.store.saveSeatToken(token, tableId, seatId);
     this.sysMsg(tableId, "SEAT_JOINED", { seat });
-    this.audit(tableId, seatId, "seat_join", { name: p.seatName, role: p.role, by: user.name });
+    this.audit(tableId, seatId, "seat_join", { name: seatName, role: p.role, by: user.name });
     return { seatId, token, seat };
   }
 
@@ -231,12 +259,15 @@ export class Hub {
   }): SeatInfo {
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，席位设定锁定");
-    if (!p.stance?.trim()) throw new ApiError(422, "bad_payload", "stance（立场声明）必填");
+    const stance = checkField(p.stance, "stance", 8_000);
+    const scope = p.scope !== undefined ? checkField(p.scope, "scope", 4_000, 0) : "";
+    const stancePreset = p.stancePreset !== undefined ? checkField(p.stancePreset, "stancePreset", 64, 0) : undefined;
+    const dataScope = (p.dataScope ?? []).slice(0, 50).map((x) => checkField(x, "dataScope 条目", 500));
     seat.config = {
-      stancePreset: p.stancePreset,
-      stance: p.stance.trim(),
-      scope: p.scope ?? "",
-      dataScope: (p.dataScope ?? []).slice(0, 50),
+      stancePreset,
+      stance,
+      scope,
+      dataScope,
       ready: p.ready ?? seat.config.ready,
     };
     this.store.saveSeat(tableId, seat);
@@ -315,7 +346,9 @@ export class Hub {
   async poll(tableId: string, seat: ServerSeat, since: number, waitMs: number): Promise<PollResult> {
     this.requireTable(tableId);
     this.touchSeat(seat, tableId);
-    const deadline = Date.now() + waitMs;
+    // 双保险：非法 waitMs（NaN 等）按 0 处理立即返回 —— NaN deadline 会形成永不退出的忙循环
+    const safeWait = Number.isFinite(waitMs) ? Math.max(0, waitMs) : 0;
+    const deadline = Date.now() + safeWait;
     for (;;) {
       const messages = this.store.getMessagesSince(tableId, since);
       const table = this.tableInfo(tableId);
@@ -432,7 +465,7 @@ export class Hub {
     const v = validateEnvelope(env);
     if (!v.ok) throw new ApiError(422, "bad_payload", `消息校验失败：${v.errors.join("; ")}`);
 
-    this.checkPhaseRules(meta, seat, type, payload);
+    this.checkPhaseRules(meta, seat, type, payload, extraFlags);
     if (TURN_BOUND[type]) {
       const turn = this.computeTurn(tableId);
       if (!turn || turn.seatId !== seat.seatId) {
@@ -478,16 +511,25 @@ export class Hub {
   }
 
   /** 阶段白名单 + 角色/能力校验（协议层强制的落点） */
-  private checkPhaseRules(meta: TableMeta, seat: ServerSeat, type: MsgType, payload: unknown) {
+  private checkPhaseRules(meta: TableMeta, seat: ServerSeat, type: MsgType, payload: unknown, extraFlags?: string[]) {
     const p = meta.phase;
     if (p === "closed") throw new ApiError(409, "table_closed", "会议已结束，只读");
     const role = seat.role, caps = seat.caps;
 
+    // 人工裁决通道闸门（先于阶段判定，保证 agent 直发任何阶段都得到明确的 403）：
+    // 仅网页持有人（user token → postByUser 携带 human_proxied 标记）可发，
+    // agent 席位 token 直发一律拒绝 —— 防任一参会 agent 一条消息强制闭桌/改写阶段
+    if (type === "HUMAN_RULING" && !(extraFlags ?? []).includes("human_proxied")) {
+      throw new ApiError(403, "human_only", "HUMAN_RULING 为人工专属（网页持有人通道）；agent 请用 ESCALATE 申请人工介入");
+    }
+
     const phaseAllows = PHASE_ALLOWS[p] ?? [];
     if (p === "human_intervention") {
-      if (!COMMON_TYPES.includes(type)) throw new ApiError(409, "human_mode", "人工介入模式：仅接受 HUMAN_INPUT / HUMAN_RULING");
+      if (![...COMMON_TYPES, ...HUMAN_ONLY_TYPES].includes(type)) {
+        throw new ApiError(409, "human_mode", "人工介入模式：仅接受 HUMAN_INPUT / HUMAN_RULING（及 QUESTION/REPLY/ESCALATE）");
+      }
     } else if (!phaseAllows.includes(type) && !COMMON_TYPES.includes(type)) {
-      throw new ApiError(409, "wrong_phase", `阶段 ${p} 不接受消息类型 ${type}`);
+      throw new ApiError(409, "wrong_phase", `阶段 ${p} 不接受消息类型 ${type}（HUMAN_RULING 仅人工介入阶段可发）`);
     }
 
     if (type === "STATEMENT" && role !== "proposer") throw new ApiError(403, "role", "仅提案人可陈述");
@@ -522,11 +564,25 @@ export class Hub {
     const now = Date.now();
     const list = (this.rateWindow.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
     if (list.length >= RATE_MAX) {
-      this.audit(tableId, seat.seatId, "policy_reject", { reason: "rate_limit" });
+      // 审计每席位每窗口只记一条：防高频 429 重试无限撑大 audit 表
+      const last = this.rateAuditTs.get(key) ?? 0;
+      if (now - last >= RATE_WINDOW_MS) {
+        this.rateAuditTs.set(key, now);
+        this.audit(tableId, seat.seatId, "policy_reject", { reason: "rate_limit" });
+      }
       throw new ApiError(429, "rate_limited", "发言过于频繁，稍候再试");
     }
     list.push(now);
     this.rateWindow.set(key, list);
+    // 防御性清扫：桌删除后遗留的窗口条目不无限累积
+    if (this.rateWindow.size > 10_000) {
+      for (const [k, ts] of this.rateWindow) {
+        if (ts.every((t) => now - t >= RATE_WINDOW_MS)) {
+          this.rateWindow.delete(k);
+          this.rateAuditTs.delete(k);
+        }
+      }
+    }
   }
 
   // ================= 执行请求（RESPOND_REQUEST） =================
@@ -854,6 +910,11 @@ export class Hub {
     const rids = [...new Set([...(p.requestIds ?? []), ...(p.requestId ? [p.requestId] : [])])];
     const traceFields: Pick<StoredArtifactVersion, "requestId" | "requestIds"> =
       rids.length === 1 ? { requestId: rids[0] } : rids.length > 1 ? { requestIds: rids } : {};
+    const name = checkField(p.name, "name", 200);
+    const changeNote = checkField(p.changeNote, "changeNote", 2_000);
+    if (!["md", "txt", "json", "png"].includes(p.format)) {
+      throw new ApiError(422, "bad_payload", "format 只能是 md / txt / json / png");
+    }
     const size = Buffer.byteLength(p.contentBase64, "base64");
     if (size > 5 * 1024 * 1024) throw new ApiError(413, "too_large", "产物超过 5MB 上限");
 
@@ -865,7 +926,8 @@ export class Hub {
       const isOwner = rec.ownerSeat === seat.seatId && seat.caps.canModifyOwn;
       const hasReq = seat.caps.canExecuteRequests && rids.some((rid) => this.store.getRequests(tableId).some((r) =>
         r.req.requestId === rid && r.req.toSeat === seat.seatId
-        && (r.req.artifactId ?? rec.artifactId) === rec.artifactId));
+        && (r.req.artifactId ?? rec.artifactId) === rec.artifactId
+        && (r.status === "pending" || r.status === "human"))); // 已完结（executed/rejected/countered）的请求不再授予写权
       if (!isOwner && !hasReq) {
         this.audit(tableId, seat.seatId, "policy_reject", { reason: "caps_write_artifact", artifactId: rec.artifactId });
         throw new ApiError(403, "caps", "非产物所有者，且无指向本席的待执行修改请求：不允许更新该产物");
@@ -874,7 +936,7 @@ export class Hub {
       const prev = rec.versions[rec.versions.length - 1];
       const stored: StoredArtifactVersion = {
         v: rec.versions.length + 1, sha256: this.store.saveBlob(p.contentBase64), size,
-        changeNote: p.changeNote, publishedBy: seat.seatId, ts: Date.now(), ...traceFields,
+        changeNote, publishedBy: seat.seatId, ts: Date.now(), ...traceFields,
         diffFromPrev: p.format === "png" ? undefined
           : unifiedDiff(this.store.readBlob(prev.sha256).toString("utf8"), Buffer.from(p.contentBase64, "base64").toString("utf8")),
       };
@@ -895,15 +957,15 @@ export class Hub {
     const artifactId = newId("art");
     const stored: StoredArtifactVersion = {
       v: 1, sha256: this.store.saveBlob(p.contentBase64), size,
-      changeNote: p.changeNote, publishedBy: seat.seatId, ts: Date.now(), ...traceFields,
+      changeNote, publishedBy: seat.seatId, ts: Date.now(), ...traceFields,
     };
     const newRec = {
-      artifactId, tableId, name: p.name, format: p.format, ownerSeat: seat.seatId,
+      artifactId, tableId, name, format: p.format, ownerSeat: seat.seatId,
       versions: [stored], lockedBy: null as string | null,
     };
     this.store.saveArtifact(tableId, newRec);
     const published: ArtifactPublishedPayload = {
-      artifactId, name: p.name, format: p.format, ownerSeat: seat.seatId,
+      artifactId, name, format: p.format, ownerSeat: seat.seatId,
       version: this.wireVersion(stored, p.contentBase64),
     };
     this.sysMsg(tableId, "ARTIFACT_PUBLISHED", published);
@@ -1292,21 +1354,23 @@ export class Hub {
   }
 
   /** 强制闭桌：仅 active 桌；走既有 closeTable（纪要 + PHASE_CHANGE 自动留痕） */
-  adminCloseTable(adminToken: string, tableId: string, reason: string) {
+  adminCloseTable(adminToken: string, tableId: string, reasonRaw: string) {
     const admin = this.requireAdmin(adminToken);
     const meta = this.requireTable(tableId);
     if (meta.phase === "closed") throw new ApiError(409, "table_closed", "会议已结束");
+    const reason = checkField(reasonRaw ?? "", "reason", 1_000, 0);
     this.audit(tableId, "-", "admin_close", { reason, by: admin.userId });
     this.closeTable(tableId, `系统观察员强制闭桌：${reason || "（未填原因）"}`);
     return { closed: true };
   }
 
   /** 强制人工介入：仅 active 且未在介入模式的桌 */
-  adminEnterHumanMode(adminToken: string, tableId: string, reason: string) {
+  adminEnterHumanMode(adminToken: string, tableId: string, reasonRaw: string) {
     const admin = this.requireAdmin(adminToken);
     const meta = this.requireTable(tableId);
     if (meta.phase === "closed") throw new ApiError(409, "table_closed", "会议已结束");
     if (meta.phase === "human_intervention") throw new ApiError(409, "already_human", "已在人工介入模式");
+    const reason = checkField(reasonRaw ?? "", "reason", 1_000, 0);
     this.audit(tableId, "-", "admin_human", { reason, by: admin.userId });
     this.setPhase(tableId, "human_intervention", `系统观察员介入：${reason || "（未填原因）"}`);
     return { phase: "human_intervention" };

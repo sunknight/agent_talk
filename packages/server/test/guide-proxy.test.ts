@@ -156,10 +156,26 @@ describe("参与引导（poll myTask）与我的席位通道", () => {
   });
 
   it("closed 阶段 myTask：提示会议已结束", async () => {
-    await call("POST", `/api/tables/${tableId}/messages`, {
+    // HUMAN_RULING 已收权：席位 token 直发被拒（403 human_only），非人工介入阶段连网页通道也拒（409 wrong_phase）
+    const agentDeny = await call("POST", `/api/tables/${tableId}/messages`, {
       token: ownerSeatToken,
       body: { type: "HUMAN_RULING", payload: { instruction: "测试直接收会", forceConvergence: true } },
     });
+    expect(agentDeny.status).toBe(403);
+    const phaseDenyRuling = await call("POST", `/api/tables/${tableId}/my/message`, {
+      token: ownerUser,
+      body: { type: "HUMAN_RULING", payload: { instruction: "测试直接收会", forceConvergence: true } },
+    });
+    expect(phaseDenyRuling.status).toBe(409);
+    // 人工路径：先 ESCALATE 申请介入 → human_intervention → 网页持有人通道裁决收会
+    await call("POST", `/api/tables/${tableId}/my/message`, {
+      token: ownerUser, body: { type: "ESCALATE", payload: { reason: "提前收会" } },
+    });
+    const ruling = await call("POST", `/api/tables/${tableId}/my/message`, {
+      token: ownerUser,
+      body: { type: "HUMAN_RULING", payload: { instruction: "测试直接收会", forceConvergence: true } },
+    });
+    expect(ruling.ok).toBe(true);
     const r = await poll(ownerSeatToken, tableId);
     expect(r.data.table.phase).toBe("closed");
     expect(r.data.myTask).toContain("会议已结束");

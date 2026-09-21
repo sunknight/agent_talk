@@ -273,7 +273,7 @@ function docPreviewKind(name){
   return '';
 }
 function b64ToU8(b64){ var bin; try{ bin=atob(b64||''); }catch(e){ return new Uint8Array(0); } var arr=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i); return arr; }
-/** 极简 markdown 渲染：输入必须已整体 esc()，此处只做白名单标签转换（围栏字符用 \x60 构造，模板内禁反引号） */
+/** 极简 markdown 渲染：输入为原始文本，内部统一 esc() 转义（代码块外的每一行先转义再匹配，杜绝 HTML 注入；围栏字符用 \x60 构造，模板内禁反引号） */
 function miniMd(src){
   var F='\x60';
   var lines=String(src).split('\n'), out=[], buf=[], inCode=false, inList=false;
@@ -281,11 +281,11 @@ function miniMd(src){
   var inline=function(t){
     t=t.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
     t=t.replace(new RegExp(F+'([^'+F+']+)'+F,'g'),'<code>$1</code>');
-    t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)"']+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     return t;
   };
   for(var i=0;i<lines.length;i++){
-    var ln=lines[i], t=ln.trim();
+    var ln=lines[i], t=esc(ln).trim();
     if(new RegExp('^'+F+'{3}').test(t)){
       if(inCode){ inCode=false; buf.push('</pre>'); flush(); }
       else { flush(); inCode=true; buf.push('<pre>'); }
@@ -328,6 +328,8 @@ function ensureMammoth(cb){
   mammothState='loading';
   var s=document.createElement('script');
   s.src='https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js';
+  s.integrity='sha384-/cXAMbzovUIKbBERjPmR3SnPTh8siWr5lsvFYj1Uq4XP0yaJUZJmsh0YXyGv5P0y'; /* SRI：内容被篡改则拒绝执行 */
+  s.crossOrigin='anonymous';
   s.onload=function(){ mammothState=window.mammoth?'ok':'fail'; cb(mammothState==='ok'); };
   s.onerror=function(){ mammothState='fail'; cb(false); };
   document.head.appendChild(s);

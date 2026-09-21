@@ -12,18 +12,62 @@ import { OBSERVER_HTML } from "./observer-html";
 
 const BODY_LIMIT = 8 * 1024 * 1024; // 产物 base64 最大 ~7MB
 const POLL_MAX_MS = 25_000;
+/** 注册限频：按客户端 IP（40 次/10 分钟 —— 高于单测峰值 ~25 次，仍能砍掉匿名洪泛两个数量级） */
+const REG_RATE_WINDOW_MS = 10 * 60_000;
+const REG_RATE_MAX = 40;
+const regWindow = new Map<string, number[]>();
+
+/** API 响应通用安全头（JSON 不缓存、不嗅探、不泄露 referrer） */
+const SAFE_HEADERS: Record<string, string> = {
+  "cache-control": "no-store",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+/** 观察端 HTML 的 CSP：外链脚本仅放行 mammoth CDN（带 SRI），数据类资源走 blob:/data: */
+const HTML_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data: blob:; connect-src 'self'; frame-src 'self' blob:; font-src 'self' data:; " +
+  "object-src 'none'; base-uri 'none'; form-action 'self'";
 
 function json(res: ServerResponse, status: number, body: unknown) {
   const buf = Buffer.from(JSON.stringify(body));
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": buf.length });
+  res.writeHead(status, { ...SAFE_HEADERS, "content-type": "application/json; charset=utf-8", "content-length": buf.length });
   res.end(buf);
 }
 
 function ok(res: ServerResponse, data: unknown) { json(res, 200, { ok: true, data }); }
 function fail(res: ServerResponse, err: unknown) {
   if (err instanceof ApiError) return json(res, err.status, { ok: false, error: { code: err.code, message: err.message } });
-  const e = err as { message?: string };
-  json(res, 500, { ok: false, error: { code: "server_error", message: e?.message ?? String(err) } });
+  // 内部异常：细节只进日志，不回显客户端
+  process.stderr.write(`[api] 500 ${String((err as { message?: string })?.message ?? err)}\n`);
+  json(res, 500, { ok: false, error: { code: "server_error", message: "服务器内部错误（详情见服务端日志）" } });
+}
+
+/** 反代后真实客户端 IP：仅当 socket 为本机回环（nginx 反代场景）时信任转发头，防直连伪造 */
+function clientIp(req: IncomingMessage): string {
+  const ra = req.socket.remoteAddress ?? "";
+  const loopback = ra === "127.0.0.1" || ra === "::1" || ra === "::ffff:127.0.0.1";
+  if (loopback) {
+    const real = req.headers["x-real-ip"];
+    if (typeof real === "string" && real) return real;
+    const fwd = req.headers["x-forwarded-for"];
+    if (typeof fwd === "string" && fwd) return fwd.split(",")[0].trim();
+  }
+  return ra || "unknown";
+}
+
+/** 注册接口限频：同 IP 窗口内超过 REG_RATE_MAX 次即拒绝（429） */
+function checkRegisterRate(ip: string) {
+  const now = Date.now();
+  const list = (regWindow.get(ip) ?? []).filter((t) => now - t < REG_RATE_WINDOW_MS);
+  if (list.length >= REG_RATE_MAX) throw new ApiError(429, "rate_limited", "注册过于频繁，稍后再试");
+  list.push(now);
+  regWindow.set(ip, list);
+  if (regWindow.size > 10_000) { // 防御性清扫：防恶意 IP 撑大 map
+    for (const [k, ts] of regWindow) {
+      if (ts.every((t) => now - t >= REG_RATE_WINDOW_MS)) regWindow.delete(k);
+    }
+  }
 }
 
 function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -64,7 +108,12 @@ export function createHttpServer(hub: Hub) {
       if (path === "/healthz") return ok(res, { status: "ok" });
       if (path === "/" && method === "GET") {
         const buf = Buffer.from(OBSERVER_HTML, "utf8");
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": buf.length });
+        res.writeHead(200, {
+          ...SAFE_HEADERS,
+          "content-security-policy": HTML_CSP,
+          "content-type": "text/html; charset=utf-8",
+          "content-length": buf.length,
+        });
         return res.end(buf);
       }
 
@@ -137,7 +186,7 @@ export function createHttpServer(hub: Hub) {
       }
       if (path === "/skill.md" && method === "GET") {
         const buf = Buffer.from(SKILL_MD, "utf8");
-        res.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "content-length": buf.length });
+        res.writeHead(200, { ...SAFE_HEADERS, "content-type": "text/markdown; charset=utf-8", "content-length": buf.length });
         return res.end(buf);
       }
 
@@ -186,6 +235,7 @@ export function createHttpServer(hub: Hub) {
 
       // ---------- 用户 ----------
       if (path === "/api/users" && method === "POST") {
+        checkRegisterRate(clientIp(req));
         const body = await readJson(req);
         const name = String(body.name ?? "");
         if (!name) throw new ApiError(422, "bad_payload", "name 必填");
@@ -265,7 +315,9 @@ export function createHttpServer(hub: Hub) {
         }
         if (sub === "poll" && method === "GET") {
           const since = Number(url.searchParams.get("since") ?? 0) || 0;
-          const waitSec = Math.min(Number(url.searchParams.get("timeout") ?? 20), POLL_MAX_MS / 1000);
+          // 非法 timeout（非数字/NaN/负数）一律回落默认 20s：NaN 会让引擎侧 deadline 永不到期，形成永久忙循环
+          const rawWait = Number(url.searchParams.get("timeout") ?? 20);
+          const waitSec = Number.isFinite(rawWait) ? Math.min(Math.max(rawWait, 0), POLL_MAX_MS / 1000) : 20;
           return ok(res, await hub.poll(tableId, seatAuth, since, waitSec * 1000));
         }
         // 变动记录（回合开始刷新）：最新桌况 + 资料列表（本席视角）+ since 之后的结构化变动；poll 响应亦附同款字段
