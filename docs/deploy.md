@@ -253,10 +253,16 @@ curl -s https://roundtable.ctrlacv.com/skill.md | head  # 技能档可下发
 **升级发版**：
 
 ```bash
+# 一键（推荐，发版向导会在发版时自动调用）：
+npm run deploy        # = scripts/deploy.sh：rsync → 服务器 npm ci + build → pm2 startOrReload → 双健康检查
+
+# 手动分步（等价）：
 # 开发机：rsync/git push 新代码 → 服务器：
 cd /home/web/code/agent_talk && npm ci && npm run build
 pm2 reload agent-talk        # 平滑重启；SQLite schema 变更会在启动时自动迁移
 ```
+
+`scripts/deploy.sh` 可用环境变量覆盖默认值：`DEPLOY_SERVER`、`DEPLOY_DIR`、`DEPLOY_PORT`、`PUBLIC_URL`、`PM2_APP`。
 
 **备份**（roundtable.db + blobs/ 是全部状态）：
 

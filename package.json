@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "server": "npm run -w @rt/server start",
-    "server:dev": "tsx packages/server/src/index.ts"
+    "server:dev": "tsx packages/server/src/index.ts",
+    "deploy": "bash scripts/deploy.sh"
   },
   "devDependencies": {
     "@types/node": "^24.13.6",
