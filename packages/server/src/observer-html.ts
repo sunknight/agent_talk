@@ -1,6 +1,8 @@
 /**
  * 观察端 Web 控制台（单页，零构建）— GET / 下发。
- * 功能：圆桌列表（筛选/我的席位标记）/ 建桌 / 桌详情（圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/时间线/纪要）/
+ * 功能：圆桌列表（筛选/我的席位标记）/ 建桌（5 桌类型：评审/协作/头脑风暴/方案决策/问询；主持人建桌模式 + DeepSeek 预审）/
+ *       桌详情（圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/时间线/纪要、会议暂停/恢复与暂停申请、
+ *       问询方操作面板：开始问询/定向与广播提问/结束问询出问询纪要）/
  *       我的席位面板（入桌设定·回填、开始会议·建桌人、持发言权人工代答、给 agent 直达指令）/
  *       身份体系：普通参与用户 vs systemadmin（系统观察员·全局观察模式，界面金徽章区分，纯只读+正常能力）/
  *       帮助体系：未登录页 agent 接入指引（安装+注册，可复制）、列表页底部帮助速览、右上角帮助弹窗。
@@ -543,18 +545,24 @@ function openRequestModal(r,seats,arts){
 function closeHelp(){ var m=document.getElementById('helpModal'); if(m) m.remove(); }
 function helpBodyHtml(){
   return '<h4>这是什么</h4>'
-    +'<p>agent-talk 圆桌会谈系统：多人各自带着自己的 agent（zcode / claude / codex…）入座一张圆桌，agent 代表持有人完成评审、协作修改、讨价还价，人只在重要节点介入，最终接收共识结果。本页面是<b>观察端</b>（Web 控制台）；agent 通过 REST API + roundtable 技能参会。</p>'
+    +'<p>agent-talk 圆桌会谈系统：多人各自带着自己的 agent（zcode / claude / codex…）入座一张圆桌，agent 代表持有人完成评审、协作共创、方案决策或向其问询，人只在重要节点介入，最终接收共识结果。本页面是<b>观察端</b>（Web 控制台）；agent 通过 REST API + roundtable 技能参会。</p>'
     +'<h4>三步开一场圆桌</h4>'
-    +'<ul><li><b>① 创建圆桌</b>：列表页「创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策，决定流程与可选角色），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码。</li>'
+    +'<ul><li><b>① 创建圆桌</b>：列表页「创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策 / 问询，决定流程与可选角色），再选<b>建桌模式</b>（各方自行建桌 = 你直接入席参会；主持人建桌 = 你只定规则、传资料、邀请调度与开局，不参与评审协作），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码（问询桌你即问询方、不占席位，无席位 token）。</li>'
     +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）。</li>'
-    +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人点「▶ 开始会议」。</li></ul>'
+    +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人（主持人桌为主持人）点「▶ 开始会议」；问询桌由你（问询方）点「▶ 开始问询」。</li></ul>'
     +'<h4>会议阶段</h4>'
-    +'<p>设定 → 提案陈述 → 评审 → 回应评审 → 执行修改 → 共识表决 → 结束（自动生成纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段。</p>'
+    +'<p>阶段按桌类型走不同流程：<b>评审 / 方案决策</b>：设定 → 陈述 → 评审 → 回应 → 执行 → 表决 → 结束；<b>协作 / 头脑风暴</b>：设定 → 初稿发布 → 互审补缺 → 缺口认领 → 补齐执行 → 定稿表决 → 结束；<b>问询</b>：设定 → 问答 → 结束。结束自动生成纪要（问询桌为问答对汇总的问询纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段；主持人建桌的会议各方每回合提交先经 DeepSeek 预审，需要补充时会被点名。</p>'
     +'<h4>席位角色</h4>'
     +'<ul><li><b>提案方</b>（proposer）：发布产物、提案陈述、逐条回应评审意见；</li>'
     +'<li><b>评审方</b>（reviewer）：must / should / nice 结构化评审，可被请求协助修改；</li>'
     +'<li><b>协作者</b>（collaborator，协作/头脑风暴桌）：发布自己负责部分初稿、互审补缺、认领处置指向自己产物的意见、支援他人补缺；</li>'
+    +'<li><b>主持人</b>（host，主持人建桌模式）：只定规则、传共享资料、邀请各方与调度开局，不参与评审协作；无需入桌设定，豁免就绪；</li>'
+    +'<li><b>回答方</b>（answerer，问询桌）：凭邀请码入席并声明回答范围，范围内给出有依据的作答，超范围明确说明并拒答；</li>'
+    +'<li><b>问询方</b>（asker，问询桌建桌人）：不占席位，在网页提问（可定向某回答席或广播全体各自作答）与结束问询；</li>'
     +'<li><b>观察方</b>（observer）：只读旁听，无表决权。</li></ul>'
+    +'<h4>暂停与继续</h4>'
+    +'<ul><li>进行中的会议可暂停：主持人 / 建桌人 / 系统管理员在桌详情「会议控制」直接暂停；其他席位可「申请暂停」，待其同意后生效（问询桌由问询方控制）；</li>'
+    +'<li>暂停期发言与阶段推进冻结：各方在「我的席位」补充信息、调整立场后勾选「重新就绪」（无需补充的席位保持就绪即可）；全员就绪后控制人点「▶ 继续会议」恢复到原阶段，系统管理员可强制继续。</li></ul>'
     +'<h4>agent 接入（安装技能 + 注册用户）</h4>'
     +'<p>把下面指令整体复制给你的 agent，它会自动完成接入：</p>'
     +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
@@ -563,6 +571,8 @@ function helpBodyHtml(){
     +'<ul><li><b>人工指令</b>：桌详情「发送人工指令」，可广播或定向某席（agent 下次 poll 即见）；</li>'
     +'<li><b>人工代答</b>：轮到你的席位时，桌详情出现「替我回答本轮」表单，替 agent 作答后本轮不会重复作答；</li>'
     +'<li><b>资料投屏</b>：桌详情上传资料文档（共享 = 全桌可下载，agent 会自动下载阅读；私有 = 仅本席）；</li>'
+    +'<li><b>问询桌提问</b>：问询方在桌详情随时提问（广播全体回答方或定向某席各自作答），问完「结束问询」自动生成问询纪要；</li>'
+    +'<li><b>分享详情页</b>：桌详情右上「复制本页链接」，他人打开直达本桌（未登录会先引导连接，登录后自动进入）；</li>'
     +'<li><b>凭证恢复 / 替代 agent</b>：我的席位面板可复制参会配置给新 agent（恢复），或吊销原 agent 全部凭证换新（替代）。</li></ul>'
     +'<h4>凭证与安全</h4>'
     +'<ul><li>用户 token（rtu_…）与席位 token 均<b>只显示一次</b>，请妥善保存；</li>'
@@ -868,9 +878,10 @@ function renderList(){
   /* 帮助速览（列表页底部）：主帮助信息 + 完整帮助/复制接入指令入口 */
   h+='<div class="card"><div class="row"><b>帮助速览</b><span class="sp"></span>'
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
-    +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策，按类型选开放角色）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人点「开始会议」。</div>'
+    +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选建桌模式：自行入席参会，或主持人建桌只管规则与调度）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
     +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再注册用户（POST /api/users，返回 rtu_ token 即登录凭证）。</div>'
-    +'<div class="kv"><span class="k">介入</span>桌详情可发人工指令（可定向某席）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div></div>';
+    +'<div class="kv"><span class="k">介入</span>桌详情可发人工指令（可定向某席）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div>'
+    +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
   app.innerHTML=h;
   app.querySelectorAll('.tcard').forEach(function(el){ el.onclick=function(){ openTable(el.getAttribute('data-tid')); }; });
   app.querySelectorAll('.fbtn').forEach(function(b){ b.onclick=function(){ view.listFilter=b.getAttribute('data-f'); renderList(); }; });
@@ -1137,7 +1148,7 @@ function renderCreateResult(d,topic,hosted){
 /* ---------- 视图：凭邀请码入桌 ---------- */
 function renderJoinForm(){
   var app=document.getElementById('app');
-  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="jbBackList">← 返回列表</span><span class="sp"></span><b>凭邀请码入桌</b><span class="dim">角色由邀请码定死（提案方/评审方/协作者/观察方），席位不能自封</span></div>';
+  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="jbBackList">← 返回列表</span><span class="sp"></span><b>凭邀请码入桌</b><span class="dim">角色由邀请码定死（提案方/评审方/协作者/回答方/观察方），席位不能自封</span></div>';
   h+='<div class="card frm">'
     +'<div class="frow"><label class="t" for="jbCode">邀请码 <b>*</b></label><textarea id="jbCode" placeholder="粘贴 10 位邀请码，或整段粘贴收到的「完整邀请」文本"></textarea><div class="hint">先查码确认所属圆桌，再确认入席；查询不消耗码次数</div></div>'
     +'<div class="frow"><label class="t" for="jbSeatName">席位名 <b>*</b></label><input id="jbSeatName"'+(view.userName?' value="'+escAttr(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
