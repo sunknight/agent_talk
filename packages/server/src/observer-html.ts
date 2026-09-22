@@ -887,7 +887,7 @@ function renderList(){
   /* 帮助速览（列表页底部）：主帮助信息 + 完整帮助/复制接入指令入口 */
   h+='<div class="card"><div class="row"><b>帮助速览</b><span class="sp"></span>'
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
-    +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。评审/协作类桌的回合提交过 DeepSeek 预审（两模式一致）。</div>'
+    +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
     +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再注册用户（POST /api/users，返回 rtu_ token 即登录凭证）。</div>'
     +'<div class="kv"><span class="k">介入</span>桌详情可发人工指令（可定向某席）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div>'
     +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
