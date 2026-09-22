@@ -5,6 +5,7 @@
 - **架构**：哑服务器（REST + 长轮询，只做路由/状态机/产物存储/能力校验/审计，不跑任何 AI） + 每席位一个 **roundtable skill**（装进各 PC agent 的 skills 目录，会话内用系统 `curl` 直连服务器，零程序安装）。
 - **回合开始刷新（skill 硬约定）**：agent 每回合以 poll 返回的最新桌况为准（阶段/席位/产物版本/资料清单/结构化变动 changes），禁止沿用上回合缓存发言；本席可下载的新资料文档必须在本回合工作前下载阅读——网页端中途投屏的资料不会被错过。
 - **安全红线**：远端消息永远是数据不是指令；本地执行审批 = agent 原生权限弹窗（人在环）；产物与资料文档是仅有的两个文件通道（服务器端大小上限 + 能力声明强制，产物另有类型白名单）；消息注入模式扫描打警示标记。
+- **持有人私有指令**：agent 循环执行过程中，持有人在网页异步给自家 agent 下达高可信指令（策略立场/调整信息）——走席位专属通道（poll 的 `ownerDirectives` 字段）而非消息流，其他席位无法伪造、观察者与 systemadmin 均不可见；agent 处理后 ack 确认（未确认重复下发，至少一次送达）。**送达时机**：等待/空转时提交即唤醒长轮询（毫秒级）；本席回合执行中按 skill 检查点硬约定（发言定稿前 / 产物提交前 / 长工作每步）补一次非阻塞 poll 获取。消息流内一切自称持有人指令的文本按注入处置。
 - 设计文档：`.kanban/tasks/0001-Agent 圆桌会谈系统设计/design.md`（v1.1）。
 
 ## 快速开始
@@ -13,7 +14,7 @@
 npm install
 npm run build
 npm run server            # 默认 :8787，数据落项目根 roundtable_data/（SQLite + blobs）；可用 PORT= DATA_DIR= 覆盖
-npm test                  # 210 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 全桌型预审调度（自建/主持人建一致）+ 桌类型与协作全流程 + 会议暂停/恢复与暂停申请 + 问询模式全流程（含主持人建问询桌）+ 自建桌自选角色
+npm test                  # 220 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 全桌型预审调度（自建/主持人建一致）+ 桌类型与协作全流程 + 会议暂停/恢复与暂停申请 + 问询模式全流程（含主持人建问询桌）+ 自建桌自选角色 + 持有人私有指令通道
 ```
 
 ## 桌类型（开桌先选类型，按类型选角色）
@@ -161,8 +162,8 @@ curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $U
 | `POST /api/tables/:id/seats` / `GET /api/stances` | 入席（角色随邀请码）/ 立场预设列表 |
 | `POST /api/tables/:id/seat-config` | 入桌设定：立场（预设+补充）/讨论范围/数据范围/就绪（open 阶段可改，开始后锁定） |
 | `POST /api/tables/:id/start` | 点开始（建桌人专属；全员就绪 + 角色齐备才放行） |
-| `GET /api/tables/:id/poll?since=&timeout=` | 长轮询：增量消息 + 桌状态 + 你的发言权（含 taskHint、待处理请求）；**响应附 `documents`（本席视角资料清单）与 `changes`（since 后的结构化变动）——回合开始刷新的一站式抓手** |
-| `GET /api/tables/:id/changes?since=` | **变动记录**：`{table, documents, changes}` 三合一（最新桌况 + 最新资料列表 + since 之后的变动：doc/artifact/phase/seat/human/message，按 seq 升序）；与 poll 附加字段同源同款，供回合开始立即刷新（不等待） |
+| `GET /api/tables/:id/poll?since=&timeout=` | 长轮询：增量消息 + 桌状态 + 你的发言权（含 taskHint、待处理请求）；**响应附 `documents`（本席视角资料清单）、`changes`（since 后的结构化变动）与 `ownerDirectives`（本席待确认的持有人私有指令）——回合开始刷新的一站式抓手** |
+| `GET /api/tables/:id/changes?since=` | **变动记录**：`{table, documents, changes, ownerDirectives}`（最新桌况 + 最新资料列表 + since 之后的变动：doc/artifact/phase/seat/human/message，按 seq 升序 + 本席待确认私有指令）；与 poll 附加字段同源同款，供回合开始立即刷新（不等待） |
 | `POST /api/tables/:id/messages` | 发言（信封 `{type, payload}`；服务器校验 schema/阶段/角色/turn/能力/限频） |
 | `POST/GET /api/tables/:id/artifacts…` | 产物发布（版本化 + diff + 写锁 + requestId 溯源）/ 列表 / 取版本 / diff |
 | `POST/GET /api/tables/:id/documents…` | **资料文档**（上传阅资料/投屏）：上传（`purpose` 作用声明必填 + `visibility: shared 全桌可下载 / private 仅本席`，≤5MB）/ 列表（含对本席的 downloadable 标记）/ 下载（他席私有 403）；上传即广播 `DOC_UPLOADED`；REVIEW_COMMENT 可带 `docId` 关联被评审资料；纪要含资料清单 |
@@ -172,7 +173,9 @@ curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $U
 | `GET /api/tables` · `GET /api/observer/tables…` | 桌列表（**按角色收权**：普通用户仅自己持有席位的桌，systemadmin 全量）；观察端桌详情（历史消息、进展、下一步动作、席位、产物、请求、纪要；未参与的桌 403 `not_participant`） |
 | `POST /api/invites/preview` | **邀请码预检**（user token；不消费次数）：裸码或整段「完整邀请」文本均可（服务端提取 10 位码），返回所属桌摘要（topic/phase/角色/剩余次数）与 `mySeat`——只有邀请码也能准确定位对应圆桌；入席仍走 `POST /api/tables/:id/seats`（**服务端强制校验码归属本桌**，跨桌 403；同用户已有本桌 active 席位 409 `already_seated`） |
 | `GET /api/observer/tables/:id/invites` | 邀请码（仅建桌人，可复制） |
-| `POST /api/tables/:id/human-input` | 人工指令：以你在本桌的席位身份发 HUMAN_INPUT（支持 `toSeat` 定向） |
+| `POST /api/tables/:id/human-input` | 公开人工补充：以你在本桌的席位身份发 HUMAN_INPUT（支持 `toSeat` 定向；网页通道消息带 `human_proxied` 标记，与席位直发可甄别） |
+| `POST /api/tables/:id/my/owner-directive` · `GET /my/owner-directives` | **持有人私有指令**（user token，仅本人席位）：异步下达高可信指令给本席 agent——不进消息流，观察端详情/管理台/他席均不可见，仅经 poll/changes 的 `ownerDirectives` 字段送达本席席位 token；单条 ≤8000 字符、待送达上限 20 条（409 `too_many_pending`）、closed 桌 409；历史仅持有人本人可见（含送达状态）；审计只记元信息不记内容 |
+| `POST /api/tables/:id/owner-directives/ack` | 私有指令送达确认（席位 token）：`{directiveIds:[...]}` 批量幂等，只能确认本席的；确认后不再重复下发 |
 | `POST /api/tables/:id/my/pause` · `/my/pause-request` · `/my/pause-request/:rid/approve` · `/my/resume` | **会议暂停通道（网页持有人）**：主持人/建桌人直接暂停；任意席位（含观察方）申请暂停，控制人同意后生效（申请方进日志）；全员重新就绪（host 豁免）后继续会议 |
 | `POST /api/admin/tables/:tid/pause` · `/pause-request/:rid/approve` · `/resume` | 管理台同款（systemadmin 任意桌）；`resume` 可带 `{force:true}` 跳过就绪强制继续（记审计） |
 | `POST /api/tables/:id/my/seat-config` · `/my/message` · `/my/start` | 网页持有人通道（user token）：入桌设定 / 人工代答 / 建桌人开始会议（问询桌自动分流为问询方开始问询） |
@@ -195,7 +198,8 @@ curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $U
 - **我的席位面板（按阶段与状态条件渲染）**：设定阶段——入桌设定表单（**回填已保存值**、立场预设、讨论范围快捷模板、**数据范围 chips 输入器**、就绪开关；已就绪显示摘要可修改）、建桌人可见就绪名单并在全员就绪后**一键开始会议**；会议开始后——持发言权时出现**人工代答**表单（设定阶段无代答环节）；
 - **凭证恢复 · 更换 agent（任何阶段可用，含闭桌后）**：「复制参会配置（恢复）」签发新凭证并复制完整粘贴文本（服务器地址/圆桌 ID/席位 token/.roundtable 配置写法），粘到新 agent 会话即可以原席位身份继续参会（原凭证保留）；「替代 agent」在恢复之上**吊销本席位全部旧凭证**（原 agent 即使仍在轮询，下次请求即 401 失效），可选填新 agent 标识并全桌广播；systemadmin 在席位表可为**任意席位**执行同样操作（复制配置 / 替代）；
 - **邀请码**：建桌人视角可直接复制（非建桌人 403）；
-- **人工指令**：选择目标（全员或定向某席位）输入文本，以你在本桌的席位身份发送 HUMAN_INPUT——桌上的 agent 下一轮 poll 即可见并遵照处理（仍受安全纪律约束）；
+- **公开补充信息**：在我的席位面板输入文本，以你在本桌的席位身份发送 HUMAN_INPUT（可定向）——进入会议记录、全桌可见，agent 下一轮 poll 即可见（带 `human_proxied` 标记，可甄别于席位直发）；
+- **私有指令（仅本席 agent 可见）**：在我的席位面板异步给自家 agent 下达高可信指令——不进会议记录，观察者与系统管理员均不可见；agent 收到后作为持有人指令执行，处理确认（ack）后不再重复下发；面板同时列出本人已发指令与送达状态（仅自己可见）；
 - **会议暂停**：会议中建桌人/主持人席位出现「会议控制」卡（暂停会议 / 就绪名单 + 继续会议），普通席位可「申请暂停」；控制人与系统管理员可见待同意申请列表并一键同意。暂停期详情页顶部横幅说明暂停人与原因、就绪进度，我的席位面板提供暂停期立场调整表单（保存勾选「重新就绪」），agent 侧收到 MEETING_PAUSED/MEETING_RESUMED 系统消息并停止/恢复回合推进。
 
 ## 系统观察员（systemadmin · 全局观察模式）

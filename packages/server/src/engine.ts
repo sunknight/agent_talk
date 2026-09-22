@@ -13,13 +13,13 @@ import {
   type ArtifactPublishedPayload, type ArtifactVersion, type AuditEvent, type AuditRecord,
   type ConsensusResultPayload, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
   type HumanInputPayload, type HumanRulingPayload, type MeetingPausedPayload, type MeetingResumedPayload,
-  type MsgType, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type Phase, type PhaseChangePayload,
+  type MsgType, type OwnerDirectiveView, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type Phase, type PhaseChangePayload,
   type PrecheckState, type QuestionPayload, type ReplyPayload, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
   type ReviewCommentPayload, type Role, type SeatDocumentMeta, type SeatInfo, type SupplementPayload,
   type TableChange, type TableChangesPayload, type TableDocumentMeta, type TableType, type TableTypeDef,
   type TableInfoPayload, type TurnGrantPayload,
 } from "@rt/shared";
-import type { DirectiveRecord, PauseRequestRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import type { DirectiveRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 import { Store } from "./store";
 import { unifiedDiff } from "./diff";
 import { deepseekPrecheck, type PrecheckFn, type PrecheckInput, type PrecheckOutcome } from "./precheck";
@@ -65,6 +65,9 @@ const DIRECTIVE_CHAIN_MAX = 3;
 const PAUSABLE_PHASES: Phase[] = ["qa", "statements", "review", "response", "execution", "convergence"];
 /** 问询桌问询方虚拟席位 ID：建桌人不占席位，ownerSeat 与提问消息 fromSeat 用它标识（UI 显示「问询方」） */
 const ASKER_SEAT = "asker";
+/** 持有人私有指令：单条 ≤8000 字符（与 HUMAN_INPUT 一致）；未 ack 挂起上限（防堆积撑爆 poll 响应） */
+const OWNER_DIRECTIVE_MAX = 8_000;
+const OWNER_DIRECTIVE_PENDING_MAX = 20;
 
 /** 字段长度/范围校验：超限即 422（防巨字段撑库、撑大 poll/changes 全量响应） */
 function checkField(value: string, field: string, max: number, min = 1): string {
@@ -89,6 +92,8 @@ export interface PollResult {
   myTask: string | null;
   /** 最新资料文档列表（本席视角，含 downloadable）——回合开始刷新用 */
   documents: SeatDocumentMeta[];
+  /** 本席待处理（未 ack）的持有人私有指令——高可信，处理完须 ack；与消息流物理隔离，他席不可见 */
+  ownerDirectives: OwnerDirectiveView[];
   /** since 之后的结构化变动（messages 的同源投影，按 seq 升序） */
   changes: TableChange[];
   now: number;
@@ -596,12 +601,13 @@ export class Hub {
     const deadline = Date.now() + safeWait;
     for (;;) {
       const messages = this.store.getMessagesSince(tableId, since);
+      const ownerDirectives = this.pendingOwnerDirectives(tableId, seat.seatId);
       const table = this.tableInfo(tableId);
       const yourTurn = table.activeTurn && table.activeTurn.seatId === seat.seatId ? table.activeTurn : null;
       const myTask = this.myTaskOf(table, seat, yourTurn);
-      if (messages.length > 0 || Date.now() >= deadline) {
+      if (messages.length > 0 || ownerDirectives.length > 0 || Date.now() >= deadline) {
         return {
-          table, messages, yourTurn, myTask, now: Date.now(),
+          table, messages, ownerDirectives, yourTurn, myTask, now: Date.now(),
           documents: this.listDocuments(tableId, seat.seatId) as SeatDocumentMeta[],
           changes: messages.map((m) => this.toChange(m)),
         };
@@ -622,6 +628,7 @@ export class Hub {
       table: this.tableInfo(tableId),
       documents: this.listDocuments(tableId, seat.seatId) as SeatDocumentMeta[],
       changes: this.changesOf(tableId, since),
+      ownerDirectives: this.pendingOwnerDirectives(tableId, seat.seatId),
       now: Date.now(),
     };
   }
@@ -2075,7 +2082,8 @@ export class Hub {
     return { invites: this.store.invitesOfTable(tableId).map((i) => ({ code: i.code, role: i.role, usesLeft: i.usesLeft, expiresAt: i.expiresAt })) };
   }
 
-  /** 观察端人工指令：user token → 其在本桌的席位身份发 HUMAN_INPUT（支持定向标注） */
+  /** 观察端人工指令：user token → 其在本桌的席位身份发 HUMAN_INPUT（支持定向标注）。
+   *  带 human_proxied 标记：与席位直发的 HUMAN_INPUT 区分来源（后者可能是他席 agent 冒充）。 */
   async humanInputByUser(userToken: string, tableId: string, p: { text: string; toSeat?: string; byHuman: string }) {
     const user = this.requireUser(userToken);
     const seatId = this.store.seatOfUser(tableId, user.userId);
@@ -2085,7 +2093,63 @@ export class Hub {
     if (p.toSeat && !this.store.getSeat(tableId, p.toSeat)) throw new ApiError(404, "no_seat", "目标席位不存在");
     return this.postMessage(tableId, seat, "HUMAN_INPUT", {
       text: p.text.trim(), byHuman: p.byHuman?.trim() || user.name, toSeat: p.toSeat,
-    });
+    }, ["human_proxied"]);
+  }
+
+  // ================= 持有人私有指令（网页持有人 → 本席 agent 的高可信私密通道） =================
+
+  /** 提交私有指令：user token + 本桌席位 → 仅本席 agent 经 poll 拉取。
+   *  与消息流物理隔离：不进 messages 表，观察端详情/管理台/他席均读不到内容。 */
+  ownerDirectiveByUser(userToken: string, tableId: string, p: { text: string }): { directiveId: string } {
+    const user = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    const seatId = this.store.seatOfUser(tableId, user.userId);
+    if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位，私有指令只能发给本席 agent（先入席）");
+    const seat = this.requireSeat(tableId, seatId) as ServerSeat;
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "圆桌已结束，不再接受私有指令");
+    const text = checkField(p.text ?? "", "text", OWNER_DIRECTIVE_MAX);
+    if (this.pendingOwnerDirectives(tableId, seatId).length >= OWNER_DIRECTIVE_PENDING_MAX) {
+      throw new ApiError(409, "too_many_pending", `待送达私有指令已达上限（${OWNER_DIRECTIVE_PENDING_MAX} 条）：等本席 agent 处理确认后再发`);
+    }
+    this.checkRate(tableId, seat);
+    const rec: OwnerDirectiveRecord = {
+      directiveId: newId("od"), tableId, seatId,
+      text, byName: user.name, createdAt: Date.now(),
+    };
+    this.store.addOwnerDirective(rec);
+    // 审计只记元信息（字节数），内容绝不落审计——审计对观察端/管理台可见
+    this.audit(tableId, seatId, "owner_directive", { bytes: text.length });
+    return { directiveId: rec.directiveId };
+  }
+
+  /** 持有人查看自己席位的私有指令历史（含送达状态；仅本人视角） */
+  ownerDirectivesByUser(userToken: string, tableId: string) {
+    const user = this.requireUser(userToken);
+    this.requireTable(tableId);
+    const seatId = this.store.seatOfUser(tableId, user.userId);
+    if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位");
+    return { directives: this.store.ownerDirectivesOf(tableId, seatId) };
+  }
+
+  /** agent 确认私有指令已处理（席位 token 通道）：ack 后不再重复下发；他席指令静默忽略（幂等） */
+  ackOwnerDirectives(tableId: string, seat: ServerSeat, directiveIds: unknown): { acked: number } {
+    this.requireTable(tableId);
+    this.touchSeat(seat, tableId);
+    if (!Array.isArray(directiveIds) || directiveIds.length === 0) {
+      throw new ApiError(422, "bad_payload", "directiveIds 必填（待确认指令的 ID 数组）");
+    }
+    if (directiveIds.length > 50) throw new ApiError(422, "bad_payload", "单次最多确认 50 条");
+    const ids = [...new Set(directiveIds.map((x) => String(x)).filter(Boolean))];
+    const acked = this.store.ackOwnerDirectives(tableId, seat.seatId, ids, Date.now());
+    if (acked > 0) this.audit(tableId, seat.seatId, "owner_directive_ack", { count: acked });
+    return { acked };
+  }
+
+  /** 本席待送达的持有人私有指令（poll/changes 下发投影，不含内部字段） */
+  private pendingOwnerDirectives(tableId: string, seatId: string): OwnerDirectiveView[] {
+    return this.store.ownerDirectivesOf(tableId, seatId)
+      .filter((d) => !d.deliveredAt)
+      .map(({ directiveId, text, byName, createdAt }) => ({ directiveId, text, byName, createdAt }));
   }
 
   /** 网页持有人（user token）完成入桌设定：与 agent 通道同一入口（open 阶段可反复修改） */

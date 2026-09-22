@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { sha256, tableTypeOf, type AuditRecord, type Envelope, type PauseInfo, type SeatInfo, type TableSummary } from "@rt/shared";
-import type { ArtifactRecord, DirectiveRecord, PauseRequestRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import type { ArtifactRecord, DirectiveRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 
 const SCHEMA_VERSION = 1;
 
@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS directives (
 CREATE TABLE IF NOT EXISTS pause_requests (
   table_id TEXT NOT NULL, request_id TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (table_id, request_id));
+CREATE TABLE IF NOT EXISTS owner_directives (
+  table_id TEXT NOT NULL, directive_id TEXT NOT NULL, seat_id TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (table_id, directive_id));
 `;
 
 /** node:sqlite 行类型（.get/.all 返回的原样记录） */
@@ -170,6 +173,10 @@ export class Store extends EventEmitter {
 
       pauseReqUpsert: this.db.prepare("INSERT OR REPLACE INTO pause_requests (table_id, request_id, data) VALUES (?, ?, ?)"),
       pauseReqsOfTable: this.db.prepare("SELECT * FROM pause_requests WHERE table_id = ? ORDER BY rowid"),
+
+      ownerDirInsert: this.db.prepare("INSERT OR REPLACE INTO owner_directives (table_id, directive_id, seat_id, data) VALUES (?, ?, ?, ?)"),
+      ownerDirsOfSeat: this.db.prepare("SELECT * FROM owner_directives WHERE table_id = ? AND seat_id = ? ORDER BY rowid"),
+      ownerDirGet: this.db.prepare("SELECT * FROM owner_directives WHERE table_id = ? AND directive_id = ?"),
 
       counts: this.db.prepare("SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM tables) + (SELECT COUNT(*) FROM messages) + (SELECT COUNT(*) FROM documents) AS n"),
     };
@@ -485,6 +492,29 @@ export class Store extends EventEmitter {
   }
   getPauseRequests(tableId: string): PauseRequestRecord[] {
     return (this.st.pauseReqsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as PauseRequestRecord);
+  }
+
+  // ---------- owner_directives（持有人私有指令：不进消息流，仅本席席位 token 可读） ----------
+  /** 新增即发 "message" 事件：唤醒该桌长轮询（poll 把待送达指令当返回条件之一） */
+  addOwnerDirective(rec: OwnerDirectiveRecord) {
+    this.st.ownerDirInsert.run(rec.tableId, rec.directiveId, rec.seatId, J(rec));
+    this.emit("message", rec.tableId, null);
+  }
+  ownerDirectivesOf(tableId: string, seatId: string): OwnerDirectiveRecord[] {
+    return (this.st.ownerDirsOfSeat.all(tableId, seatId) as Row[]).map((r) => JSON.parse(String(r.data)) as OwnerDirectiveRecord);
+  }
+  /** agent ack：只标记属于本席的指令（未知/他席 id 静默忽略，幂等），返回实际确认条数 */
+  ackOwnerDirectives(tableId: string, seatId: string, directiveIds: string[], at: number): number {
+    let n = 0;
+    for (const id of directiveIds) {
+      const r = this.st.ownerDirGet.get(tableId, id) as Row | undefined;
+      if (!r || String(r.seat_id) !== seatId) continue;
+      const rec = JSON.parse(String(r.data)) as OwnerDirectiveRecord;
+      if (rec.deliveredAt) continue;
+      this.st.ownerDirInsert.run(tableId, id, seatId, J({ ...rec, deliveredAt: at }));
+      n++;
+    }
+    return n;
   }
 
   // ---------- messages ----------

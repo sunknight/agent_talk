@@ -546,11 +546,22 @@ export type TableChange =
   | { kind: "pause"; ts: number; msgId: string; fromSeat: string; what: "pause" | "resume" | "request"; bySeat: string; byName: string; byRole: string; reason: string; requestId?: string }
   | { kind: "message"; ts: number; msgId: string; fromSeat: string; type: MsgType };
 
+/** 持有人私有指令（poll/changes 附带）：网页持有人 → 本席 agent 的高可信离线指令。
+ *  不进消息流、观察端/管理台不可见；仅本席席位 token 可拉取，处理完须 ack。 */
+export interface OwnerDirectiveView {
+  directiveId: string;
+  text: string;
+  byName: string;
+  createdAt: number;
+}
+
 /** GET /api/tables/:id/changes 返回形状：最新桌况 + 最新资料列表（本席视角）+ since 之后的变动（按 seq 升序） */
 export interface TableChangesPayload {
   table: TableInfoPayload;
   documents: SeatDocumentMeta[];
   changes: TableChange[];
+  /** 本席待处理（未 ack）的持有人私有指令，createdAt 升序 */
+  ownerDirectives: OwnerDirectiveView[];
   now: number;
 }
 
@@ -621,6 +632,8 @@ export type AuditEvent =
   | "vote_cast" | "consensus_result" | "escalate" | "human_input" | "human_ruling"
   | "table_close" | "policy_reject" | "server_error"
   | "asker_question" | "asker_join"
+  /** 持有人私有指令提交：detail 只记元信息（bytes），绝不记内容（观察端/管理台可见审计但内容仅本席可见） */
+  | "owner_directive" | "owner_directive_ack"
   /** 主持人模式（hosted）：预审与点名补充 */
   | "precheck_result" | "directive_open" | "supplement_done" | "table_update"
   /** 会议暂停/恢复（叠加态）与暂停申请：pause_request/table_pause(via=request) 的 detail 均记录申请方 */

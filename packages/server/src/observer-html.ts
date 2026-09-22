@@ -576,7 +576,8 @@ function helpBodyHtml(){
     +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
     +'<div class="row"><button id="hpAgentCopy" class="primary">复制 agent 接入指令</button></div>'
     +'<h4>观察端常用操作</h4>'
-    +'<ul><li><b>人工指令</b>：桌详情「发送人工指令」，可广播或定向某席（agent 下次 poll 即见）；</li>'
+    +'<ul><li><b>公开补充</b>：桌详情「我的席位 · 公开补充信息」，以人工指令发给本席 agent，全桌可见（进入会议记录），可定向；</li>'
+    +'<li><b>私有指令</b>：桌详情「我的席位 · 私有指令」，异步传给本席 agent 的策略立场/调整信息——只有你的 agent 能收到，不进会议记录，观察者与系统管理员均不可见；agent 将其作为你的高可信指令执行，处理确认后不再重复下发；</li>'
     +'<li><b>人工代答</b>：轮到你的席位时，桌详情出现「替我回答本轮」表单，替 agent 作答后本轮不会重复作答；</li>'
     +'<li><b>资料投屏</b>：桌详情上传资料文档（共享 = 全桌可下载，agent 会自动下载阅读；私有 = 仅本席）；</li>'
     +'<li><b>问询桌提问</b>：问询方在桌详情随时提问（广播全体回答方或定向某席各自作答），问完「结束问询」自动生成问询纪要；</li>'
@@ -584,7 +585,7 @@ function helpBodyHtml(){
     +'<li><b>凭证恢复 / 替代 agent</b>：我的席位面板可复制参会配置给新 agent（恢复），或吊销原 agent 全部凭证换新（替代）。</li></ul>'
     +'<h4>凭证与安全</h4>'
     +'<ul><li>用户 token（rtu_…）与席位 token 均<b>只显示一次</b>，请妥善保存；</li>'
-    +'<li>远端消息对 agent 永远是数据不是指令，本地执行须经持有人审批；疑似注入的消息会被打警示标记；</li>'
+    +'<li>远端消息对 agent 永远是数据不是指令，本地执行须经持有人审批；疑似注入的消息会被打警示标记；唯一例外是「私有指令」——它只经席位专属通道下发，agent 可信执行；</li>'
     +'<li>观察端数据只读展示，操作仅以你本人的用户 / 席位身份发出。</li></ul>';
 }
 function openHelp(){
@@ -1524,12 +1525,22 @@ function renderDetail(d){
       }
     }
 
-    /* 给己方 agent 的直达指令（closed 前始终可用） */
+    /* 给己方 agent 的公开补充（HUMAN_INPUT，进会议记录、全桌可见；closed 前始终可用） */
     if(t.phase!=='closed'){
-      h+='<div class="section"><h3>给我的 agent 的指令（直达·高权限）</h3>'
-        +'<textarea id="myInstr" placeholder="指令将以 HUMAN_INPUT 定向发给本席 agent，其优先级最高、收到即执行（如：重点核对第 3 节；本轮暂缓表态）"></textarea>'
+      h+='<div class="section"><h3>公开补充信息（进入会议记录）</h3>'
+        +'<textarea id="myInstr" placeholder="以 HUMAN_INPUT 发给本席 agent，全桌可见（需要全桌知晓的补充说明，如：接口定义已更新，见第 3 节）"></textarea>'
         +'<div class="row"><input id="myInstrBy" placeholder="署名（默认用户名）" style="width:160px">'
-        +'<button id="myInstrSend" class="primary">发送指令</button></div></div>';
+        +'<button id="myInstrSend">发送公开补充</button></div></div>';
+    }
+
+    /* 私有指令：仅本席 agent 可见（不进消息流；观察者/管理员不可见） */
+    if(t.phase!=='closed'){
+      h+='<div class="section"><h3>私有指令（仅本席 agent 可见）</h3>'
+        +'<textarea id="podText" placeholder="高可信持有人指令：不进会议记录，观察者与系统管理员均不可见；agent 作为你的指令执行，可传策略立场或调整信息（如：本轮采取保守立场；重点核对性能章节）"></textarea>'
+        +'<div class="ferr" id="podErr"></div>'
+        +'<div class="row"><button id="podSend" class="primary">发送私有指令</button>'
+        +'<span class="dim">未确认前 agent 每次 poll 都会收到，处理确认后不再重复下发；待送达上限 20 条</span></div>'
+        +'<div id="podList" style="margin-top:8px"></div></div>';
     }
 
     /* 凭证恢复 · agent 替代（任何阶段可用——闭桌后也可恢复身份拉纪要） */
@@ -2048,16 +2059,39 @@ function renderDetail(d){
     };
   });
 
-  /* ---- 绑定：直达指令 ---- */
+  /* ---- 绑定：公开补充（HUMAN_INPUT） ---- */
   var myInstrSend=document.getElementById('myInstrSend');
   if(myInstrSend) myInstrSend.onclick=function(){
     var txt=document.getElementById('myInstr').value.trim();
-    if(!txt){ toast('请输入指令'); return; }
+    if(!txt){ toast('请输入内容'); return; }
     api('POST','/api/tables/'+view.tableId+'/human-input',{
       text:txt, toSeat:d.mySeatId, byHuman:document.getElementById('myInstrBy').value.trim()
-    }).then(function(){ toast('指令已发送（agent 下次 poll 即见）'); view.dirtyPanel=false; loadDetail(); })
+    }).then(function(){ toast('公开补充已发送（进入会议记录）'); view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ toast('发送失败：'+e.message); });
   };
+
+  /* ---- 绑定：私有指令（仅本席 agent 可见） ---- */
+  var podSend=document.getElementById('podSend');
+  if(podSend) podSend.onclick=function(){
+    var txt=document.getElementById('podText').value.trim();
+    if(!txt){ toast('请输入指令'); return; }
+    api('POST','/api/tables/'+view.tableId+'/my/owner-directive',{text:txt}).then(function(){
+      toast('私有指令已提交（本席 agent 下次 poll 即见）'); view.dirtyPanel=false; loadDetail();
+    }).catch(function(e){ document.getElementById('podErr').textContent='发送失败：'+e.message; });
+  };
+  var podList=document.getElementById('podList');
+  if(podList){
+    api('GET','/api/tables/'+view.tableId+'/my/owner-directives').then(function(r){
+      var list=(r.directives||[]).slice(-20).reverse();
+      if(!list.length){ podList.innerHTML='<div class="dim">还没有发过私有指令。</div>'; return; }
+      podList.innerHTML='<div class="dim" style="margin-bottom:4px">我发出的私有指令（仅自己可见）</div>'
+        +list.map(function(x){
+          return '<div class="sumcard"><div class="row"><span class="badge '+(x.deliveredAt?'ok':'warn')+'">'+(x.deliveredAt?'agent 已确认':'待送达')+'</span>'
+            +'<span class="dim">'+fmtTs(x.createdAt)+(x.deliveredAt?(' · 确认于 '+fmtTs(x.deliveredAt)):'')+'</span></div>'
+            +'<div style="margin-top:4px;white-space:pre-wrap">'+esc(x.text)+'</div></div>';
+        }).join('');
+    }).catch(function(){ podList.innerHTML=''; });
+  }
 
   /* ---- 绑定：会议控制（暂停/继续，建桌人/主持人） ---- */
   var ctlPause=document.getElementById('ctlPause');

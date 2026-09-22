@@ -144,9 +144,17 @@ export function createHttpServer(hub: Hub) {
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "my" && seg[4] === "documents" && method === "GET" && seg[5] && !seg[6]) {
         return ok(res, hub.getDocumentByUser(bearer(req), seg[2], seg[5]));
       }
+      // 持有人私有指令历史（仅本席视角，含送达状态；观察端详情/管理台无对应端点）
+      if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "my" && seg[4] === "owner-directives" && method === "GET" && !seg[5]) {
+        return ok(res, hub.ownerDirectivesByUser(bearer(req), seg[2]));
+      }
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "my" && method === "POST") {
         const tableId = seg[2];
         const body = await readJson(req);
+        // 提交私有指令（高可信·仅本席 agent 可见）
+        if (seg[4] === "owner-directive" && !seg[5]) {
+          return ok(res, hub.ownerDirectiveByUser(bearer(req), tableId, { text: String(body.text ?? "") }));
+        }
         if (seg[4] === "seat-config" && !seg[5]) {
           return ok(res, { seat: hub.seatConfigByUser(bearer(req), tableId, {
             stancePreset: body.stancePreset ? String(body.stancePreset) : undefined,
@@ -406,6 +414,11 @@ export function createHttpServer(hub: Hub) {
         if (sub === "leave" && method === "POST" && !seg[4]) {
           hub.leaveTable(tableId, seatAuth);
           return ok(res, { left: true });
+        }
+        // 持有人私有指令确认（agent 处理完 poll 下发的 ownerDirectives 后调用；幂等）
+        if (sub === "owner-directives" && seg[4] === "ack" && method === "POST" && !seg[5]) {
+          const body = await readJson(req);
+          return ok(res, hub.ackOwnerDirectives(tableId, seatAuth, body.directiveIds));
         }
 
         // ---------- 产物 ----------

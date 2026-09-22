@@ -45,6 +45,20 @@ export interface PauseRequestRecord {
   approvedAt?: number;
 }
 
+/** 持有人私有指令：网页持有人（user token）→ 本席 agent 的高可信离线指令。
+ *  不进消息流（观察端/管理台读不到），仅本席席位 token 经 poll 拉取、ack 确认送达。 */
+export interface OwnerDirectiveRecord {
+  directiveId: string;
+  tableId: string;
+  /** 目标席位（恒为提交人自己的席位） */
+  seatId: string;
+  text: string;
+  byName: string;
+  createdAt: number;
+  /** agent ack 时间；缺省 = 待送达（poll 持续重复下发） */
+  deliveredAt?: number;
+}
+
 /** 预审点名补充指令：HOST_PREREVIEW redirect 落成的调度指令（同一时刻一桌至多一条 pending） */
 export interface DirectiveRecord {
   directiveId: string;
