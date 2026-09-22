@@ -350,12 +350,12 @@ describe("预审调度层", () => {
     expect(r.error?.code).toBe("server_only");
   });
 
-  it("self 模式零预审：原流程完全不触发预审层", async () => {
+  it("self 模式同样预审：回合提交过预审层，redirect 点名补充闭环（与 hosted 功能一致）", async () => {
     fake.reset();
     const owner = await reg("self-owner");
     const created = await call("POST", "/api/tables", {
       token: owner,
-      body: { topic: "self-原流程", owner: { seatName: "Alice", agentLabel: "zcode" } },
+      body: { topic: "self-预审", owner: { seatName: "Alice", agentLabel: "zcode" } },
     });
     const { tableId, ownerSeatToken } = created.data;
     const reviewerUser = await reg("self-bob");
@@ -369,12 +369,32 @@ describe("预审调度层", () => {
     await call("POST", `/api/tables/${tableId}/artifacts`, {
       token: ownerSeatToken, body: { name: "方案.md", format: "md", contentBase64: b64("# 方案"), changeNote: "v1" },
     });
+
+    // 第一次提交被 redirect：self 桌也落预审点名指令、压住推进
+    fake.next = () => ({
+      verdict: "redirect", targetSeatId: created.data.ownerSeatId,
+      issues: [{ severity: "must", comment: "陈述太简略，说明覆盖范围" }], note: "需补充",
+    });
     const st = await call("POST", `/api/tables/${tableId}/messages`, {
       token: ownerSeatToken, body: { type: "STATEMENT", payload: { text: "陈述" } },
     });
     expect(st.ok).toBe(true);
-    expect((await info(tableId, ownerSeatToken)).phase).toBe("review");
-    expect(fake.calls.length).toBe(0); // self 桌一次预审都不调
+    expect(fake.calls.length).toBe(1); // self 桌回合提交必过预审
+    let ti = await info(tableId, ownerSeatToken);
+    expect(ti.phase).toBe("statements"); // redirect 压住推进
+    expect(ti.precheck.state).toBe("directive"); // 预审态投影不再限 hosted
+    expect(ti.precheck.toSeat).toBe(created.data.ownerSeatId);
+
+    // SUPPLEMENT 补充（预审 pass）后照常推进
+    fake.next = () => ({ verdict: "pass", issues: [], note: "ok" });
+    const sup = await call("POST", `/api/tables/${tableId}/messages`, {
+      token: ownerSeatToken,
+      body: { type: "SUPPLEMENT", payload: { directiveId: ti.precheck.refId, text: "补充：覆盖 A/B 两模块" } },
+    });
+    expect(sup.ok, JSON.stringify(sup.error)).toBe(true);
+    ti = await info(tableId, ownerSeatToken);
+    expect(ti.phase).toBe("review"); // 补充通过后按原调度推进
+    expect(ti.precheck.state).toBe("idle");
   });
 
   it("持久化：mode 与指令落库，重开 Store 可读", async () => {

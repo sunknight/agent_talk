@@ -2,7 +2,7 @@
 
 // ---------- 席位与能力 ----------
 
-export type Role = "proposer" | "reviewer" | "observer" | "host" | "collaborator" | "answerer";
+export type Role = "proposer" | "reviewer" | "observer" | "host" | "collaborator" | "answerer" | "asker";
 
 /** 能力声明：双端强制（请求方网关拒发越权请求，执行方网关拒绝越权执行） */
 export interface Caps {
@@ -30,6 +30,8 @@ export const ROLE_PRESETS: Record<Role, Caps> = {
   host: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: true },
   /** 回答方（问询桌）：在声明范围内答问询方所问，可发布产物支撑回答 */
   answerer: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
+  /** 问询方（主持人建问询桌时凭码加入的角色）：不占席位，提问/开始/结束问询走网页 user token 通道，无席位能力 */
+  asker: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: false },
 };
 
 export interface SeatInfo {
@@ -618,7 +620,7 @@ export type AuditEvent =
   | "request_sent" | "request_responded"
   | "vote_cast" | "consensus_result" | "escalate" | "human_input" | "human_ruling"
   | "table_close" | "policy_reject" | "server_error"
-  | "asker_question"
+  | "asker_question" | "asker_join"
   /** 主持人模式（hosted）：预审与点名补充 */
   | "precheck_result" | "directive_open" | "supplement_done" | "table_update"
   /** 会议暂停/恢复（叠加态）与暂停申请：pause_request/table_pause(via=request) 的 detail 均记录申请方 */

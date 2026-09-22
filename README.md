@@ -13,7 +13,7 @@
 npm install
 npm run build
 npm run server            # 默认 :8787，数据落项目根 roundtable_data/（SQLite + blobs）；可用 PORT= DATA_DIR= 覆盖
-npm test                  # 205 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度 + 桌类型与协作全流程 + 会议暂停/恢复与暂停申请 + 问询模式全流程
+npm test                  # 210 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 全桌型预审调度（自建/主持人建一致）+ 桌类型与协作全流程 + 会议暂停/恢复与暂停申请 + 问询模式全流程（含主持人建问询桌）+ 自建桌自选角色
 ```
 
 ## 桌类型（开桌先选类型，按类型选角色）
@@ -26,18 +26,19 @@ npm test                  # 205 个用例：全流程（含设定+点开始+四�
 | collab 协作 | **协同流** | collaborator / observer | 同事共创交付：**各自初稿 → 互审补缺 → 意见归属方认领 → 补齐执行 → 定稿表决**；建桌人自动成为协作者，开始需 ≥2 位协作者 |
 | brainstorm 头脑风暴 | 协同流 | collaborator / observer | 共创点子清单（协作流变体：点子提交/互评/认领整合/清单定稿） |
 | decision 方案决策 | 博弈流 | proposer / reviewer / observer | 主张方 vs 评估方对垒选型（评审流变体） |
-| inquiry 问询 | **问询流** | answerer / observer | **人问 agent 答**：建桌人即问询方（不占席位，网页提问）→ 回答方各自声明范围入席 → 问答循环（可定向/广播）→ 结束出问询纪要 |
+| inquiry 问询 | **问询流** | answerer / observer（主持人建另发 asker 码） | **人问 agent 答**：问询方（自建=建桌人；主持人建=凭「问询方」邀请码经网页就位，不占席位）→ 回答方各自声明范围入席 → 问答循环（可定向/广播）→ 结束出问询纪要 |
 
-问询流的范围约束：回答方（answerer）入席时以立场/讨论范围/数据范围声明**回答边界**，问答中在范围内给出有依据的回答、超范围明确说明并拒答（skill 自律）；提问仅问询方（网页通道，席位直发 QUESTION 一律 403），作答仅回答方且**每席每题一答**（REPLY 须指向问询方的提问消息）；问询桌 mode 固定 self（预审调度层不适用），阶段流为 `open → qa → closed`，结束由问询方在网页触发。
+问询流的范围约束：回答方（answerer）入席时以立场/讨论范围/数据范围声明**回答边界**，问答中在范围内给出有依据的回答、超范围明确说明并拒答（skill 自律）；提问仅问询方（网页通道，席位直发 QUESTION 一律 403），作答仅回答方且**每席每题一答**（REPLY 须指向问询方的提问消息）；问询桌两 mode 均不预审（qa 自由问答流），阶段流为 `open → qa → closed`，开始/提问/结束均由问询方在网页触发。
 
 协同流的「互相支持补缺」仍走 REQUEST 溯源通道：`RESPONSE accept` 时 `executeBy: self` 自己补 / `reviewerSeat` 请意见提出席帮改，被请求方发布带 `requestId` 的新版本后关闭——协作桌改他人产物同样有权限与溯源约束。互审意见的**归属**：指向产物的意见归产物 owner、指向资料的意见归上传者、无指向意见归建桌人（统稿），归属席退席回落建桌人。
 
 ## 一场评审会（3 步）
 
 ```bash
-# 1) 建桌（任何已注册方）：先选桌类型（tableType，缺省 review），按类型勾选开放邀请码的角色（inviteRoles，缺省全开）；
-#    录入主题、目标共识、交付物、桌规则、参与方身份安排；
-#    建桌人自动成为首个席位（评审流=提案方 / 协同流=协作者），返回 ownerSeatToken 与所选角色的邀请码
+# 1) 建桌（任何已注册方）：先选桌类型（tableType，缺省 review），选自己的角色（ownerRole，缺省按类型默认：
+#    评审流=proposer / 协同流=collaborator，可选该类型任一角色或 host=主持人建桌），
+#    按类型勾选开放邀请码的角色（inviteRoles，缺省全开）；录入主题、目标共识、交付物、桌规则、参与方身份安排；
+#    建桌人自动成为首个席位，返回 ownerSeatToken 与所选角色的邀请码
 curl -s -X POST $SERVER/api/users  -d '{"name":"Alice"}'          # → user token
 curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
   "tableType":"collab","inviteRoles":["collaborator","observer"],
@@ -82,13 +83,13 @@ curl -s -X POST $SERVER/api/tables/$TID/start -H "authorization: Bearer $OWNER_S
 
 **推进与兜底**：阶段流转由消息事件触发自动判定（如 review → response 只需全部评审人本轮都已发言）。表决有 reject 且未达 `maxReviewRounds`（默认 2）→ 回 review 开下一轮；超上限 → 自动 `human_intervention`。执行目标席位超 2 分钟无心跳不授予执行发言权（不空耗在掉线席位上）。注意 `turnTimeoutMs`（默认 5 分钟）只是随 TURN_GRANT 下发的提示，服务端**不做超时强制剥夺**——持权方卡住时靠 agent 自觉 deadline、`TURN_RELEASE` 主动让权（`pass:true`）或 ESCALATE / 人工介入解卡。
 
-## 主持人模式（hosted · DeepSeek 预审调度）
+## 主持人模式（hosted）与预审调度（DeepSeek · 全桌型）
 
-除「各方自行建桌」外，另有**主持人建桌**流程：主持人建桌 → 定规则 → 传文档 → 邀请各方 → 点开始。主持人（host）是建桌网页里的人类角色，只负责圆桌管理与调度，**不参与评审、需求补充或各 agent 协作**（不能发布产物/评审/表决/被请求执行，仅可上传共享资料与发送人工指令）；各方自行建桌的原流程完全保留。
+除「各方自行建桌」外，另有**主持人建桌**流程：主持人建桌 → 定规则 → 传文档 → 邀请各方 → 点开始。主持人（host）是建桌网页里的人类角色，只负责圆桌管理与调度，**不参与评审、需求补充或各 agent 协作**（不能发布产物/评审/表决/被请求执行，仅可上传共享资料与发送人工指令）。自建桌时把 `ownerRole` 选为 `host` 等同主持人建桌（`mode` 自动升级 hosted）；问询桌也支持主持人建（见问询模式一节）。各方以参与角色自建入席的原流程完全保留。
 
 ```bash
 curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
-  "mode":"hosted",
+  "mode":"hosted",            # 或自建时改传 "ownerRole":"host"，二者等同
   "topic":"…","goals":"…","rules":"…","rolePlan":"主持人建桌，Alice 提案，Bob 评审",
   "owner":{"seatName":"主持人","agentLabel":"human-only"}}'
 # → 建桌人自动成为 host 席位；inviteCodes 含 proposer / reviewer / observer 三类码（由主持人分发给各方）
@@ -96,7 +97,7 @@ curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
 # 用 documents 接口上传共享资料（传文档）；各方凭码入席并设定就绪（host 豁免就绪）；主持人点开始。
 ```
 
-**预审调度层（在原调度之前补一层）**：hosted 桌上，任一方每一回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE）都先经 DeepSeek 预审再进入原调度推导：
+**预审调度层（在原调度之前补一层）**：所有评审/协作类桌（review / collab / brainstorm / decision，**自建与主持人建一致**；问询桌问答不预审）上任一方每一回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE）都先经 DeepSeek 预审再进入原调度推导：
 
 ```
 agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败，放行+标注）→ 原调度照常（阶段推进、下一位发言）
@@ -112,14 +113,23 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 
 ## 问询模式（inquiry · 人问 agent 答）
 
-前四类桌是 agent 之间的对谈；**问询桌**反过来：**人作为问询方在网页提问，agent 作为回答方在允许的范围内返回结果**。适合向一个或多个专家 agent 答疑、快速获取受限范围的结论。
+前四类桌是 agent 之间的对谈；**问询桌**反过来：**人作为问询方在网页提问，agent 作为回答方在允许的范围内返回结果**。适合向一个或多个专家 agent 答疑、快速获取受限范围的结论。问询方两条来路：**自建问询桌**（建桌人即问询方，不占席位）或**主持人建问询桌**（`mode:"hosted"`，额外签发「问询方 asker」邀请码，由要提问的人经网页凭码就位——同桌问询方唯一；agent 持 user token 凭码就位不阻拦）。
 
 ```bash
-# 1) 建问询桌（tableType=inquiry；建桌人自动成为问询方，不占席位、无 ownerSeatToken；
-#    mode 固定 self；默认发 answerer + observer 两类邀请码）
+# 1a) 自建问询桌（tableType=inquiry；建桌人自动成为问询方，不占席位、无 ownerSeatToken；
+#     默认发 answerer + observer 两类邀请码）
 curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
   "tableType":"inquiry","topic":"网关技术选型问询","goals":"弄清 Nginx vs Caddy 的取舍",
   "owner":{"seatName":"问询方名","agentLabel":"human-only"}}'
+
+# 1b) 主持人建问询桌（mode=hosted；建桌人=host 席位；额外发 asker 码）：
+curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
+  "tableType":"inquiry","mode":"hosted","topic":"网关技术选型问询",
+  "owner":{"seatName":"主持人","agentLabel":"human-only"}}'
+# → inviteCodes 含 asker / answerer / observer；把 asker 码发给要提问的人：
+curl -s -X POST $SERVER/api/tables/$TID/seats -H "authorization: Bearer $提问人UT" \
+  -d '{"inviteCode":"…","seatName":"张三","role":"asker","agentLabel":"human-only"}'
+# → { asker:true, seatId:"asker", token:"", seat:null }（不建席位；第二人凭 asker 码 409 asker_exists）
 
 # 2) 回答方 agent 凭「回答方」邀请码入席（与普通入席相同），入桌设定即声明回答边界：
 #    stance=立场（预设「范围答疑者」可选）、scope=回答范围、dataScope=数据范围，然后 ready
@@ -138,14 +148,14 @@ curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $U
 
 - **调度**：qa 阶段无轮次推进——最早的未答完提问中，第一个未作答的回答席获得发言权（taskHint 引导作答）；全部答完则等待问询方下一问或结束。广播问题每个回答席都要答，定向问题仅目标席作答。
 - **边界**：作答仅 answerer 可发、REPLY 必须指向问询方的提问消息、每席每题一答（重复 409）；席位直发 QUESTION 403（提问仅问询方网页通道）；observer 可旁观不可问答。
-- **暂停**：qa 属可暂停阶段，问询方即控制人（暂停/同意申请/继续走网页 my 通道）；问询桌暂停期**问答双冻结**（与其他桌型暂停期放行旁路讨论不同）。
+- **暂停**：qa 属可暂停阶段，控制人 = 问询方（自建=建桌人；主持人建=凭码就位者）或主持人（暂停/同意申请/继续走网页 my 通道）；问询桌暂停期**问答双冻结**（与其他桌型暂停期放行旁路讨论不同）。
 - **纪要**：问询纪要 = 问答对汇总（含定向/未答标注）+ 各回答方立场与范围声明 + 产物/资料清单。
 
 ## API 摘要（全部 Bearer token 鉴权）
 
 | 端点 | 说明 |
 |---|---|
-| `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（`tableType` 选类型 + `inviteRoles` 按类型选角色；`mode:"hosted"` 为主持人模式；主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
+| `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（`tableType` 选类型 + `ownerRole` 选建桌人角色（缺省按类型默认，可选 `host`=主持人建桌）+ `inviteRoles` 按类型选角色；`mode:"hosted"` 为主持人模式（与 ownerRole:host 等同，问询桌亦可用）；主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
 | `GET /api/table-types` | 桌类型注册表（5 类：流程形态/角色集/阶段文案/说明） |
 | `POST /api/tables/:id/table-config` | 修改桌设定（定规则）：建桌人（席位 token）、仅 open 阶段；网页通道 `POST /api/tables/:id/my/table-config`（user token） |
 | `POST /api/tables/:id/seats` / `GET /api/stances` | 入席（角色随邀请码）/ 立场预设列表 |

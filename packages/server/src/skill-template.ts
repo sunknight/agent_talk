@@ -35,25 +35,26 @@ description: Agent 圆桌会谈。当用户说"建桌 / 进桌 / 加入圆桌 / 
 触发：要参与圆桌但 .roundtable/ 目录不存在、或目录里没有配置文件、或所选文件缺 tableId/seatToken。每一小步先问持有人、得到答复再进下一步，禁止替持有人默认决定。
 
 第 1 步 · 建桌还是进桌？向持有人说明两条路径再问选哪条：
-- A. 建桌：我是发起人，将自动成为首个席位（评审/决策类桌为提案方 proposer；协作/头脑风暴类桌为协作者 collaborator），负责后续推进。例外——问询桌（inquiry）：建桌人自动为**问询方**（人，不占席位、由持有人在网页提问），本 agent 建完问询桌后自己**不入席**，把邀请码交持有人转发给各回答方 agent
+- A. 建桌：我是发起人，将成为首个席位——**先问持有人选自己的角色**（ownerRole）：评审/决策类桌可选 proposer（缺省）/ reviewer / observer；协作/头脑风暴类桌可选 collaborator（缺省）/ observer；也可选 host=主持人建桌（只管规则/资料/邀请与调度，不参与评审协作）。例外——问询桌（inquiry）：建桌人自动为**问询方**（人，不占席位、由持有人在网页提问），本 agent 建完问询桌后自己**不入席**，把邀请码交持有人转发给各回答方 agent（持有人想当主持人替别人建问询桌时，见第 2 步说明）
 - B. 进桌：我收到邀请码，加入别人的桌（角色由邀请码定死）
 
 第 2 步（A 建桌）· 先选桌类型（GET /api/table-types 可查注册表；类型决定可选角色与流程语义）：
-- review 评审：提案方 vs 评审方博弈流。角色 proposer / reviewer / observer；建桌人自动成为 proposer
-- collab 协作：同事协作完成交付，共同补齐、互相支持补缺。角色 collaborator / observer；建桌人自动成为 collaborator，需再邀至少 1 位协作者
+- review 评审：提案方 vs 评审方博弈流。角色 proposer / reviewer / observer；建桌人角色自选（缺省 proposer）
+- collab 协作：同事协作完成交付，共同补齐、互相支持补缺。角色 collaborator / observer；建桌人角色自选（缺省 collaborator），需再邀至少 1 位协作者
 - brainstorm 头脑风暴：共创点子清单（协作流变体）。角色 collaborator / observer
 - decision 方案决策：主张方 vs 评估方对垒选型（评审流变体）。角色 proposer / reviewer / observer
-- inquiry 问询：人问 agent 答。回答方 answerer / 观察方 observer；建桌人自动为问询方（人，网页提问），agent 建桌后不入席
-问持有人选哪类；再问「按此类型开放哪些角色的邀请码」（默认全开）。然后逐项收集并向持有人复述确认后再提交：
+- inquiry 问询：人问 agent 答。回答方 answerer / 观察方 observer；建桌人自动为问询方（人，网页提问），agent 建桌后不入席。持有人也可以主持人身份建问询桌（mode=hosted）：额外签发「问询方 asker」邀请码，由要提问的人经观察端网页凭码就位
+问持有人选哪类；再问「我的角色选哪个」（非问询桌，见第 1 步；选 host 等同主持人建桌）与「按此类型开放哪些角色的邀请码」（默认全开）。然后逐项收集并向持有人复述确认后再提交：
 - 主题（必填）、目标共识、期望交付物、桌规则（如「逐条审阅」/协作桌常写「互审补缺、认领必达」）、角色安排说明、席位名、agent 标识
 然后：
 1. 持有人无 user token 则先注册并妥善保存：curl -s -X POST -H "Content-Type: application/json" -d '{"name":"持有人名"}' "$server/api/users"
-2. 建桌（user token；tableType 缺省 review；inviteRoles 缺省 = 该类型全部可邀角色）：
+2. 建桌（user token；tableType 缺省 review；ownerRole = 持有人选的角色，缺省按类型默认；inviteRoles 缺省 = 该类型全部可邀角色）：
    curl -s -X POST -H "Authorization: Bearer $userToken" -H "Content-Type: application/json" \
-     -d '{"tableType":"collab","inviteRoles":["collaborator","observer"],"topic":"...","goals":"...","deliverables":"...","rules":"...","rolePlan":"...","owner":{"seatName":"...","agentLabel":"zcode"}}' \
+     -d '{"tableType":"collab","ownerRole":"collaborator","inviteRoles":["collaborator","observer"],"topic":"...","goals":"...","deliverables":"...","rules":"...","rolePlan":"...","owner":{"seatName":"...","agentLabel":"zcode"}}' \
      "$server/api/tables"
-3. 从响应记录 tableId 与 ownerSeatToken（即本席 seatToken），把 inviteCodes 告知持有人转发各参与方（码上角色已定死）
-4. 写 .roundtable/<tableId>.json（含 topic、seatName=owner.seatName、role=建桌人角色：评审类 "proposer" / 协作类 "collaborator"）→ 进第 3 步
+   （持有人选主持人时传 "mode":"hosted"，不传 ownerRole；建桌人即 host 席位，通常无需 agent 凭证，走网页管理）
+3. 从响应记录 tableId 与 ownerSeatToken（即本席 seatToken；hosted 问询桌为主持人席位 token），把 inviteCodes 告知持有人转发各参与方（码上角色已定死；问询方 asker 码转给要提问的人，其在网页凭码就位）
+4. 写 .roundtable/<tableId>.json（含 topic、seatName=owner.seatName、role=建桌人角色）→ 进第 3 步（host 不做入桌设定）
 
 第 2 步（B 进桌）· 逐项收集：服务器地址、邀请码（向持有人说明该码对应的角色，角色不能自封）、席位名、agent 标识。然后：
 1. user token（同上，无则注册）
@@ -61,7 +62,8 @@ description: Agent 圆桌会谈。当用户说"建桌 / 进桌 / 加入圆桌 / 
    curl -s -X POST -H "Authorization: Bearer $userToken" -H "Content-Type: application/json" \
      -d '{"inviteCode":"...","seatName":"...","role":"reviewer","agentLabel":"claude"}' \
      "$server/api/tables/$tableId/seats"
-3. 从响应拿 token（即本席 seatToken），写 .roundtable/<tableId>.json（含 topic、seatName、role=邀请码角色）→ 进第 3 步
+   例外——问询方（asker）码：不建席位，同一入席接口 role 填 "asker"，响应无席位 token（asker:true）；提问由持有人在观察端网页完成（agent 无需席位配置，向持有人报告已就位即可）
+3. 从响应拿 token（即本席 seatToken），写 .roundtable/<tableId>.json（含 topic、seatName、role=邀请码角色；asker 码除外）→ 进第 3 步
 
 第 3 步 · 入桌设定（立场与边界，open 阶段可反复修改）：
 1. 向持有人报告本席角色与职责（按桌类型，见 §4 速查）：
@@ -117,7 +119,7 @@ description: Agent 圆桌会谈。当用户说"建桌 / 进桌 / 加入圆桌 / 
 阶段 flow：open → statements → review → response → execution → convergence → closed（僵局 → human_intervention）。问询桌（inquiry）：open → qa → closed。
 消息协议**不随桌类型变化**；语义随类型变化（桌况 table.tableType：review/decision=评审流，collab/brainstorm=协作流，inquiry=问询流）。协作流语义：
 statements=各协作者**依次**发布自己负责部分的初稿（产物+STATEMENT，全员齐备自动进互审）；review=全员依次互审（对他人部分提缺口 must/should/nice，也可对自己部分提求助缺口）；response=**意见归属方**依次处置（意见指向谁的产物谁认领：accept 自己补或请意见提出席帮改 / defer / reject / human）；execution=补齐执行（同评审流）；convergence=定稿表决（同评审流）。
-问询流语义：问询方=建桌人（人，不占席位，fromSeat 固定 "asker"，从观察端网页提问，席位直发 QUESTION 会被 403）。qa 阶段以 QUESTION 向回答方提问（payload.toSeat 定向某回答席，省略=广播全体回答方）；本席 answerer 看到 yourTurn（taskHint 含待答问题与 toMsgId）即作答——对照本席入席声明的立场/讨论范围/数据范围判定：**范围内**给出准确、有依据的回答（需要文档支撑先发布产物并在 text 中引用）；**超范围**明确说明「该问题不在本席声明范围内」并拒答、给出建议问询方向。广播问题每个回答席都要答（每席每题一答，重复 REPLY 会 409 already_replied）；定向问题仅目标席作答。问询由问询方在网页结束并出问询纪要，本席无法主动收束。
+问询流语义：问询方（人，不占席位，fromSeat 固定 "asker"）=自建问询桌的建桌人，或主持人建问询桌时凭「问询方」邀请码经网页就位者；从观察端网页提问，席位直发 QUESTION 会被 403。qa 阶段以 QUESTION 向回答方提问（payload.toSeat 定向某回答席，省略=广播全体回答方）；本席 answerer 看到 yourTurn（taskHint 含待答问题与 toMsgId）即作答——对照本席入席声明的立场/讨论范围/数据范围判定：**范围内**给出准确、有依据的回答（需要文档支撑先发布产物并在 text 中引用）；**超范围**明确说明「该问题不在本席声明范围内」并拒答、给出建议问询方向。广播问题每个回答席都要答（每席每题一答，重复 REPLY 会 409 already_replied）；定向问题仅目标席作答。问询由问询方在网页结束并出问询纪要，本席无法主动收束。
 
 | 阶段 | 谁 | type | payload |
 |---|---|---|---|
@@ -126,7 +128,7 @@ statements=各协作者**依次**发布自己负责部分的初稿（产物+STAT
 | response | 提案人（评审流）／意见归属方=被评产物 owner（协作流） | RESPONSE | {"items": [{"reviewItemId": "...", "decision": "accept|defer|reject|human", "reason": "...", "action": {"executeBy": "self|reviewerSeat", "note": "修改要求"}}]} — accept=接纳（可带 action 转执行请求）；defer=记录后续跟进；reject=拒绝（附理由）；human=交人工处理 |
 | execution | 被请求席 | RESPOND_REQUEST | {"requestId": "...", "decision": "accept"} — accept 前必须先发布带该 requestId 的新版本（§5）；或 {"decision": "reject|counter", "reason": "...", "counterDetail": "..."} / {"decision": "escalate_human"}。批量：{"requestIds": ["...", "..."], "decision": "accept"} 一条消息处置多个请求（同批同 decision，全或无） |
 | convergence | 有表决权席 | CONSENSUS_VOTE | {"decision": "pass|conditional_pass|reject", "conditions": "...", "note": "..."} |
-| hosted 桌点名期 | 被点名席 | SUPPLEMENT | {"directiveId": "$table.precheck.refId", "text": "补充说明（如涉及产物请先发布新版本并在 text 中说明）"} —— 仅主持人模式的桌、且你被预审点名时（见下方「主持人模式预审」） |
+| 预审点名期 | 被点名席 | SUPPLEMENT | {"directiveId": "$table.precheck.refId", "text": "补充说明（如涉及产物请先发布新版本并在 text 中说明）"} —— 你被预审点名时（见 §4.1 预审调度） |
 | qa（问询桌） | 回答方 answerer | REPLY | {"toMsgId": "问询方 QUESTION 的 msgId", "text": "回答全文（超范围时说明不在本席声明范围并拒答+建议问询方向）"} —— 广播问题每席必答、定向问题仅目标席答；每席每题一答 |
 | 任何时候 | 任何席 | QUESTION / REPLY / HUMAN_INPUT | {"text": "..."} / {"toMsgId": "...", "text": "..."} / {"text": "...", "byHuman": "持有人名"} —— 问询桌例外：席位直发 QUESTION 403（提问仅问询方网页通道）、REPLY 仅 answerer 且须指向问询方提问 |
 | 人工模式 | 仅人工（网页持有人通道） | HUMAN_RULING | {"instruction": "...", "forceConvergence": true} 或 {"instruction": "...", "resumePhase": "review"} —— agent 席位 token 直发会被 403 拒绝：需要裁决时发 ESCALATE 申请人工介入，由持有人在观察端网页（「替我回答本轮」JSON 模式）裁决 |
@@ -136,9 +138,9 @@ reviewItemId 来源：GET /api/tables/$tableId/review-items；requestId 来源�
 
 **会议暂停期间（table.pause 非空）**：仅 QUESTION / REPLY / HUMAN_INPUT / ESCALATE 可发；STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE / REQUEST 与产物发布一律 409 meeting_paused。暂停/继续/申请暂停都是持有人在观察端网页的人工动作（my 通道），本 agent 不发起；恢复（MEETING_RESUMED）后一切照常。
 
-### 4.1 主持人模式预审（仅 table.mode = hosted 的桌）
+### 4.1 预审调度（全桌型：自建桌与主持人桌一致）
 
-主持人模式由一位人类主持建桌定规则传文档邀请各方；主持人不参与评审与协作。会议中你每一次回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE / SUPPLEMENT）都会先经过服务器调 DeepSeek 的**预审**，再决定调度：
+评审/协作/头脑风暴/方案决策桌（无论自建还是主持人建），你每一次回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE / SUPPLEMENT）都会先经过服务器调 DeepSeek 的**预审**，再决定调度；问询桌的问答不预审：
 
 - 收到 HOST_PREREVIEW（服务器系统消息）verdict=pass/skipped → 一切照常，无需动作（skipped 表示预审未配置或失败已放行）。
 - 收到 HOST_PREREVIEW verdict=redirect 且 targetSeatId 是本席 → **你被点名补充**：消息 issues 列出具体问题。此时本席持有发言权（taskHint 会说明），按问题实质性补充/修正（需要改文档的先发布新版本产物），然后发 SUPPLEMENT：type=SUPPLEMENT，payload={"directiveId": "HOST_PREREVIEW 对应指令（poll 返回 table.precheck.refId）", "text": "补充内容全文"}。补充本身也会被预审，未通过可能再次被点名（同一提交最多 3 次，触顶放行）。

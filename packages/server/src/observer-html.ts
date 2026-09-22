@@ -1,6 +1,6 @@
 /**
  * 观察端 Web 控制台（单页，零构建）— GET / 下发。
- * 功能：圆桌列表（筛选/我的席位标记）/ 建桌（5 桌类型：评审/协作/头脑风暴/方案决策/问询；主持人建桌模式 + DeepSeek 预审）/
+ * 功能：圆桌列表（筛选/我的席位标记）/ 建桌（5 桌类型：评审/协作/头脑风暴/方案决策/问询；我的角色自选——任一角色自建入席或主持人建桌，问询桌可选问询方/主持人；回合提交全桌型过 DeepSeek 预审）/
  *       桌详情（圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/时间线/纪要、会议暂停/恢复与暂停申请、
  *       问询方操作面板：开始问询/定向与广播提问/结束问询出问询纪要）/
  *       我的席位面板（入桌设定·回填、开始会议·建桌人、持发言权人工代答、给 agent 直达指令）/
@@ -82,7 +82,7 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .ferr { color:var(--err); font-size:12px; min-height:16px; margin-top:6px; }
   .ferr:not(:empty) { background:rgba(224,92,92,.08); border-left:2px solid var(--err); padding:6px 10px; border-radius:4px; }
   .hint { color:var(--dim); font-size:12px; margin-top:3px; line-height:1.55; }
-  /* 卡片式单选（桌类型/建桌模式）与胶囊多选（开放角色） */
+  /* 卡片式单选（桌类型/我的角色）与胶囊多选（开放角色） */
   .rchoice { display:grid; gap:8px; }
   .rchoice.two { grid-template-columns:1fr 1fr; }
   .rchoice label { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel); cursor:pointer; transition:border-color var(--tt),background var(--tt); }
@@ -352,11 +352,19 @@ function api(method, path, body){
 function copyText(t){ if(navigator.clipboard){ navigator.clipboard.writeText(t).then(function(){toast('已复制');}); } else { toast(t); } }
 /* 完整入桌邀请/凭证文本：接收方（agent 持有人）拿到即可参会——skill §2 向导所需的服务器/桌号/邀请码全齐 */
 function inviteText(topic,tableId,code,role,usesLeft){
-  return '【圆桌邀请】'+topic+'\n'
+  var head='【圆桌邀请】'+topic+'\n'
     +'角色：'+(ROLE_LABEL[role]||role)+'（凭邀请码入席，角色由码定死'+(usesLeft!=null?('，剩余 '+usesLeft+' 次'):'')+'）\n'
     +'服务器：'+location.origin+'\n'
     +'圆桌 ID：'+tableId+'\n'
-    +'邀请码：'+code+'\n\n'
+    +'邀请码：'+code+'\n\n';
+  if(role==='asker'){
+    return head
+      +'参会方式（发给要提问的人，在观察端网页操作，不占席位）：\n'
+      +'1. 打开 '+location.origin+'，注册/连接后进入「凭邀请码入桌」；\n'
+      +'2. 粘贴上面的邀请码，确认后就位为本桌问询方；\n'
+      +'3. 在圆桌详情页等待回答方就绪，然后「开始问询」→ 随时提问 → 问完「结束问询」出问询纪要。';
+  }
+  return head
     +'参会方式（本段整体发给参与方，交给其 agent）：\n'
     +'1. agent 安装圆桌技能：读取 '+location.origin+'/skill.md 并按文档开头自装；\n'
     +'2. 对 agent 说「进桌」，提供上面的 服务器地址 / 圆桌 ID / 邀请码，以及席位名和 agent 标识，它会走首次参与向导完成入席、立场与范围设定；\n'
@@ -398,7 +406,7 @@ function agentAccessText(){
     +'2. 注册用户（若持有人已有 rtu_ 开头的用户 token 可跳过）：\n'
     +'   curl -s -X POST -H "Content-Type: application/json" -d \'{"name":"持有人用户名"}\' '+location.origin+'/api/users\n'
     +'   保存响应里的 token（rtu_ 开头，即观察端登录凭证，只显示这一次），并告知持有人：可粘贴到观察端右上角登录框连接；\n'
-    +'3. 接入完成。之后持有人对你说「建桌」（凭 user token 创建圆桌并自动成为提案方）或「进桌」（凭圆桌邀请码入席，角色由邀请码定死），技能会引导完成入桌设定并自动参会。';
+    +'3. 接入完成。之后持有人对你说「建桌」（凭 user token 创建圆桌，自选自己的角色入席）或「进桌」（凭圆桌邀请码入席，角色由邀请码定死），技能会引导完成入桌设定并自动参会。';
 }
 function fmtSize(n){ n=n||0; if(n>=1048576) return (n/1048576).toFixed(1)+' MB'; if(n>=1024) return Math.round(n/1024)+' KB'; return n+' B'; }
 
@@ -547,18 +555,18 @@ function helpBodyHtml(){
   return '<h4>这是什么</h4>'
     +'<p>agent-talk 圆桌会谈系统：多人各自带着自己的 agent（zcode / claude / codex…）入座一张圆桌，agent 代表持有人完成评审、协作共创、方案决策或向其问询，人只在重要节点介入，最终接收共识结果。本页面是<b>观察端</b>（Web 控制台）；agent 通过 REST API + roundtable 技能参会。</p>'
     +'<h4>三步开一场圆桌</h4>'
-    +'<ul><li><b>① 创建圆桌</b>：列表页「创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策 / 问询，决定流程与可选角色），再选<b>建桌模式</b>（各方自行建桌 = 你直接入席参会；主持人建桌 = 你只定规则、传资料、邀请调度与开局，不参与评审协作），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码（问询桌你即问询方、不占席位，无席位 token）。</li>'
-    +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）。</li>'
-    +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人（主持人桌为主持人）点「▶ 开始会议」；问询桌由你（问询方）点「▶ 开始问询」。</li></ul>'
+    +'<ul><li><b>① 创建圆桌</b>：列表页「创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策 / 问询，决定流程与可选角色），再选<b>我的角色</b>（自建桌 = 你以所选角色直接入席参会，角色任选——评审桌也能当评审方；选「主持人」= 主持人建桌，只定规则、传资料、邀请调度与开局；问询桌可选「问询方」= 你提问，或「主持人」= 由别人凭问询方邀请码来提问），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码（自建问询桌你即问询方、不占席位，无席位 token）。</li>'
+    +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）；主持人建的问询桌另发「问询方」码，由要提问的人在本页凭码就位。</li>'
+    +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人（主持人桌为主持人）点「▶ 开始会议」；问询桌由问询方点「▶ 开始问询」。</li></ul>'
     +'<h4>会议阶段</h4>'
-    +'<p>阶段按桌类型走不同流程：<b>评审 / 方案决策</b>：设定 → 陈述 → 评审 → 回应 → 执行 → 表决 → 结束；<b>协作 / 头脑风暴</b>：设定 → 初稿发布 → 互审补缺 → 缺口认领 → 补齐执行 → 定稿表决 → 结束；<b>问询</b>：设定 → 问答 → 结束。结束自动生成纪要（问询桌为问答对汇总的问询纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段；主持人建桌的会议各方每回合提交先经 DeepSeek 预审，需要补充时会被点名。</p>'
+    +'<p>阶段按桌类型走不同流程：<b>评审 / 方案决策</b>：设定 → 陈述 → 评审 → 回应 → 执行 → 表决 → 结束；<b>协作 / 头脑风暴</b>：设定 → 初稿发布 → 互审补缺 → 缺口认领 → 补齐执行 → 定稿表决 → 结束；<b>问询</b>：设定 → 问答 → 结束。结束自动生成纪要（问询桌为问答对汇总的问询纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段；评审/协作类桌（两种建桌模式一致）各方每回合提交先经 DeepSeek 预审，需要补充时会被点名。</p>'
     +'<h4>席位角色</h4>'
     +'<ul><li><b>提案方</b>（proposer）：发布产物、提案陈述、逐条回应评审意见；</li>'
     +'<li><b>评审方</b>（reviewer）：must / should / nice 结构化评审，可被请求协助修改；</li>'
     +'<li><b>协作者</b>（collaborator，协作/头脑风暴桌）：发布自己负责部分初稿、互审补缺、认领处置指向自己产物的意见、支援他人补缺；</li>'
     +'<li><b>主持人</b>（host，主持人建桌模式）：只定规则、传共享资料、邀请各方与调度开局，不参与评审协作；无需入桌设定，豁免就绪；</li>'
     +'<li><b>回答方</b>（answerer，问询桌）：凭邀请码入席并声明回答范围，范围内给出有依据的作答，超范围明确说明并拒答；</li>'
-    +'<li><b>问询方</b>（asker，问询桌建桌人）：不占席位，在网页提问（可定向某回答席或广播全体各自作答）与结束问询；</li>'
+    +'<li><b>问询方</b>（asker，问询桌）：不占席位——自建问询桌即建桌人，主持人建的问询桌凭「问询方」邀请码经网页就位；在网页提问（可定向某回答席或广播全体各自作答）与结束问询；</li>'
     +'<li><b>观察方</b>（observer）：只读旁听，无表决权。</li></ul>'
     +'<h4>暂停与继续</h4>'
     +'<ul><li>进行中的会议可暂停：主持人 / 建桌人 / 系统管理员在桌详情「会议控制」直接暂停；其他席位可「申请暂停」，待其同意后生效（问询桌由问询方控制）；</li>'
@@ -878,7 +886,7 @@ function renderList(){
   /* 帮助速览（列表页底部）：主帮助信息 + 完整帮助/复制接入指令入口 */
   h+='<div class="card"><div class="row"><b>帮助速览</b><span class="sp"></span>'
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
-    +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选建桌模式：自行入席参会，或主持人建桌只管规则与调度）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
+    +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。评审/协作类桌的回合提交过 DeepSeek 预审（两模式一致）。</div>'
     +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再注册用户（POST /api/users，返回 rtu_ token 即登录凭证）。</div>'
     +'<div class="kv"><span class="k">介入</span>桌详情可发人工指令（可定向某席）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div>'
     +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
@@ -1002,7 +1010,7 @@ function openAdminUserTables(uid,name){
 /* ---------- 视图：创建圆桌 ---------- */
 function renderCreateForm(){
   var app=document.getElementById('app');
-  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="ctBackList">← 返回列表</span><span class="sp"></span><b>创建圆桌</b><span class="dim" id="ctModeHint">你将自动成为提案方（proposer）席位</span></div>';
+  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="ctBackList">← 返回列表</span><span class="sp"></span><b>创建圆桌</b><span class="dim" id="ctModeHint"></span></div>';
   h+='<div class="card frm">'
     +'<h4>基本信息</h4>'
     +'<div class="frow"><label class="t">桌类型 <b>*</b></label><div id="ctTypeRow" class="rchoice two">'
@@ -1010,10 +1018,9 @@ function renderCreateForm(){
       return '<label><input type="radio" name="ctType" value="'+esc(tt.id)+'"'+(tt.id==='review'?' checked':'')+'><span><b>'+esc(tt.label)+'</b><br><span class="hint" style="margin:0">'+esc(tt.description||'')+'</span></span></label>';
     }).join('')
     +'</div><div class="hint">类型决定流程语义与可选角色；开桌后不可更改</div></div>'
-    +'<div class="frow"><label class="t">建桌模式</label><div class="rchoice two">'
-    +'<label><input type="radio" name="ctMode" value="self" checked><span><b>各方自行建桌</b><br><span class="hint" style="margin:0">我自动成为首个席位，直接参会</span></span></label>'
-    +'<label><input type="radio" name="ctMode" value="hosted"><span><b>主持人建桌</b><br><span class="hint" style="margin:0">我只负责建桌/定规则/传文档/邀请与调度，不参与评审协作；各方提交过 DeepSeek 预审</span></span></label></div>'
-    +'<div class="hint" id="ctModeTip">主持人模式需服务器配置 DEEPSEEK_API_KEY（未配置时预审自动跳过放行）</div></div>'
+    +'<div class="frow"><label class="t">我的角色</label><div id="ctRoleRow" class="rchoice two"></div>'
+    +'<div class="hint">自建桌＝你以所选角色入席直接参会；选「主持人」＝主持人建桌（只管规则/资料/邀请与调度，不参与评审协作）。问询桌选「问询方」＝你就是要提问的人</div>'
+    +'<div class="hint" id="ctModeTip">评审/协作类桌的回合提交都会过 DeepSeek 预审（两模式一致；问询桌问答不预审）；需服务器配置 DEEPSEEK_API_KEY，未配置时预审自动跳过放行</div></div>'
     +'<div class="frow"><label class="t">开放邀请的角色</label><div class="cchoice" id="ctRoles"></div><div class="hint" id="ctRolesHint"></div></div>'
     +'<div class="frow"><label class="t" for="ctTopic">主题 <b>*</b></label><input id="ctTopic" placeholder="如「v2 接口文档评审」「产品白皮书协作撰写」"><div class="hint">一句话说清这桌评什么/协作什么</div></div>'
     +'<div class="frow"><label class="t" for="ctGoals">目标共识</label><input id="ctGoals" placeholder="本次要达成什么（可选）"><div class="hint">会议结束时希望各方同意的结论</div></div>'
@@ -1021,7 +1028,7 @@ function renderCreateForm(){
     +'<h4>桌规则与角色安排</h4>'
     +'<div class="frow"><label class="t" for="ctRules">桌规则</label><textarea id="ctRules" placeholder="供各方 agent 阅读遵守，如「逐条审阅」「互审补缺、认领必达」（可选）"></textarea></div>'
     +'<div class="frow"><label class="t" for="ctRolePlan">角色安排说明</label><textarea id="ctRolePlan" placeholder="对各参与方职责的补充描述，随邀请码发给各方（可选）"></textarea></div>'
-    +'<h4 id="ctSeatTitle">我的席位（自动成为提案方）</h4>'
+    +'<h4 id="ctSeatTitle">我的席位</h4>'
     +'<div class="frow"><label class="t" for="ctSeatName">席位名 <b>*</b></label><input id="ctSeatName"'+(view.userName?' value="'+escAttr(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
     +'<div class="frow"><label class="t" for="ctAgent">agent 标识（选填）</label><input id="ctAgent" placeholder="如 zcode / claude；留空 = human-only（先由人工参与，agent 后续接入）"></div>'
     +'<h4>高级参数（留空用默认）</h4>'
@@ -1031,50 +1038,72 @@ function renderCreateForm(){
     +'<div class="row" style="margin-top:10px"><button id="ctCancel">取消</button><span class="sp"></span><button id="ctSubmit" class="primary">创建</button></div>'
     +'</div>';
   app.innerHTML=h;
-  function ctMode(){ var r=document.querySelector('input[name="ctMode"]:checked'); return r?r.value:'self'; }
+  var lastRole=null; /* 类型切换时尽量保留已选角色（不在新类型角色集时回落默认） */
   function ctType(){ var r=document.querySelector('input[name="ctType"]:checked'); return r?r.value:'review'; }
+  function ctRole(){ var r=document.querySelector('input[name="ctRole"]:checked'); return r?r.value:''; }
+  function ctHosted(){ return ctRole()==='host'; }
+  function dfltRole(tt){ return tt.flow==='inquiry'?'asker':(tt.flow==='collab'?'collaborator':'proposer'); }
+  function roleOptions(tt){
+    if(tt.flow==='inquiry'){
+      return [
+        {v:'asker',t:'问询方',d:'我就是提问的人：不占席位，在本页开始问询、提问与结束'},
+        {v:'host',t:'主持人',d:'主持人建桌：问询方凭「问询方」邀请码由人经网页就位'}
+      ];
+    }
+    var d=dfltRole(tt);
+    var opts=tt.roles.map(function(r){ return {v:r,t:(ROLE_LABEL[r]||r),d:'自建：我以'+(ROLE_LABEL[r]||r)+'身份入席直接参会'+(r===d?'（常用）':'')}; });
+    opts.push({v:'host',t:'主持人',d:'主持人建桌：我只管规则/资料/邀请与调度，不参与评审协作'});
+    return opts;
+  }
   function ctInvitable(){
-    var tt=ttOf(ctType()), hosted=ctMode()==='hosted';
-    /* 问询桌：建桌人=问询方（不占席位），全部角色可邀 */
-    if(tt.flow==='inquiry') return tt.roles.slice();
-    var ownerRole = hosted ? 'host' : (tt.flow==='collab' ? 'collaborator' : 'proposer');
+    var tt=ttOf(ctType()), role=ctRole(), hosted=ctHosted();
+    /* 问询桌：自建=问询方（不占席位）全部参与角色可邀；主持人建=加发「问询方」码（由人凭码就位） */
+    if(tt.flow==='inquiry') return hosted?['asker'].concat(tt.roles.slice()):tt.roles.slice();
     /* self 模式去掉建桌人已占的唯一角色（协作流 collaborator 可多席，保留） */
-    return tt.roles.filter(function(r){ return !(hosted===false && tt.uniqueRoles.indexOf(r)>=0 && r===ownerRole); });
+    return tt.roles.filter(function(r){ return !(hosted===false && tt.uniqueRoles.indexOf(r)>=0 && r===role); });
   }
   function ctRolesSel(){
     var sel=[];
-    document.querySelectorAll('input[name="ctRole"]:checked').forEach(function(c){ sel.push(c.value); });
+    document.querySelectorAll('input[name="ctInvRole"]:checked').forEach(function(c){ sel.push(c.value); });
     return sel;
   }
   function syncType(){
-    var tt=ttOf(ctType()), hosted=ctMode()==='hosted';
-    var inq=tt.flow==='inquiry';
-    if(inq) hosted=false; /* 问询桌不支持主持人模式：强制 self */
+    var tt=ttOf(ctType());
+    var opts=roleOptions(tt);
+    var vals=opts.map(function(o){ return o.v; });
+    var keep=(lastRole&&vals.indexOf(lastRole)>=0)?lastRole:dfltRole(tt);
+    document.getElementById('ctRoleRow').innerHTML=opts.map(function(o){
+      return '<label><input type="radio" name="ctRole" value="'+esc(o.v)+'"'+(o.v===keep?' checked':'')+'><span><b>'+esc(o.t)+'</b><br><span class="hint" style="margin:0">'+esc(o.d)+'</span></span></label>';
+    }).join('');
+    document.querySelectorAll('input[name="ctRole"]').forEach(function(r){ r.onchange=syncRole; });
+    lastRole=keep;
+    syncRole();
+  }
+  function syncRole(){
+    var tt=ttOf(ctType()), role=ctRole(), hosted=ctHosted(), inq=tt.flow==='inquiry';
     var invitable=ctInvitable();
     document.getElementById('ctRoles').innerHTML=invitable.map(function(r){
-      return '<label><input type="checkbox" name="ctRole" value="'+esc(r)+'" checked> '+(ROLE_LABEL[r]||r)+'</label>';
+      return '<label><input type="checkbox" name="ctInvRole" value="'+esc(r)+'" checked> '+(ROLE_LABEL[r]||r)+'</label>';
     }).join('');
     document.getElementById('ctRolesHint').textContent =
-      (inq?'问询桌：把「回答方」邀请码发给各 agent（凭码入席后各自声明回答范围），你是问询方、在详情页网页提问；':'')
-      +(tt.flow==='collab'&&!hosted&&!inq?'协作类桌需至少 2 位协作者（含你），保留「协作者」勾选即可继续邀请；':'')
+      (inq
+        ?(hosted
+          ?'主持人建问询桌：把「问询方」邀请码发给要提问的人（其在本页凭码就位、开始与结束问询），「回答方」码发给各 agent；'
+          :'问询桌：把「回答方」邀请码发给各 agent（凭码入席后各自声明回答范围），你是问询方、在详情页网页提问；')
+        :(tt.flow==='collab'&&!hosted?'协作类桌需至少 2 位协作者（含你），保留「协作者」勾选即可继续邀请；':''))
       +'每个勾选角色发 1 张邀请码（各 10 次 / 7 天），角色由码定死';
-    document.getElementById('ctModeHint').textContent=inq
+    document.getElementById('ctModeHint').textContent = inq&&!hosted
       ?'你将成为问询方（不占席位）：回答方就绪后你在本页开始问询、随时提问、结束时自动出问询纪要'
       :hosted
-      ?'你将成为主持人（host）：只管建桌/规则/资料/邀请与调度，不参与评审协作'
-      :(tt.flow==='collab'?'你将自动成为协作者（collaborator）席位':'你将自动成为提案方（proposer）席位');
-    document.getElementById('ctSeatTitle').textContent=inq
+      ?(inq?'你将成为主持人（host）：只管规则/资料/邀请，问询方凭码就位后开始问询'
+           :'你将成为主持人（host）：只管建桌/规则/资料/邀请与调度，不参与评审协作')
+      :'你将以'+(ROLE_LABEL[role]||role)+'席位入席参会';
+    document.getElementById('ctSeatTitle').textContent = inq&&!hosted
       ?'问询方信息（不占席位，仅作显示名）'
       :hosted
-      ?'我的席位（自动成为主持人）'
-      :(tt.flow==='collab'?'我的席位（自动成为协作者）':'我的席位（自动成为提案方）');
-    document.getElementById('ctModeTip').style.display=(hosted&&!inq)?'':'none';
-    /* 问询桌禁用主持人模式选项 */
-    document.querySelectorAll('input[name="ctMode"]').forEach(function(r){ r.disabled=inq; });
-    if(inq){ var self=document.querySelector('input[name="ctMode"][value="self"]'); if(self) self.checked=true; }
+      ?'我的席位（主持人）'
+      :'我的席位（角色：'+(ROLE_LABEL[role]||role)+'）';
   }
-  function syncMode(){ syncType(); }
-  document.querySelectorAll('input[name="ctMode"]').forEach(function(r){ r.onchange=syncMode; });
   document.querySelectorAll('input[name="ctType"]').forEach(function(r){ r.onchange=syncType; });
   syncType();
   document.getElementById('ctBackList').onclick=loadList;
@@ -1087,8 +1116,10 @@ function renderCreateForm(){
     if(!seatName0){ err.textContent='席位名必填'; return; }
     var roles=ctRolesSel();
     if(!roles.length){ err.textContent='至少开放一个邀请角色（否则无人能入桌）'; return; }
+    var tt=ttOf(ctType()), role=ctRole();
     var body={ topic:topic, tableType:ctType(), inviteRoles:roles, owner:{ seatName:seatName0, agentLabel:document.getElementById('ctAgent').value.trim()||'human-only' } };
-    if(ctMode()==='hosted') body.mode='hosted';
+    if(role==='host') body.mode='hosted';
+    else if(tt.flow!=='inquiry') body.ownerRole=role; /* 问询桌自建=问询方，服务端不接受 ownerRole */
     var goals=document.getElementById('ctGoals').value.trim(); if(goals) body.goals=goals;
     var del=document.getElementById('ctDeliverables').value.trim(); if(del) body.deliverables=del;
     var rules=document.getElementById('ctRules').value.trim(); if(rules) body.rules=rules;
@@ -1096,17 +1127,18 @@ function renderCreateForm(){
     var rounds=parseInt(document.getElementById('ctRounds').value,10); if(rounds>=1&&rounds<=10) body.maxReviewRounds=rounds;
     var turnSec=parseInt(document.getElementById('ctTurnSec').value,10); if(turnSec>=30) body.turnTimeoutMs=turnSec*1000;
     var btn=document.getElementById('ctSubmit'); btn.disabled=true; btn.textContent='创建中…';
-    api('POST','/api/tables',body).then(function(r){ renderCreateResult(r,topic,ctMode()==='hosted'); })
+    api('POST','/api/tables',body).then(function(r){ renderCreateResult(r,topic); })
       .catch(function(e){ btn.disabled=false; btn.textContent='创建'; err.textContent='创建失败：'+e.message; });
   };
 }
 
-function renderCreateResult(d,topic,hosted){
+function renderCreateResult(d,topic){
   var app=document.getElementById('app');
   var inq=d.tableType==='inquiry';
+  var hosted=d.mode==='hosted';
   var h='<div class="row" style="margin-bottom:12px"><b>圆桌已创建</b><span class="badge phase">设定中 · 等待入席与设定</span>'+typeBadge(d.tableType)+(hosted?'<span class="rb host">主持人模式</span>':'')+'</div>';
   h+='<div class="card"><b>'+esc(d.tableId)+'</b>';
-  if(inq){
+  if(inq&&!hosted){
     h+='<h3 class="csec">你是问询方（不占席位）</h3>'
       +'<div class="dim" style="margin-top:4px">无需席位凭证：直接在圆桌详情页开始问询、提问与结束。把下方「回答方」邀请码发给各 agent，其凭码入席并声明回答范围后就绪。</div>';
   }else{
@@ -1115,18 +1147,21 @@ function renderCreateResult(d,topic,hosted){
       +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法）'+(hosted?'。主持人一般在网页端操作，无需把凭证交给 agent':'，整体发给你的 agent 即可参会')+'。关闭本页后无法再查看。</div>';
   }
   h+='<h3 class="csec">邀请码（发给各参与方，角色由码定死）</h3>';
-  var RL={proposer:'提案方',reviewer:'评审方',observer:'观察方',collaborator:'协作者',answerer:'回答方'};
+  var RL={proposer:'提案方',reviewer:'评审方',observer:'观察方',collaborator:'协作者',answerer:'回答方',asker:'问询方'};
   d.inviteCodes.forEach(function(c){
     h+='<div class="row" style="margin:4px 0"><span class="rb '+esc(c.role)+'">'+esc(RL[c.role]||c.role)+'</span>'
     +'<span class="invite">'+esc(c.code)+'</span><button class="cpInv" data-code="'+esc(c.code)+'" data-role="'+esc(c.role)+'">复制完整邀请</button>'
-    +(c.role==='observer'?'<span class="dim">观察方：只读旁听无表决权</span>':(c.role==='answerer'?'<span class="dim">回答方 agent：凭码入席，声明回答范围后作答</span>':'<span class="dim">复制内容含服务器/圆桌 ID/邀请码，整体转发即可参会</span>'))+'</div>';
+    +(c.role==='asker'?'<span class="dim">问询方：发给要提问的人，其在本页凭码就位（不占席位）后开始问询</span>'
+      :(c.role==='observer'?'<span class="dim">观察方：只读旁听无表决权</span>':(c.role==='answerer'?'<span class="dim">回答方 agent：凭码入席，声明回答范围后作答</span>':'<span class="dim">复制内容含服务器/圆桌 ID/邀请码，整体转发即可参会</span>')))+'</div>';
   });
   h+='<h3 class="csec">下一步</h3><div class="dim">'
     +(inq
-      ?'问询流程：把「回答方」完整邀请发给各 agent → 其入席并完成入桌设定（立场=回答范围、数据范围，就绪）→ 你在详情页点「开始问询」→ 随时提问（可定向某回答席或广播全员作答）→ 问完点「结束问询」自动生成问询纪要（问答对汇总）。'
+      ?(hosted
+        ?'主持人问询流程：定规则（详情页「桌设定」可随时改）→ 把「问询方」邀请码发给要提问的人（其凭码就位）、「回答方」码发给各 agent → 回答方入席设定并就绪 → 问询方在详情页点「开始问询」→ 提问 → 问完「结束问询」出问询纪要。'
+        :'问询流程：把「回答方」完整邀请发给各 agent → 其入席并完成入桌设定（立场=回答范围、数据范围，就绪）→ 你在详情页点「开始问询」→ 随时提问（可定向某回答席或广播全员作答）→ 问完点「结束问询」自动生成问询纪要（问答对汇总）。')
       :hosted
       ?'主持人流程：定规则（详情页「桌设定」可随时改）→ 传资料（详情页上传共享文档，全桌可见）→ 把邀请码发给各参与方（角色见上方码标签）→ 各方完成入桌设定 → 你在详情页点「开始会议」。开始后各方每回合提交由 DeepSeek 预审，需要补充时会被点名。'
-      :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。')
+      :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。回合提交过 DeepSeek 预审，需要补充时会被点名。')
     +'</div>'
     +'<div class="row" style="margin-top:8px"><button id="ctBack">返回列表</button><span class="sp"></span><button id="ctEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
@@ -1172,7 +1207,7 @@ function renderJoinForm(){
     }).catch(function(e){ btn.disabled=false; btn.textContent='查询邀请码'; err.textContent='查询失败：'+e.message; });
   };
 }
-/* 查询结果三分支：已持有席位 → 引导进桌；会议已开始 → 拒入提示；正常 → 确认入席 */
+/* 查询结果分支：已持有席位/已是问询方 → 引导进桌；会议已开始 → 拒入提示；正常 → 确认入席（asker=就位为问询方） */
 function renderJoinPreview(p){
   var box=document.getElementById('jbPreview');
   var h='<div class="card" style="margin-top:10px;border:1px dashed var(--line)">'
@@ -1181,8 +1216,14 @@ function renderJoinPreview(p){
   if(p.mySeat){
     h+='<div class="hint" style="margin-top:8px">你已在本桌持有席位「'+esc(p.mySeat.name)+'」，无需重复入席。</div>'
       +'<div class="row" style="margin-top:8px"><button id="jbGo" class="primary">进入圆桌</button></div>';
+  } else if(p.myAsker){
+    h+='<div class="hint" style="margin-top:8px">你已是本桌问询方（不占席位），直接进入圆桌提问即可。</div>'
+      +'<div class="row" style="margin-top:8px"><button id="jbGo" class="primary">进入圆桌</button></div>';
   } else if(p.phase!=='open'){
     h+='<div class="hint" style="margin-top:8px">本桌会议已开始，不再接受凭码入席。</div>';
+  } else if(p.role==='asker'){
+    h+='<div class="hint" style="margin-top:8px">这是<b>问询方</b>邀请码：确认后就位为本桌问询方（不占席位、无席位凭证），回答方就绪后你在本页开始问询、随时提问与结束问询。</div>'
+      +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">就位为问询方</button></div>';
   } else {
     h+='<div class="hint" style="margin-top:8px">确认入席后，将以「上方席位名」加入本桌，角色为'+esc(ROLE_LABEL[p.role]||p.role)+'（由邀请码定死）。</div>'
       +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">确认入席</button></div>';
@@ -1195,22 +1236,34 @@ function renderJoinPreview(p){
     var err=document.getElementById('jbErr'); err.textContent='';
     var name=document.getElementById('jbSeatName').value.trim();
     if(!name){ err.textContent='席位名必填'; return; }
-    jb.disabled=true; jb.textContent='入席中…';
+    jb.disabled=true; jb.textContent=p.role==='asker'?'就位中…':'入席中…';
     api('POST','/api/tables/'+encodeURIComponent(p.tableId)+'/seats',{
       inviteCode:p.code, seatName:name, role:p.role,
       agentLabel:document.getElementById('jbAgent').value.trim()||'human-only'
     }).then(function(r){ renderJoinResult(p,r); })
-    .catch(function(e){ jb.disabled=false; jb.textContent='确认入席'; err.textContent='入席失败：'+e.message; });
+    .catch(function(e){ jb.disabled=false; jb.textContent=p.role==='asker'?'就位为问询方':'确认入席'; err.textContent='就位/入席失败：'+e.message; });
   };
 }
 function renderJoinResult(p,r){
   var app=document.getElementById('app');
+  if(r.asker){
+    var ah='<div class="row" style="margin-bottom:12px"><b>已就位</b><span class="rb asker">问询方</span><span class="badge phase">等待回答方就绪</span></div>';
+    ah+='<div class="card"><b>'+esc(p.topic)+'</b>'
+      +'<h3 class="csec">你已成为本桌问询方（不占席位）</h3>'
+      +'<div class="dim" style="margin-top:4px">无需席位凭证：等待回答方凭邀请码入席并声明回答范围，全部就绪后你在详情页点「开始问询」，即可随时提问（可定向/广播）并结束问询出纪要。</div>'
+      +'<div class="row" style="margin-top:8px"><button id="jrBack">返回列表</button><span class="sp"></span><button id="jrEnter" class="primary">进入圆桌</button></div>'
+      +'</div>';
+    app.innerHTML=ah;
+    document.getElementById('jrBack').onclick=loadList;
+    document.getElementById('jrEnter').onclick=function(){ openTable(p.tableId); };
+    return;
+  }
   var h='<div class="row" style="margin-bottom:12px"><b>已入席</b>'+roleBadge(r.seat.role)+'<span class="badge phase">入桌设定待完成</span></div>';
   h+='<div class="card"><b>'+esc(p.topic)+'</b>'
     +'<h3 class="csec">席位 token（只显示这一次，请立即复制）</h3>'
     +'<div class="row"><span class="invite big">'+esc(r.token)+'</span><span class="sp"></span><button id="jrTokCopy">复制凭证（含入桌信息）</button></div>'
     +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法），交给你的 agent 即可代你参会。关闭本页后无法再查看；之后可在桌详情页随时「重签凭证」。</div>'
-    +'<h3 class="csec">下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。</div>'
+    +'<h3 class="csec">下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。回合提交过 DeepSeek 预审，需要补充时会被点名。</div>'
     +'<div class="row" style="margin-top:8px"><button id="jrBack">返回列表</button><span class="sp"></span><button id="jrEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
   app.innerHTML=h;
@@ -1291,7 +1344,7 @@ function renderDetail(d){
     +typeBadge(t.tableType)
     +phaseBadge(t.phase,t.roundNo,t.tableType)
     +(t.pause?'<span class="badge warn">⏸ 已暂停</span>':'')
-    +(t.mode==='hosted'?'<span class="rb host">主持人模式 · 预审调度</span>':'')
+    +(t.mode==='hosted'?'<span class="rb host">主持人模式</span>':'')
     +(t.deadlockCount>0?'<span class="badge err">僵局 '+t.deadlockCount+'</span>':'')
     +'</div>';
   if(d.meta.goals) h+='<div class="kv"><span class="k">目标</span>'+esc(d.meta.goals)+'</div>';
@@ -1308,7 +1361,7 @@ function renderDetail(d){
   /* ==== 左栏（约40%）：观点与过程 ==== */
   h+='<div class="dcol dmain">';
   h+='<div class="card"><div class="section turn" style="margin-top:0"><b>下一步动作</b><div style="margin-top:4px">';
-  if(t.mode==='hosted'&&t.precheck){
+  if(t.precheck){
     if(t.precheck.state==='reviewing') h+='<div class="badge warn">预审中</div> <span class="dim">DeepSeek 正在预审刚提交的回合结果，预审落地前不授出发言权</span>';
     else if(t.precheck.state==='directive') h+='<div class="badge warn">预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交</span><br>';
   }
@@ -1899,7 +1952,7 @@ function renderDetail(d){
     var PHASE_TYPES={statements:['STATEMENT'],'review':['REVIEW_COMMENT'],'response':['RESPONSE'],'execution':['RESPOND_REQUEST'],'convergence':['CONSENSUS_VOTE'],qa:['REPLY']};
     var types=(PHASE_TYPES[t.phase]||[]).concat(['QUESTION']);
     /* hosted 点名期：被点名席（含本人代答）可提交 SUPPLEMENT */
-    if(t.mode==='hosted'&&t.precheck&&t.precheck.state==='directive'&&turn&&turn.seatId===d.mySeatId) types=types.concat(['SUPPLEMENT']);
+    if(t.precheck&&t.precheck.state==='directive'&&turn&&turn.seatId===d.mySeatId) types=types.concat(['SUPPLEMENT']);
     pxType.innerHTML=types.map(function(x){return '<option>'+esc(x)+'</option>';}).join('');
     var PX_DECISIONS={'CONSENSUS_VOTE':['pass','conditional_pass','reject'],'RESPOND_REQUEST':['reject','counter','escalate_human']};
     var pxSync=function(){

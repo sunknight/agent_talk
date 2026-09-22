@@ -39,7 +39,7 @@ const seatJoinSchema = s({
   type: "object", required: ["inviteCode", "seatName", "role", "agentLabel"],
   properties: {
     inviteCode: str(4, 64), seatName: str(1, 64),
-    role: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer"] },
+    role: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer", "asker"] },
     agentLabel: str(1, 64),
     capsOverride: {
       type: "object", additionalProperties: false,

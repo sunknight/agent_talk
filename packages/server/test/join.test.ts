@@ -185,3 +185,83 @@ describe("凭码入桌（Web 端）", () => {
     expect(p.data.phase).toBe("review");
   });
 });
+
+describe("自建桌自选角色（ownerRole）", () => {
+  it("评审桌建桌人自选 reviewer：席位角色=reviewer，proposer 变为可邀角色", async () => {
+    const u = (await call("POST", "/api/users", { body: { name: "自选-评审建桌人" } })).data.token;
+    const c = await call("POST", "/api/tables", {
+      token: u, body: { topic: "自选评审桌", ownerRole: "reviewer", owner: { seatName: "R 席", agentLabel: "zcode" } },
+    });
+    expect(c.ok, JSON.stringify(c.error)).toBe(true);
+    const roles = (c.data.inviteCodes as { role: string }[]).map((x) => x.role).sort();
+    expect(roles).toEqual(["observer", "proposer", "reviewer"]); // reviewer 非唯一，仍可再邀；proposer 开放
+    const info = await call("GET", `/api/tables/${c.data.tableId}`, { token: c.data.ownerSeatToken });
+    expect(info.data.seats[0].role).toBe("reviewer");
+    expect(info.data.mode).toBe("self");
+  });
+
+  it("缺省 ownerRole：行为与旧版一致（评审桌=proposer / 协作桌=collaborator，proposer 码不发放）", async () => {
+    const u = (await call("POST", "/api/users", { body: { name: "自选-默认建桌人" } })).data.token;
+    const c1 = await call("POST", "/api/tables", {
+      token: u, body: { topic: "默认评审桌", owner: { seatName: "A", agentLabel: "zcode" } },
+    });
+    expect((c1.data.inviteCodes as { role: string }[]).map((x) => x.role).sort()).toEqual(["observer", "reviewer"]);
+    const c2 = await call("POST", "/api/tables", {
+      token: u, body: { tableType: "collab", topic: "默认协作桌", owner: { seatName: "B", agentLabel: "zcode" } },
+    });
+    expect((c2.data.inviteCodes as { role: string }[]).map((x) => x.role).sort()).toEqual(["collaborator", "observer"]);
+  });
+
+  it("自选 host = 主持人建桌（mode 升级 hosted）；hosted 下另传 ownerRole 拒绝；非法角色拒绝", async () => {
+    const u = (await call("POST", "/api/users", { body: { name: "自选-主持人建桌人" } })).data.token;
+    const c = await call("POST", "/api/tables", {
+      token: u, body: { topic: "自选主持人桌", ownerRole: "host", owner: { seatName: "H", agentLabel: "human" } },
+    });
+    expect(c.ok, JSON.stringify(c.error)).toBe(true);
+    expect(c.data.mode).toBe("hosted");
+    const info = await call("GET", `/api/tables/${c.data.tableId}`, { token: c.data.ownerSeatToken });
+    expect(info.data.seats[0].role).toBe("host");
+    // 全角色开放（host 不占类型角色）
+    expect((c.data.inviteCodes as { role: string }[]).map((x) => x.role).sort()).toEqual(["observer", "proposer", "reviewer"]);
+
+    const bad1 = await call("POST", "/api/tables", {
+      token: u, body: { topic: "冲突桌", mode: "hosted", ownerRole: "reviewer", owner: { seatName: "X", agentLabel: "human" } },
+    });
+    expect(bad1.error!.code).toBe("bad_owner_role");
+    const bad2 = await call("POST", "/api/tables", {
+      token: u, body: { topic: "非法角色桌", ownerRole: "banana", owner: { seatName: "Y", agentLabel: "human" } },
+    });
+    expect(bad2.error!.code).toBe("bad_owner_role");
+    // 问询桌自建不接受 ownerRole（建桌人即问询方）
+    const bad3 = await call("POST", "/api/tables", {
+      token: u, body: { tableType: "inquiry", topic: "问询自选", ownerRole: "answerer", owner: { seatName: "Z", agentLabel: "human" } },
+    });
+    expect(bad3.error!.code).toBe("bad_owner_role");
+  });
+
+  it("自选角色的建桌人同样要完成入桌设定与角色齐备才能开始（owner=reviewer 时需再邀 proposer）", async () => {
+    const u = (await call("POST", "/api/users", { body: { name: "自选-开始校验建桌人" } })).data.token;
+    const c = await call("POST", "/api/tables", {
+      token: u, body: { topic: "自选开始桌", ownerRole: "reviewer", owner: { seatName: "R", agentLabel: "zcode" } },
+    });
+    const tableId = c.data.tableId as string;
+    // 只有 reviewer（建桌人）就绪：缺 proposer → no_proposer
+    await call("POST", `/api/tables/${tableId}/seat-config`, {
+      token: c.data.ownerSeatToken, body: { stance: "评审方", ready: true },
+    });
+    const noProp = await call("POST", `/api/tables/${tableId}/start`, { token: c.data.ownerSeatToken });
+    expect(noProp.error!.code).toBe("no_proposer");
+    // 邀入 proposer 并就绪 → 可开始
+    const p = (await call("POST", "/api/users", { body: { name: "自选-提案方" } })).data.token;
+    const pj = await call("POST", `/api/tables/${tableId}/seats`, {
+      token: p,
+      body: {
+        inviteCode: (c.data.inviteCodes as { code: string; role: string }[]).find((x) => x.role === "proposer")!.code,
+        seatName: "提案方", role: "proposer", agentLabel: "claude",
+      },
+    });
+    await call("POST", `/api/tables/${tableId}/seat-config`, { token: pj.data.token, body: { stance: "提案方", ready: true } });
+    const s = await call("POST", `/api/tables/${tableId}/start`, { token: c.data.ownerSeatToken });
+    expect(s.ok, JSON.stringify(s.error)).toBe(true);
+  });
+});

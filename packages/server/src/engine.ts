@@ -38,7 +38,7 @@ const RATE_MAX = 8;
 const DOC_MAX_BYTES = 5 * 1024 * 1024;
 const DOCS_PER_SEAT = 20;
 const DOCS_PER_TABLE = 100;
-/** turn 消费型消息：必须持有当前发言权才能发（hosted 桌上发出后过预审层） */
+/** turn 消费型消息：必须持有当前发言权才能发（发出后过预审调度层，全桌型一致；问询桌 qa 阶段无此类消息，天然不预审） */
 const TURN_BOUND: Partial<Record<MsgType, boolean>> = {
   STATEMENT: true, REVIEW_COMMENT: true, RESPONSE: true, RESPOND_REQUEST: true, CONSENSUS_VOTE: true,
   SUPPLEMENT: true,
@@ -101,7 +101,7 @@ export class Hub {
   private rateWindow = new Map<string, number[]>();
   /** 限频审计去重：tableId:seatId → 上次写 rate_limit 审计的时间 */
   private rateAuditTs = new Map<string, number>();
-  /** hosted 桌预审进行中的桌（临界区：预审结论落地前不授出发言权） */
+  /** 预审进行中的桌（临界区：预审结论落地前不授出发言权；全桌型一致） */
   private precheckInFlight = new Set<string>();
   /** 预审器（默认 DeepSeek；测试可注入） */
   private readonly precheck: PrecheckFn;
@@ -138,9 +138,11 @@ export class Hub {
   /**
    * 建桌（任何已认证方）：录入主题/目标/交付物/规则/参与方安排；
    * 建桌人自动成为首个席位，并签发角色固定的邀请码（席位不能自封角色，身份安排权在建桌人）。
-   * mode=self（默认）：建桌人为提案方（proposer，评审流）或协作者（collaborator，协同流），发其余角色码 —— 各方自行建桌的原流程；
-   * mode=hosted：建桌人为主持人（host，只管桌与调度，不参与评审协作），按所选类型发参与方
-   * 各角色码邀请各方，且每条消费发言权的回合提交过 DeepSeek 预审调度层（见 runPrecheck）。
+   * mode=self（默认）：建桌人以 ownerRole 自选角色入席（缺省评审流 proposer / 协同流 collaborator；
+   * 选 host 视同主持人建桌，mode 升级 hosted），发其余角色码 —— 各方自行建桌的原流程；
+   * mode=hosted：建桌人为主持人（host，只管桌与调度，不参与评审协作），按所选类型发参与方各角色码邀请各方；
+   * 主持人建问询桌额外签发「问询方 asker」码，由人凭码经 web 成为问询方（不占席位）。
+   * 每条消费发言权的回合提交过 DeepSeek 预审调度层（全桌型一致，见 runPrecheck；问询桌 qa 无回合提交）。
    * tableType（缺省 review）：开桌先选类型，再按类型勾选开放邀请码的角色（inviteRoles）。
    */
   createTable(userToken: string, p: {
@@ -148,20 +150,41 @@ export class Hub {
     mode?: "self" | "hosted";
     tableType?: string;
     inviteRoles?: string[];
+    ownerRole?: Role;
     owner: { seatName: string; agentLabel: string };
     maxReviewRounds?: number; turnTimeoutMs?: number;
   }): {
     tableId: string; ownerSeatId: string; ownerSeatToken: string; tableType: TableType;
-    inviteCodes: { code: string; role: "proposer" | "reviewer" | "observer" | "collaborator" | "answerer" }[];
+    mode: "self" | "hosted";
+    inviteCodes: { code: string; role: "proposer" | "reviewer" | "observer" | "collaborator" | "answerer" | "asker" }[];
   } {
     const user = this.requireUser(userToken);
-    const mode: "self" | "hosted" = p.mode === "hosted" ? "hosted" : "self";
+    let mode: "self" | "hosted" = p.mode === "hosted" ? "hosted" : "self";
     const def = tableTypeOf(p.tableType ?? "review");
     if (p.tableType !== undefined && !["review", "collab", "brainstorm", "decision", "inquiry"].includes(p.tableType)) {
       throw new ApiError(422, "bad_table_type", `tableType 只能是 review / collab / brainstorm / decision / inquiry`);
     }
-    if (def.id === "inquiry" && mode === "hosted") {
-      throw new ApiError(422, "bad_mode", "问询桌不支持主持人模式（mode 固定 self，预审调度层不适用）");
+    // 建桌人角色解析：
+    // - hosted：恒 host（显式传其他值 422）；
+    // - 非问询 self：可自选 def.roles 内角色（缺省评审流 proposer / 协同流 collaborator）；选 host 视同主持人建桌；
+    // - 问询 self：建桌人即问询方（不占席位），无席位角色，显式传 ownerRole 422。
+    let ownerRole: Role | null = null; // null = 自建问询桌（建桌人=问询方，不占席位）
+    if (def.id === "inquiry") {
+      if (mode === "self") {
+        if (p.ownerRole) throw new ApiError(422, "bad_owner_role", "问询桌自建时建桌人即问询方（不占席位），不能另选 ownerRole");
+      } else {
+        if (p.ownerRole && p.ownerRole !== "host") throw new ApiError(422, "bad_owner_role", "主持人建桌的建桌人角色固定为 host");
+        ownerRole = "host";
+      }
+    } else {
+      const dflt: Role = mode === "hosted" ? "host" : def.flow === "collab" ? "collaborator" : "proposer";
+      const r: Role = p.ownerRole ?? dflt;
+      if (mode === "hosted" && r !== "host") throw new ApiError(422, "bad_owner_role", "主持人建桌的建桌人角色固定为 host（不要另传 ownerRole）");
+      if (r !== "host" && !def.roles.includes(r)) {
+        throw new ApiError(422, "bad_owner_role", `${def.label}桌建桌人角色只能是 ${def.roles.join(" / ")} 或 host`);
+      }
+      if (r === "host") mode = "hosted"; // 自建桌选主持人 = 主持人建桌
+      ownerRole = r;
     }
     const topic = checkField(p.topic, "topic", 300);
     const ownerSeatName = checkField(p.owner?.seatName ?? "", "owner.seatName", 64);
@@ -181,9 +204,9 @@ export class Hub {
       maxReviewRounds, turnTimeoutMs,
     };
 
-    // 问询桌：建桌人即问询方，不占席位（ownerSeat=ASKER_SEAT 虚拟标识，提问走 my 通道）；
+    // 自建问询桌：建桌人即问询方，不占席位（ownerSeat=ASKER_SEAT 虚拟标识，提问走 my 通道）；
     // 回答方（answerer）凭邀请码入席。owner.seatName/agentLabel 仅用于审计与广播文案。
-    if (def.id === "inquiry") {
+    if (def.id === "inquiry" && mode === "self") {
       meta.ownerSeat = ASKER_SEAT;
       meta.seatCount = 0;
       this.store.saveTable(meta);
@@ -200,16 +223,14 @@ export class Hub {
       for (const inv of inviteCodes) this.store.addInvite(inv.code, tableId, inv.role);
       this.sysMsg(tableId, "INFO", { text: `问询桌已创建：问询方 ${ownerSeatName}，等待回答方凭邀请码入席并设定回答范围`, level: "info" });
       this.audit(tableId, ASKER_SEAT, "table_open", { topic, by: user.name, mode, tableType: def.id, inviteRoles });
-      return { tableId, ownerSeatId: ASKER_SEAT, ownerSeatToken: "", tableType: def.id, inviteCodes };
+      return { tableId, ownerSeatId: ASKER_SEAT, ownerSeatToken: "", tableType: def.id, mode: "self", inviteCodes };
     }
 
-    // 建桌人席位（self：评审流 proposer / 协同流 collaborator；hosted：host），绑定用户身份
-    const ownerRole: "proposer" | "host" | "collaborator" =
-      mode === "hosted" ? "host" : def.flow === "collab" ? "collaborator" : "proposer";
+    // 建桌人席位（self：ownerRole 自选角色；hosted：host），绑定用户身份
     const ownerSeatId = newId("seat");
     const ownerSeat: ServerSeat = {
-      seatId: ownerSeatId, name: ownerSeatName, role: ownerRole,
-      caps: resolveCaps(ownerRole, undefined), agentLabel: ownerAgentLabel,
+      seatId: ownerSeatId, name: ownerSeatName, role: ownerRole!,
+      caps: resolveCaps(ownerRole!, undefined), agentLabel: ownerAgentLabel,
       joinedAt: Date.now(), status: "active", lastSeenAt: Date.now(),
       config: { stance: "", scope: "", dataScope: [], ready: false },
     };
@@ -221,23 +242,29 @@ export class Hub {
     const ownerSeatToken = `rts_${randomBytes(24).toString("base64url")}`;
     this.store.saveSeatToken(ownerSeatToken, tableId, ownerSeatId);
 
-    // 邀请码：按类型勾选开放角色（self 模式去掉建桌人已占的**唯一**角色；协作流的 collaborator 可多席，不剔除）
-    const invitable = def.roles.filter((r) => !(mode === "self" && def.uniqueRoles.includes(r) && r === ownerRole));
+    // 邀请码：按类型勾选开放角色（self 模式去掉建桌人已占的**唯一**角色；协作流的 collaborator 可多席，不剔除）；
+    // 主持人建问询桌额外开放「问询方 asker」码（凭码经 web 成为问询方，不占席位）
+    const invitable: string[] = def.id === "inquiry"
+      ? ["asker", ...def.roles]
+      : def.roles.filter((r) => !(mode === "self" && def.uniqueRoles.includes(r) && r === ownerRole));
     const inviteRoles = p.inviteRoles !== undefined ? [...new Set(p.inviteRoles)] : invitable;
     for (const r of inviteRoles) {
-      if (!invitable.includes(r as Role)) {
+      if (!invitable.includes(r)) {
         throw new ApiError(422, "bad_invite_role", `${def.label}桌的邀请角色只能是 ${invitable.join(" / ")}（${r} 不可选）`);
       }
     }
     const inviteCodes = inviteRoles.map((role) => ({
-      code: randomBytes(5).toString("hex").toUpperCase(), role: role as "proposer" | "reviewer" | "observer" | "collaborator",
+      code: randomBytes(5).toString("hex").toUpperCase(), role: role as "proposer" | "reviewer" | "observer" | "collaborator" | "asker",
     }));
     for (const inv of inviteCodes) this.store.addInvite(inv.code, tableId, inv.role);
 
     this.sysMsg(tableId, "SEAT_JOINED", { seat: ownerSeat });
+    if (def.id === "inquiry") {
+      this.sysMsg(tableId, "INFO", { text: `主持人已建问询桌：问询方凭「问询方」邀请码经网页就位，回答方凭码入席并声明回答范围，就绪后由问询方开始问询`, level: "info" });
+    }
     this.audit(tableId, ownerSeatId, "table_open", { topic, by: user.name, mode, tableType: def.id, inviteRoles });
     this.audit(tableId, ownerSeatId, "seat_join", { name: ownerSeatName, role: ownerRole, owner: true });
-    return { tableId, ownerSeatId, ownerSeatToken, tableType: def.id, inviteCodes };
+    return { tableId, ownerSeatId, ownerSeatToken, tableType: def.id, mode, inviteCodes };
   }
 
   /** 邀请码预检（Web 凭码入桌）：裸码或「完整邀请」整段文本均可，服务端提取码；只读不消费次数 */
@@ -245,6 +272,8 @@ export class Hub {
     code: string; tableId: string; topic: string; phase: string; tableType: TableType;
     role: string; usesLeft: number; expiresAt: number; seatCount: number;
     mySeat: { seatId: string; name: string; role: string } | null;
+    /** 问询桌：当前用户是否已是本桌问询方（凭码就位过） */
+    myAsker: boolean;
   } {
     const u = this.requireUser(userToken);
     // 邀请码 = 10 位大写 hex；完整邀请文本里的 tableId / token 均为更长整词，词边界可精确命中
@@ -265,13 +294,14 @@ export class Hub {
       code, tableId: meta.tableId, topic: meta.topic, phase: meta.phase, tableType: meta.tableType,
       role: inv.role, usesLeft: inv.usesLeft, expiresAt: inv.expiresAt, seatCount: meta.seatCount,
       mySeat: seat ? { seatId: seat.seatId, name: seat.name, role: seat.role } : null,
+      myAsker: tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(inv.tableId, ASKER_SEAT) === u.userId,
     };
   }
 
   joinTable(userToken: string, tableId: string, p: {
-    inviteCode: string; seatName: string; role: "proposer" | "reviewer" | "observer" | "collaborator" | "answerer"; agentLabel: string;
+    inviteCode: string; seatName: string; role: "proposer" | "reviewer" | "observer" | "collaborator" | "answerer" | "asker"; agentLabel: string;
     capsOverride?: Partial<Record<"canPublish" | "canModifyOwn" | "canExecuteRequests" | "canSendRequests" | "canVote", boolean>>;
-  }): { seatId: string; token: string; seat: SeatInfo } {
+  }): { seatId: string; token: string; seat: SeatInfo | null; asker?: boolean } {
     const user = this.requireUser(userToken);
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，不再接受凭码入席");
@@ -289,6 +319,25 @@ export class Hub {
     // 角色由邀请码固定（身份安排权在建桌人），席位不能自封
     if (inv.role !== "any" && inv.role !== p.role) {
       throw new ApiError(403, "role_mismatch", `该邀请码的角色为 ${inv.role}，与声明的 ${p.role} 不符`);
+    }
+    // 问询方（asker）码分流：不建席位——把操作者绑定为本桌问询方（与自建问询桌的建桌人同构，
+    // ownerSeat=ASKER_SEAT 绑定，提问/开始/结束走网页 user token 通道）；同桌问询方唯一；
+    // 已持本桌席位者不可兼任（上方 already_seated 已拦）；agent 持 user token 凭码加入不阻拦
+    if (inv.role === "asker") {
+      if (tableTypeOf(meta.tableType).id !== "inquiry") {
+        throw new ApiError(422, "bad_invite", "问询方邀请码只能用于问询桌");
+      }
+      if (this.store.seatOwnerOf(tableId, ASKER_SEAT)) {
+        throw new ApiError(409, "asker_exists", "本桌已有问询方（问询方唯一，凭码先到先得）");
+      }
+      const askerName = checkField(p.seatName ?? "", "seatName", 64);
+      checkField(p.agentLabel || "unknown", "agentLabel", 64, 0);
+      checkField(p.inviteCode, "inviteCode", 64);
+      if (!this.store.consumeInvite(p.inviteCode)) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
+      this.store.bindSeatOwner(tableId, ASKER_SEAT, user.userId);
+      this.sysMsg(tableId, "INFO", { text: `问询方 ${askerName} 已凭邀请码就位，等待回答方入席并就绪后开始问询`, level: "info" });
+      this.audit(tableId, ASKER_SEAT, "asker_join", { name: askerName, by: user.name });
+      return { seatId: ASKER_SEAT, token: "", seat: null, asker: true };
     }
     const seats = this.activeSeats(tableId);
     // 唯一角色校验（按桌类型：评审流的 proposer 同桌至多一人；协作流的 collaborator 可多人）
@@ -373,10 +422,10 @@ export class Hub {
 
   // ================= 问询桌（inquiry：人问 agent 答） =================
 
-  /** 问询方归属校验：操作者是否本桌问询方（建桌人，ownerSeat=ASKER_SEAT 的绑定用户） */
+  /** 问询方归属校验：操作者是否本桌问询方（自建=建桌人；主持人建=凭问询方码就位者；均以 ASKER_SEAT 绑定为准） */
   private requireInquiryOwner(meta: TableMeta, tableId: string, user: { userId: string }) {
-    if (this.store.seatOwnerOf(tableId, meta.ownerSeat) !== user.userId) {
-      throw new ApiError(403, "not_asker", "仅问询方（建桌人）可执行本操作");
+    if (this.store.seatOwnerOf(tableId, ASKER_SEAT) !== user.userId) {
+      throw new ApiError(403, "not_asker", "仅问询方（自建问询桌的建桌人，或凭问询方邀请码就位者）可执行本操作");
     }
   }
 
@@ -516,14 +565,13 @@ export class Hub {
       goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, ownerSeat: meta.ownerSeat,
       roundNo: meta.roundNo, deadlockCount: meta.deadlockCount, seats, artifacts,
       activeTurn: this.computeTurn(tableId),
-      precheck: this.precheckState(tableId, meta),
+      precheck: this.precheckState(tableId),
       pause: (meta.pause ?? null) as PauseInfo | null,
     };
   }
 
-  /** hosted 桌预审调度层状态投影（self 桌恒为 idle） */
-  private precheckState(tableId: string, meta: TableMeta): PrecheckState {
-    if (meta.mode !== "hosted") return { state: "idle" };
+  /** 预审调度层状态投影（全桌型一致；问询桌无回合提交，恒为 idle） */
+  private precheckState(tableId: string): PrecheckState {
     if (this.precheckInFlight.has(tableId)) return { state: "reviewing" };
     const d = this.store.pendingDirective(tableId);
     return d ? { state: "directive", refId: d.directiveId, toSeat: d.toSeat } : { state: "idle" };
@@ -648,12 +696,17 @@ export class Hub {
       const rolesGap = def.flow === "collab"
         ? `角色不齐备：${def.label}桌还需协作者席位凭邀请码入席（至少 2 位协作者）`
         : def.flow === "inquiry"
-          ? "角色不齐备：还需回答方席位凭邀请码入席（问询方在网页开始问询）"
+          ? "角色不齐备：还需回答方席位凭邀请码入席；问询方（自建=建桌人，主持人建=凭问询方邀请码就位）在网页开始问询"
           : "角色不齐备：还需提案方/评审方席位凭邀请码入席";
       if (seat.role === "host") {
-        // 主持人不参与就绪设定：只看各方就绪与角色齐备，然后点开始
+        // 主持人不参与就绪设定：只看各方就绪与角色齐备，然后点开始（问询桌例外：开始权在问询方）
         if (notReady.length) return `等待各方完成设定：${notReady.map((s) => s.name).join("、")}`;
-        return rolesOk ? "各方已就绪：POST /api/tables/:id/start 开始会议" : rolesGap;
+        if (def.flow === "inquiry") {
+          return rolesOk
+            ? "回答方已就绪：等待问询方在网页开始问询（问询方未就位时，先把「问询方」邀请码发给要提问的人）"
+            : rolesGap;
+        }
+        return rolesOk ? "POST /api/tables/:id/start 开始会议" : rolesGap;
       }
       if (!seat.config.ready) {
         return "入桌设定：向持有人确认立场（GET /api/stances 选预设并补充）、讨论范围、数据范围，然后 POST /api/tables/:id/seat-config 带 ready:true（向导见 skill §1.5）";
@@ -697,7 +750,7 @@ export class Hub {
     if (SERVER_ONLY_TYPES.includes(type)) {
       throw new ApiError(403, "server_only", `消息类型 ${type} 为服务器专属系统消息，席位不可直发`);
     }
-    // hosted 预审临界区：上一条提交的预审尚未落地时，不接受新的回合提交（防抢跑）
+    // 预审临界区：上一条提交的预审尚未落地时，不接受新的回合提交（防抢跑）
     if (this.precheckInFlight.has(tableId) && TURN_BOUND[type]) {
       throw new ApiError(409, "precheck_in_progress", "上一条回合提交的预审仍在进行，稍候再试");
     }
@@ -713,8 +766,8 @@ export class Hub {
         throw new ApiError(409, "not_your_turn", `当前发言权：${turn ? turn.seatId : "无（阶段未就绪）"}；消息类型 ${type} 需持有发言权`);
       }
     }
-    // hosted 点名期：发言权在被点名席，且回合型消息只接受其 SUPPLEMENT 提交（讨论类消息不受限）
-    if (meta.mode === "hosted" && TURN_BOUND[type] && type !== "SUPPLEMENT" && this.store.pendingDirective(tableId)) {
+    // 点名期：发言权在被点名席，且回合型消息只接受其 SUPPLEMENT 提交（讨论类消息不受限；全桌型一致）
+    if (TURN_BOUND[type] && type !== "SUPPLEMENT" && this.store.pendingDirective(tableId)) {
       throw new ApiError(409, "directive_pending", "预审点名补充进行中，当前仅接受被点名席的 SUPPLEMENT 提交");
     }
     // 批量处置：requestIds 展开为逐请求的单一处置（全或无——先全部 precheck，消息入库后再逐个 apply）
@@ -744,9 +797,9 @@ export class Hub {
     if (type === "HUMAN_RULING") this.applyRuling(tableId, payload as HumanRulingPayload);
     if (type === "CONSENSUS_VOTE") this.audit(tableId, seat.seatId, "vote_cast", {});
 
-    // 主持人预审调度层（仅 hosted 桌）：消费发言权的回合提交，在原调度推导/阶段推进之前过一道预审；
+    // 预审调度层（全桌型一致，self/hosted 均过）：消费发言权的回合提交，在原调度推导/阶段推进之前过一道预审；
     // pass/skipped → 照常 maybeAdvance；redirect → 落点名指令并压住推进，等被点名席 SUPPLEMENT。
-    if (meta.mode === "hosted" && TURN_BOUND[type]) {
+    if (TURN_BOUND[type]) {
       await this.runPrecheck(tableId, seat, msg);
       return msg;
     }
@@ -1092,17 +1145,15 @@ export class Hub {
       deadline: Date.now() + meta.turnTimeoutMs, taskHint, pendingRequest,
     });
 
-    // 预审调度层（仅 hosted，在原调度之前）：预审进行中不授出发言权；点名指令挂起时发言权归被点名席
-    if (meta.mode === "hosted") {
-      if (this.precheckInFlight.has(tableId)) return null;
-      const directive = this.store.pendingDirective(tableId);
-      if (directive) {
-        const issueBrief = directive.issues.slice(0, 3).map((i) => `[${i.severity}] ${i.comment}`).join("；");
-        return grant(
-          directive.toSeat,
-          `主持人预审点名补充：${issueBrief || directive.note || "上一轮提交需要补充"}。按要求补充/修正后 POST /api/tables/:id/messages，type=SUPPLEMENT，payload={"directiveId":"${directive.directiveId}","text":"补充说明（如涉及产物请先发布新版本并在 text 中说明）"}`,
-        );
-      }
+    // 预审调度层（全桌型一致，在原调度之前）：预审进行中不授出发言权；点名指令挂起时发言权归被点名席
+    if (this.precheckInFlight.has(tableId)) return null;
+    const directive = this.store.pendingDirective(tableId);
+    if (directive) {
+      const issueBrief = directive.issues.slice(0, 3).map((i) => `[${i.severity}] ${i.comment}`).join("；");
+      return grant(
+        directive.toSeat,
+        `预审点名补充：${issueBrief || directive.note || "上一轮提交需要补充"}。按要求补充/修正后 POST /api/tables/:id/messages，type=SUPPLEMENT，payload={"directiveId":"${directive.directiveId}","text":"补充说明（如涉及产物请先发布新版本并在 text 中说明）"}`,
+      );
     }
 
     switch (meta.phase) {
@@ -1134,17 +1185,21 @@ export class Hub {
 
       case "open": {
         const owner = seats.find((s) => s.seatId === meta.ownerSeat);
-        if (!owner) return null;
+        if (!owner) return null; // 自建问询桌：ownerSeat=ASKER_SEAT 虚拟席，open 期不授发言权
         // 主持人不参与就绪设定（hosted 桌）：就绪判定只看各方
         const def = tableTypeOf(meta.tableType);
         const allReady = seats.filter((s) => s.role !== "host").every((s) => s.config.ready);
         const rolesOk = def.flow === "collab"
           ? seats.filter((s) => s.role === "collaborator").length >= 2
-          : seats.some((s) => s.role === "proposer") && seats.some((s) => s.role === "reviewer");
+          : def.flow === "inquiry"
+            ? seats.some((s) => s.role === "answerer")
+            : seats.some((s) => s.role === "proposer") && seats.some((s) => s.role === "reviewer");
         return grant(
           owner.seatId,
           allReady && rolesOk
-            ? "全员已就绪：POST /api/tables/:id/start 开始会议"
+            ? def.flow === "inquiry"
+              ? "回答方已就绪：等待问询方在网页开始问询（POST /api/tables/:id/my/start，由问询方执行）"
+              : "全员已就绪：POST /api/tables/:id/start 开始会议"
             : "设定阶段：等待各席位 SEAT_CONFIG 就绪（立场/范围/数据范围），邀请参与方入桌后点开始",
         );
       }
@@ -1783,7 +1838,7 @@ export class Hub {
   private controllerOf(userToken: string, tableId: string): { meta: TableMeta; by: { seatId: string; name: string; role: string } } {
     const user = this.requireUser(userToken);
     const meta = this.requireTable(tableId);
-    if (tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(tableId, meta.ownerSeat) === user.userId) {
+    if (tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(tableId, ASKER_SEAT) === user.userId) {
       return { meta, by: { seatId: ASKER_SEAT, name: user.name, role: "asker" } };
     }
     const seatId = this.store.seatOfUser(tableId, user.userId);
@@ -1957,7 +2012,7 @@ export class Hub {
     if (user.role === "systemadmin") return this.store.listTables();
     return this.store.listTables().filter((t) =>
       this.activeSeatOfUser(t.tableId, user.userId)
-      || (tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, t.ownerSeat) === user.userId));
+      || (tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, ASKER_SEAT) === user.userId));
   }
 
   /** 观察端桌列表：可见桌摘要 + 当前用户在各桌的席位标记（null = 无席位，供「我的席位」徽章/筛选）；
@@ -1966,7 +2021,7 @@ export class Hub {
     return this.tablesForUser({ userId, role }).map((t) => {
       const seatId = this.store.seatOfUser(t.tableId, userId);
       const seat = seatId ? this.store.getSeat(t.tableId, seatId) : null;
-      if (!seat && tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, t.ownerSeat) === userId) {
+      if (!seat && tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, ASKER_SEAT) === userId) {
         return { ...t, mySeatRole: "asker" as const, mySeatName: null };
       }
       return { ...t, mySeatRole: seat ? seat.role : null, mySeatName: seat ? seat.name : null };
@@ -1990,7 +2045,7 @@ export class Hub {
    *  收权：普通用户仅可查看自己参与的圆桌（systemadmin 全量观察） */
   observerDetail(tableId: string, userId?: string, role: "user" | "systemadmin" = "user") {
     const meta = this.requireTable(tableId);
-    const isAsker = tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(tableId, meta.ownerSeat) === userId;
+    const isAsker = tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(tableId, ASKER_SEAT) === userId;
     if (userId && role !== "systemadmin" && !this.activeSeatOfUser(tableId, userId) && !isAsker) {
       throw new ApiError(403, "not_participant", "仅可查看自己参与的圆桌（你在本桌没有席位）");
     }

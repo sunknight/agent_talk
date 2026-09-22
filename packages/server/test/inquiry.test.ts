@@ -87,14 +87,92 @@ describe("问询桌：建桌与开始", () => {
     expect(info.data.isAsker).toBe(true);
   });
 
-  it("hosted + inquiry 拒绝（422 bad_mode）", async () => {
-    const user = await reg("模式校验");
+  it("主持人建问询桌：host 席位 + 三码（asker/answerer/observer）；问询方凭码就位（不占席位、唯一）", async () => {
+    const hostUser = await reg("问询主持人");
     const r = await call("POST", "/api/tables", {
-      token: user,
-      body: { tableType: "inquiry", mode: "hosted", topic: "x", owner: { seatName: "A", agentLabel: "human" } },
+      token: hostUser,
+      body: { tableType: "inquiry", mode: "hosted", topic: "主持人建问询桌", owner: { seatName: "主持人", agentLabel: "human" } },
     });
-    expect(r.ok).toBe(false);
-    expect(r.error!.code).toBe("bad_mode");
+    expect(r.ok, JSON.stringify(r.error)).toBe(true);
+    expect(r.data.mode).toBe("hosted");
+    expect(r.data.ownerSeatToken).not.toBe(""); // host 有席位 token
+    const roles = (r.data.inviteCodes as { role: string }[]).map((c) => c.role).sort();
+    expect(roles).toEqual(["answerer", "asker", "observer"]);
+    const code = (role: string) => (r.data.inviteCodes as { code: string; role: string }[]).find((c) => c.role === role)!.code;
+    const tableId = r.data.tableId as string;
+
+    // 问询方凭码就位：走同一入席接口，role=asker，不建席位
+    const askerUser = await reg("问询方-张三");
+    const az = await call("POST", `/api/tables/${tableId}/seats`, {
+      token: askerUser, body: { inviteCode: code("asker"), seatName: "张三", role: "asker", agentLabel: "human-only" },
+    });
+    expect(az.ok, JSON.stringify(az.error)).toBe(true);
+    expect(az.data.asker).toBe(true);
+    expect(az.data.token).toBe("");
+    expect(az.data.seat).toBeNull();
+
+    // 第二人凭 asker 码 → 409 asker_exists（问询方唯一）
+    const askerUser2 = await reg("问询方-李四");
+    const az2 = await call("POST", `/api/tables/${tableId}/seats`, {
+      token: askerUser2, body: { inviteCode: code("asker"), seatName: "李四", role: "asker", agentLabel: "human-only" },
+    });
+    expect(az2.error!.code).toBe("asker_exists");
+
+    // 预检接口：问询方身份与 myAsker 标记
+    const pv = await call("POST", "/api/invites/preview", { token: askerUser, body: { code: code("asker") } });
+    expect(pv.data.myAsker).toBe(true);
+    const pv2 = await call("POST", "/api/invites/preview", { token: askerUser2, body: { code: code("asker") } });
+    expect(pv2.data.myAsker).toBe(false);
+
+    // 观察端：问询方无席位仍可见本桌（isAsker），host 席位在列
+    const od = await call("GET", `/api/observer/tables/${tableId}`, { token: askerUser });
+    expect(od.ok).toBe(true);
+    expect(od.data.isAsker).toBe(true);
+    expect(od.data.table.seats).toHaveLength(1); // 仅 host
+    expect(od.data.table.seats[0].role).toBe("host");
+
+    // 未就位时问询方无法开始（not_asker）；就位后与自建问询桌同一语义
+    const stranger = await reg("问询桌-路人");
+    const deny = await call("POST", `/api/tables/${tableId}/my/start`, { token: stranger });
+    expect(deny.error!.code).toBe("not_asker");
+  });
+
+  it("主持人建问询桌全流程：回答方就绪 → 问询方开始/提问/结束；host 与问询方均可暂停", async () => {
+    const hostUser = await reg("流程-主持人");
+    const r = await call("POST", "/api/tables", {
+      token: hostUser,
+      body: { tableType: "inquiry", mode: "hosted", topic: "主持人问询全流程", owner: { seatName: "主持人", agentLabel: "human" } },
+    });
+    const code = (role: string) => (r.data.inviteCodes as { code: string; role: string }[]).find((c) => c.role === role)!.code;
+    const tableId = r.data.tableId as string;
+
+    const askerUser = await reg("流程-问询方");
+    const az = await call("POST", `/api/tables/${tableId}/seats`, {
+      token: askerUser, body: { inviteCode: code("asker"), seatName: "提问者", role: "asker", agentLabel: "human-only" },
+    });
+    expect(az.ok).toBe(true);
+
+    await joinAnswerer(tableId, code("answerer"), "流程-回答方甲", "本服务架构与部署");
+
+    const s = await call("POST", `/api/tables/${tableId}/my/start`, { token: askerUser });
+    expect(s.ok, JSON.stringify(s.error)).toBe(true);
+
+    const q = await call("POST", `/api/tables/${tableId}/ask`, { token: askerUser, body: { text: "服务用什么端口？" } });
+    expect(q.ok, JSON.stringify(q.error)).toBe(true);
+
+    // host 也可暂停问询（控制人：问询方或主持人）
+    const p = await call("POST", `/api/tables/${tableId}/my/pause`, { token: hostUser, body: { reason: "中场休息" } });
+    expect(p.ok, JSON.stringify(p.error)).toBe(true);
+    const qPaused = await call("POST", `/api/tables/${tableId}/ask`, { token: askerUser, body: { text: "暂停期能问吗" } });
+    expect(qPaused.error!.code).toBe("meeting_paused");
+    const rs = await call("POST", `/api/tables/${tableId}/my/resume`, { token: askerUser });
+    expect(rs.ok, JSON.stringify(rs.error)).toBe(true);
+
+    const e = await call("POST", `/api/tables/${tableId}/end-inquiry`, { token: askerUser, body: { reason: "问完了" } });
+    expect(e.ok, JSON.stringify(e.error)).toBe(true);
+    const info = await call("GET", `/api/observer/tables/${tableId}`, { token: askerUser });
+    expect(info.data.table.phase).toBe("closed");
+    expect(JSON.stringify(info.data.minutes)).toContain("问询");
   });
 
   it("开始校验：无回答方 409；未就绪 409；非问询方 403；就绪后 open→qa", async () => {
