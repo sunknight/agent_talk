@@ -2,7 +2,7 @@
  * 观察端 Web 控制台（单页，零构建）— GET / 下发。
  * 功能：圆桌列表（筛选/我的席位标记）/ 建桌 / 桌详情（圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/时间线/纪要）/
  *       我的席位面板（入桌设定·回填、开始会议·建桌人、持发言权人工代答、给 agent 直达指令）/
- *       身份体系：普通参与用户 vs 🛡 systemadmin（系统观察员·全局观察模式，界面金徽章区分，纯只读+正常能力）/
+ *       身份体系：普通参与用户 vs systemadmin（系统观察员·全局观察模式，界面金徽章区分，纯只读+正常能力）/
  *       帮助体系：未登录页 agent 接入指引（安装+注册，可复制）、列表页底部帮助速览、右上角帮助弹窗。
  * 安全：所有动态内容经 esc()（文本）/ escAttr()（属性）转义后插入（消息是远端内容，绝不 innerHTML 直插）。
  * 注意：模板字符串内禁用反引号；${} 仅允许 TABLE_TYPES 注入一处（构建期常量 JSON，无任何用户输入）。
@@ -15,22 +15,31 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>圆桌观察端 · agent-talk</title>
 <style>
-  :root { --bg:#0f1117; --panel:#171a23; --line:#2a2f3d; --fg:#e6e9f0; --dim:#8b93a7; --acc:#4f8cff; --ok:#3fb68b; --warn:#e0a23c; --err:#e05c5c; --gold:#e8c877; --goldline:#a8853f; --vote:#b07ce8; }
+  :root { --bg:#0f1117; --panel:#171a23; --panel-2:#1c2231; --line:#2a2f3d; --line-2:#3a4256; --fg:#e6e9f0; --dim:#a2abc0; --acc:#4f8cff; --acc-bg:rgba(79,140,255,.13); --ok:#3fb68b; --warn:#e0a23c; --err:#e05c5c; --gold:#e8c877; --goldline:#a8853f; --vote:#b07ce8; --r:8px; --r-lg:12px; --tt:.18s; }
   * { box-sizing:border-box; }
   body { margin:0; font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--fg); }
-  header { display:flex; gap:12px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5; flex-wrap:wrap; }
-  header h1 { font-size:16px; margin:0; white-space:nowrap; }
+  header { display:flex; gap:12px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:rgba(15,17,23,.96); z-index:5; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; white-space:nowrap; letter-spacing:.02em; }
   header .sp { flex:1; }
-  input,select,textarea,button { font:inherit; border:1px solid var(--line); background:var(--panel); color:var(--fg); border-radius:8px; padding:6px 10px; }
+  input,select,textarea,button { font:inherit; border:1px solid var(--line); background:var(--panel); color:var(--fg); border-radius:var(--r); padding:7px 12px; transition:border-color var(--tt),background var(--tt),color var(--tt),box-shadow var(--tt),opacity var(--tt); }
+  input:focus,select:focus,textarea:focus { border-color:var(--acc); box-shadow:0 0 0 3px var(--acc-bg); outline:none; }
+  input::placeholder,textarea::placeholder { color:#838da6; }
+  select { cursor:pointer; }
   button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--line-2); background:var(--panel-2); }
   button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.primary:hover:not(:disabled) { background:#3e7bef; border-color:#3e7bef; }
+  button.danger { color:var(--err); border-color:rgba(224,92,92,.5); background:transparent; }
+  button.danger:hover:not(:disabled) { color:#ff7a7a; border-color:var(--err); background:rgba(224,92,92,.1); }
   button:disabled { opacity:.45; cursor:not-allowed; }
-  main { padding:20px; max-width:1200px; margin:0 auto; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  :focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
+  main { padding:20px; max-width:1560px; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:14px; }
   .tables { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
-  .tcard { cursor:pointer; transition:border-color .15s; }
-  .tcard:hover { border-color:var(--acc); }
-  .badge { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
+  .tcard { cursor:pointer; transition:border-color var(--tt),background var(--tt); }
+  .tcard:hover { border-color:var(--acc); background:var(--panel-2); }
+  .tcard .t-title { font-size:15px; font-weight:600; line-height:1.45; }
+  .badge { display:inline-flex; align-items:center; gap:4px; padding:1px 9px; border-radius:99px; font-size:12px; border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
   .badge.phase { color:var(--acc); border-color:var(--acc); }
   .badge.ok { color:var(--ok); border-color:var(--ok); }
   .badge.err { color:var(--err); border-color:var(--err); }
@@ -39,64 +48,94 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .dim { color:var(--dim); font-size:12px; }
   .turn { border-left:3px solid var(--acc); padding-left:12px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--dim); font-weight:500; }
-  .msg { border-left:3px solid var(--line); padding:6px 10px; margin:6px 0; border-radius:0 8px 8px 0; background:#141722; }
-  .msg .meta { color:var(--dim); font-size:12px; }
-  .msg.inject { border-color:var(--err); background:#2a1414; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; font-size:12px; white-space:nowrap; }
+  table tr:last-child td { border-bottom:none; }
+  table tr:hover td { background:rgba(255,255,255,.02); }
+  .msg { border-left:3px solid var(--line); padding:8px 12px; margin:8px 0; border-radius:0 var(--r) var(--r) 0; background:#141722; transition:border-color var(--tt); }
+  .msg:hover { border-left-color:var(--line-2); }
+  .msg .meta { display:block; color:var(--dim); font-size:12px; margin:3px 0 4px; }
+  .msg > div { overflow-wrap:anywhere; }
+  .msg.inject { border-color:var(--err); background:#241315; }
   .mine { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc) inset; }
-  .frm h4 { margin:16px 0 6px; font-size:13px; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  .frm h4 { margin:18px 0 8px; font-size:13px; border-bottom:1px solid var(--line); padding-bottom:5px; }
   .frm h4:first-child { margin-top:0; }
-  .frm .frow { margin:10px 0; }
-  .frm .frow label.t { display:block; font-size:12px; color:var(--dim); margin-bottom:4px; }
-  .frm .frow label.t b { color:var(--acc); font-weight:600; }
+  .frm .frow { margin:12px 0; }
+  .frm .frow label.t, .frow label.t { display:block; font-size:12px; color:var(--dim); margin-bottom:5px; font-weight:500; }
+  .frm .frow label.t b, .frow label.t b { color:var(--err); font-weight:600; }
+  .frow > input, .frow > textarea, .frow > select { width:100%; }
   .invite { font-family:ui-monospace,Menlo,monospace; letter-spacing:1px; }
-  #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--acc); color:#fff; padding:8px 18px; border-radius:99px; display:none; z-index:9; }
+  #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--acc); color:#fff; padding:9px 20px; border-radius:99px; display:none; z-index:30; box-shadow:0 8px 24px rgba(0,0,0,.4); font-size:13px; animation:toastIn .22s ease; }
+  @keyframes toastIn { from { opacity:0; transform:translate(-50%,10px); } to { opacity:1; transform:translate(-50%,0); } }
   .section { margin-top:10px; }
   .section h3 { font-size:13px; color:var(--dim); margin:14px 0 6px; font-weight:600; }
-  textarea { width:100%; min-height:60px; }
-  .back { color:var(--acc); cursor:pointer; }
+  textarea { width:100%; min-height:72px; }
+  .back { color:var(--acc); cursor:pointer; user-select:none; }
+  .back:hover { text-decoration:underline; }
+  /* 分区卡头（详情页各区统一：标题 + dim 说明 + 右侧操作） */
+  .shead { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin:0 0 10px; }
+  .shead > b { font-size:14px; }
+  .shead .sp { flex:1; }
+  /* 表单错误/说明：错误行非空时呈警示条 */
+  .ferr { color:var(--err); font-size:12px; min-height:16px; margin-top:6px; }
+  .ferr:not(:empty) { background:rgba(224,92,92,.08); border-left:2px solid var(--err); padding:6px 10px; border-radius:4px; }
+  .hint { color:var(--dim); font-size:12px; margin-top:3px; line-height:1.55; }
+  /* 卡片式单选（桌类型/建桌模式）与胶囊多选（开放角色） */
+  .rchoice { display:grid; gap:8px; }
+  .rchoice.two { grid-template-columns:1fr 1fr; }
+  .rchoice label { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel); cursor:pointer; transition:border-color var(--tt),background var(--tt); }
+  .rchoice label:hover { border-color:var(--line-2); background:var(--panel-2); }
+  .rchoice label:has(input:checked) { border-color:var(--acc); background:var(--acc-bg); }
+  .rchoice input { margin-top:3px; accent-color:var(--acc); flex:none; }
+  .cchoice { display:flex; flex-wrap:wrap; gap:8px; }
+  .cchoice label { display:inline-flex; gap:6px; align-items:center; padding:5px 12px; border:1px solid var(--line); border-radius:99px; cursor:pointer; font-size:13px; transition:border-color var(--tt),background var(--tt),color var(--tt); }
+  .cchoice label:hover { border-color:var(--line-2); background:var(--panel-2); }
+  .cchoice label:has(input:checked) { border-color:var(--acc); color:var(--acc); background:var(--acc-bg); }
+  .cchoice input { accent-color:var(--acc); }
   /* 身份徽章：全局 systemadmin（金） vs 普通参与用户 */
-  .wbadge { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; white-space:nowrap; }
+  .wbadge { display:inline-flex; align-items:center; gap:4px; padding:1px 9px; border-radius:99px; font-size:12px; white-space:nowrap; }
   .wbadge.admin { color:var(--gold); border:1px solid var(--goldline); background:rgba(212,169,78,.12); }
   .wbadge.user { color:var(--dim); border:1px solid var(--line); }
-  .banner { padding:8px 14px; border-radius:10px; margin-bottom:12px; font-size:13px; }
+  .banner { padding:9px 14px; border-radius:var(--r-lg); margin-bottom:12px; font-size:13px; line-height:1.6; }
   .banner.admin { color:var(--gold); background:rgba(212,169,78,.10); border:1px solid var(--goldline); }
   .banner.obs { color:var(--dim); background:var(--panel); border:1px dashed var(--line); }
   /* 桌内角色徽章 */
-  .rb { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; white-space:nowrap; }
-  .rb.proposer { color:var(--acc); border:1px solid var(--acc); }
-  .rb.reviewer { color:var(--ok); border:1px solid var(--ok); }
-  .rb.observer { color:var(--dim); border:1px solid var(--line); }
-  .rb.host { color:#c9a227; border:1px solid #c9a227; }
-  .rb.collaborator { color:var(--vote); border:1px solid var(--vote); }
-  .rb.ttype { color:var(--warn); border:1px dashed var(--warn); }
+  .rb { display:inline-flex; align-items:center; gap:4px; padding:1px 9px; border-radius:99px; font-size:12px; white-space:nowrap; border:1px solid var(--line); }
+  .rb.proposer { color:var(--acc); border-color:var(--acc); }
+  .rb.reviewer { color:var(--ok); border-color:var(--ok); }
+  .rb.observer { color:var(--dim); border-color:var(--line); }
+  .rb.host { color:#d9b23a; border-color:#c9a227; }
+  .rb.collaborator { color:var(--vote); border-color:var(--vote); }
+  .rb.ttype { color:var(--warn); border-color:var(--warn); border-style:dashed; }
   /* chips 输入器（数据范围） */
-  .chips { display:flex; flex-wrap:wrap; gap:6px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--panel); min-height:38px; align-items:center; }
-  .chips input { border:none; background:transparent; padding:2px 4px; flex:1; min-width:130px; }
-  .chips input:focus { outline:none; }
-  .chip { display:inline-flex; align-items:center; gap:4px; padding:1px 6px 1px 8px; border-radius:99px; border:1px solid var(--acc); color:var(--acc); font-size:12px; font-family:ui-monospace,Menlo,monospace; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; padding:6px 8px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel); min-height:38px; align-items:center; transition:border-color var(--tt),box-shadow var(--tt); }
+  .chips:focus-within { border-color:var(--acc); box-shadow:0 0 0 3px var(--acc-bg); }
+  .chips input { border:none; background:transparent; padding:2px 4px; flex:1; min-width:130px; box-shadow:none; }
+  .chips input:focus { outline:none; box-shadow:none; }
+  .chip { display:inline-flex; align-items:center; gap:4px; padding:1px 6px 1px 8px; border-radius:99px; border:1px solid var(--acc); color:var(--acc); font-size:12px; font-family:ui-monospace,Menlo,monospace; background:var(--acc-bg); }
   .chip b { cursor:pointer; color:var(--dim); font-weight:400; padding:0 3px; }
   .chip b:hover { color:var(--err); }
-  .preset { font-size:12px; padding:2px 10px; border-radius:99px; color:var(--dim); border:1px dashed var(--line); background:transparent; cursor:pointer; }
+  .preset { font-size:12px; padding:3px 11px; border-radius:99px; color:var(--dim); border:1px dashed var(--line); background:transparent; cursor:pointer; transition:color var(--tt),border-color var(--tt); }
   .preset:hover { color:var(--acc); border-color:var(--acc); }
   /* 列表筛选 */
-  .fbtn { font-size:12px; padding:2px 10px; border-radius:99px; border:1px solid var(--line); color:var(--dim); background:transparent; cursor:pointer; }
-  .fbtn.on { color:var(--acc); border-color:var(--acc); }
+  .fbtn { font-size:12px; padding:3px 11px; border-radius:99px; border:1px solid var(--line); color:var(--dim); background:transparent; cursor:pointer; transition:color var(--tt),border-color var(--tt),background var(--tt); }
+  .fbtn:hover { color:var(--acc); border-color:var(--acc); }
+  .fbtn.on { color:var(--acc); border-color:var(--acc); background:var(--acc-bg); }
   /* 阶段进度条 */
   .steps { display:flex; gap:4px; margin:12px 0 4px; }
   .step { flex:1; text-align:center; font-size:12px; color:var(--dim); }
-  .step .bar { height:4px; border-radius:2px; background:var(--line); margin-bottom:6px; }
+  .step .bar { height:4px; border-radius:2px; background:var(--line); margin-bottom:6px; transition:background var(--tt); }
   .step.done .bar { background:var(--ok); }
   .step.cur .bar { background:var(--acc); }
   .step.cur { color:var(--acc); font-weight:600; }
-  .hint { color:var(--dim); font-size:12px; margin-top:2px; }
-  .ferr { color:var(--err); font-size:12px; min-height:16px; margin-top:6px; }
-  .kv { margin:4px 0; font-size:13px; }
-  .kv .k { color:var(--dim); margin-right:6px; }
-  .sumcard { background:#141722; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:8px 0; }
+  .kv { margin:5px 0; font-size:13px; line-height:1.6; }
+  .kv .k { display:inline-block; min-width:3.2em; color:var(--dim); margin-right:8px; }
+  /* 带标签的 kv 行：标签固定左栏、内容悬挂对齐（长文换行不回行首） */
+  .kv:has(.k) { position:relative; padding-left:4.4em; }
+  .kv:has(.k) .k { position:absolute; left:0; top:0; min-width:0; margin-right:0; }
+  .sumcard { background:#141722; border:1px solid var(--line); border-radius:var(--r); padding:10px 12px; margin:8px 0; }
   /* 消息类型徽章 */
-  .mt { display:inline-block; font-size:11px; padding:0 6px; border-radius:4px; border:1px solid var(--line); color:var(--dim); font-weight:500; margin-right:4px; white-space:nowrap; }
+  .mt { display:inline-flex; align-items:center; font-size:11px; padding:0 7px; border-radius:4px; border:1px solid var(--line); color:var(--dim); font-weight:500; margin-right:4px; white-space:nowrap; }
   .mt-phase { color:var(--acc); border-color:var(--acc); }
   .mt-st { color:var(--acc); border-color:var(--acc); }
   .mt-rev { color:var(--ok); border-color:var(--ok); }
@@ -104,31 +143,36 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .mt-req { color:var(--warn); border-color:var(--warn); }
   .mt-vote { color:var(--vote); border-color:var(--vote); }
   .mt-min { color:var(--acc); border-color:var(--acc); }
-  #regBox { position:fixed; top:54px; right:20px; width:300px; z-index:8; margin:0; }
+  #regBox { position:fixed; top:54px; right:20px; width:300px; z-index:8; margin:0; box-shadow:0 12px 32px rgba(0,0,0,.45); }
   /* 资料文档预览弹层（body 级，不受轮询重渲染影响） */
   .dmodal { position:fixed; inset:0; background:rgba(6,8,12,.74); z-index:20; display:flex; align-items:center; justify-content:center; }
-  .dmodal .dbox { background:var(--panel); border:1px solid var(--line); border-radius:12px; width:min(940px,94vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden; }
+  .dmodal .dbox { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); width:min(940px,94vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 64px rgba(0,0,0,.5); }
   .dmodal .dhead { display:flex; gap:10px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
   .dmodal .dbody { padding:16px; overflow:auto; min-height:120px; }
   .dmodal pre { white-space:pre-wrap; word-break:break-word; font:12.5px/1.7 ui-monospace,Menlo,monospace; }
   .dmodal img { max-width:100%; border-radius:6px; }
   .dmodal iframe { width:100%; height:70vh; border:none; border-radius:6px; background:#fff; }
-  .dmodal .mdv { font-size:14px; line-height:1.75; }
-  .dmodal .mdv h2,.dmodal .mdv h3,.dmodal .mdv h4,.dmodal .mdv h5 { margin:14px 0 6px; }
-  .dmodal .mdv pre { background:#141722; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
-  .dmodal .mdv code { background:#141722; border-radius:4px; padding:0 5px; font:12.5px ui-monospace,Menlo,monospace; }
-  .dmodal .mdv a { color:var(--acc); }
+  .mdv { font-size:14px; line-height:1.75; }
+  .mdv p { margin:6px 0; }
+  .mdv ul { margin:4px 0; padding-left:20px; }
+  .mdv li { margin:3px 0; }
+  .mdv h2,.mdv h3,.mdv h4,.mdv h5 { margin:14px 0 6px; }
+  .mdv pre { background:#141722; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .mdv code { background:#141722; border-radius:4px; padding:0 5px; font:12.5px ui-monospace,Menlo,monospace; }
+  .mdv a { color:var(--acc); }
   /* 圆桌示意图（桌详情顶部：席位卡片环绕 + 最后交付摘要 + 发言权思考中标记，>8 席折叠） */
-  .rt-wrap { overflow-x:auto; }
-  .rt-stage { position:relative; width:760px; height:430px; margin:0 auto; }
-  .rt-ell { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:340px; height:190px; border:2px dashed var(--line); border-radius:50%; background:radial-gradient(closest-side,#1c2130,#141722); }
+  .rt-wrap { overflow-x:auto; padding-bottom:4px; }
+  .rt-stage { position:relative; width:760px; height:360px; margin:0 auto; }
+  .rt-ell { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:340px; height:140px; border:2px dashed var(--line); border-radius:50%; background:radial-gradient(closest-side,#1c2130,#141722); }
   .rt-center { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:320px; text-align:center; }
   .rt-topic { font-weight:600; font-size:14px; }
   .rt-turn { color:var(--acc); font-weight:600; margin-top:2px; }
   .rt-node { position:absolute; width:128px; transform:translate(-50%,-50%); z-index:1; }
-  .rt-card { background:#1b2030; border:1px solid var(--line); border-top:2px solid var(--line); border-radius:8px; padding:5px 8px 6px; text-align:left; }
+  .rt-card { background:#1b2030; border:1px solid var(--line); border-top:2px solid var(--line); border-radius:var(--r); padding:5px 8px 6px; text-align:left; transition:border-color var(--tt),background var(--tt); }
   .rt-card.proposer { border-top-color:var(--acc); }
   .rt-card.reviewer { border-top-color:var(--ok); }
+  .rt-card.collaborator { border-top-color:var(--vote); }
+  .rt-card.host { border-top-color:#c9a227; }
   .rt-card.more { border:1px dashed var(--line); background:transparent; text-align:center; color:var(--dim); cursor:pointer; }
   .rt-nm { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .rt-nm .rt-owner { color:var(--gold); font-weight:400; }
@@ -143,13 +187,80 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .rt-rest { border-top:1px dashed var(--line); margin-top:10px; padding-top:8px; }
   @keyframes rtpulse { 0% { box-shadow:0 0 0 0 rgba(79,140,255,.55); } 100% { box-shadow:0 0 0 12px rgba(79,140,255,0); } }
   /* 帮助体系：右上角帮助按钮 / agent 接入指令块 / 帮助弹窗 */
-  #helpBtn { font-size:12px; padding:3px 12px; border-radius:99px; color:var(--dim); border:1px solid var(--line); background:transparent; }
+  #helpBtn { font-size:12px; padding:3px 12px; border-radius:99px; color:var(--dim); border:1px solid var(--line); background:transparent; transition:color var(--tt),border-color var(--tt); }
   #helpBtn:hover { color:var(--acc); border-color:var(--acc); }
-  .helpbox { background:#141722; border:1px solid var(--line); border-radius:8px; padding:10px 12px; white-space:pre-wrap; word-break:break-word; font:12.5px/1.7 ui-monospace,Menlo,monospace; margin:8px 0; }
+  .helpbox { background:#141722; border:1px solid var(--line); border-radius:var(--r); padding:10px 12px; white-space:pre-wrap; word-break:break-word; font:12.5px/1.7 ui-monospace,Menlo,monospace; margin:8px 0; }
   #helpModal .dbody h4 { margin:18px 0 6px; font-size:14px; color:var(--acc); }
   #helpModal .dbody h4:first-child { margin-top:0; }
   #helpModal .dbody ul { margin:4px 0; padding-left:20px; }
   #helpModal .dbody li { margin:3px 0; }
+  /* 列表筛选 segmented 组 */
+  .fbar { display:inline-flex; gap:6px; flex-wrap:wrap; }
+  /* 问答类消息徽章（次级描边） */
+  .mt-q { color:var(--dim); border-color:var(--line-2); }
+  /* 凭证卡分区标题（与 .frm h4 同节奏） */
+  .csec { font-size:13px; font-weight:600; margin:16px 0 8px; padding-bottom:5px; border-bottom:1px solid var(--line); }
+  /* 一次性凭证大字（可断行） */
+  .invite.big { word-break:break-all; font-size:15px; }
+  /* 卡片语义描边：金=管理员专属，红=警示 */
+  .card.gold { border-color:var(--goldline); }
+  .card.alert { border-color:var(--err); }
+  /* 警示横幅（人工介入等） */
+  .banner.err { color:var(--err); background:rgba(224,92,92,.08); border:1px solid rgba(224,92,92,.5); }
+  /* 小号控件（表格行内按钮 / 紧凑下拉）与超小号说明字 */
+  .sm { font-size:12px; padding:2px 8px; }
+  .xs { font-size:11px; }
+  /* 复选行（label 内嵌 checkbox） */
+  .chk { display:inline-flex; gap:6px; align-items:center; font-size:13px; cursor:pointer; }
+  .chk input { accent-color:var(--acc); }
+  /* 就绪对勾 */
+  .tick { color:var(--ok); }
+  /* 正文内联警示字 */
+  .hi-err { color:var(--err); }
+  /* 示意图图例色点（与 rt-card 顶边色一致） */
+  .lgd { display:inline-flex; gap:10px; align-items:center; white-space:nowrap; }
+  .lgd i { font-style:normal; }
+  .lgd .proposer { color:var(--acc); }
+  .lgd .reviewer { color:var(--ok); }
+  .lgd .collaborator { color:var(--vote); }
+  .lgd .host { color:#c9a227; }
+  .lgd .observer { color:var(--dim); }
+  /* 详情页左右分栏：左≈40%（观点与过程），右≈60%（我的操作与交付）；窄屏退单列 */
+  .dcols { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,3fr); gap:0 14px; align-items:start; }
+  .dcol { min-width:0; }
+  @media (max-width:980px) { .dcols { grid-template-columns:1fr; } }
+  /* 合并流类型筛选条（平铺胶囊多选 + 全选） */
+  .tbar { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
+  /* 详情页子卡（观点/交付/资料/请求）与卡网格 */
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:10px; }
+  .vcards { display:grid; gap:10px; }
+  .vcard,.acard,.dcard,.rcard { background:var(--panel-2); border:1px solid var(--line); border-radius:var(--r); padding:10px 12px; transition:border-color var(--tt),background var(--tt); }
+  .vcard { border-top:2px solid var(--line); }
+  .vcard.proposer { border-top-color:var(--acc); }
+  .vcard.reviewer { border-top-color:var(--ok); }
+  .vcard.collaborator { border-top-color:var(--vote); }
+  .vcard.host { border-top-color:#c9a227; }
+  .vcard .kv { margin:4px 0 0; }
+  .rcard { border-left:3px solid var(--line); }
+  .rcard.ok { border-left-color:var(--ok); }
+  .rcard.err { border-left-color:var(--err); }
+  .rcard.warn { border-left-color:var(--warn); }
+  /* 执行请求卡可点击（弹详情）；悬停描边高亮 */
+  .rcard { cursor:pointer; }
+  .rcard:hover { border-color:var(--acc); background:#20263a; }
+  /* 时间线阶段分隔条（回合过程轴：阶段变更不再是普通消息条） */
+  .phasediv { display:flex; align-items:center; gap:10px; margin:12px 0 8px; font-size:12px; }
+  .phasediv::before,.phasediv::after { content:''; flex:1; height:1px; background:var(--line); }
+  /* 深色主题滚动条 */
+  * { scrollbar-width:thin; scrollbar-color:#333a4d transparent; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#333a4d; border-radius:6px; border:2px solid transparent; background-clip:padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background:#434d66; background-clip:padding-box; }
+  /* 动效偏好：尊重系统减少动态设置 */
+  @media (prefers-reduced-motion:reduce) {
+    * { animation:none !important; transition:none !important; }
+  }
 </style>
 </head>
 <body>
@@ -161,7 +272,7 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   <span id="loginArea"></span>
 </header>
 <div id="regBox" class="card" style="display:none">
-  <b style="font-size:13px">注册新用户</b>
+  <div class="shead"><b>注册新用户</b></div>
   <div class="hint" style="margin:4px 0 8px">注册即创建参与用户（可建桌、凭邀请码入席）。</div>
   <input id="regName" placeholder="用户名" style="width:100%">
   <div class="row" style="margin-top:8px"><span class="sp"></span><button id="regCancel">取消</button><button id="regGo" class="primary">注册并连接</button></div>
@@ -193,6 +304,16 @@ var MSG_KEY = { PHASE_CHANGE:1, ARTIFACT_PUBLISHED:1, DOC_UPLOADED:1, CONSENSUS_
 var PRV_LABEL = { pass:'通过', redirect:'点名补充', skipped:'跳过（放行）' };
 var SEV_LABEL = { must:'必须', should:'建议', nice:'可选' };
 var MSG_HUMAN = { HUMAN_INPUT:1, HUMAN_RULING:1, ESCALATE:1, QUESTION:1, REPLY:1 };
+/* 合并流视图预设（view.msgFilter）：all 全选 / msg 会议历史 / chg 变动记录 / key 关键节点 / human 人工相关 */
+var MF_VIEWS=[['all','全选'],['msg','会议历史'],['chg','变动记录'],['key','关键节点'],['human','人工相关']];
+function mfShow(it){
+  var v=view.msgFilter||'all';
+  if(v==='all') return true;
+  if(v==='msg') return it.isMsg;
+  if(v==='chg') return !it.isMsg;
+  if(v==='key') return it.isMsg?!!MSG_KEY[it.ref.type]:(it.ref.kind==='phase'||it.ref.kind==='artifact'||it.ref.kind==='doc');
+  return it.isMsg?!!MSG_HUMAN[it.ref.type]:(it.ref.kind==='human');
+}
 /* 变动记录（recentChanges，与 agent 回合刷新的 changes 同源） */
 var CHG_LABEL = { doc:'资料', artifact:'产物', phase:'阶段', seat:'席位', human:'人工', message:'消息' };
 var CHG_CLS = { doc:'mt-sys', artifact:'mt-sys', phase:'mt-phase', seat:'mt-sys', human:'mt-human', message:'mt-q' };
@@ -365,13 +486,58 @@ function closeDocPreview(){
   });
   m.remove();
 }
+/* ---------- 执行请求详情弹窗（body 级，不受轮询重渲染影响） ----------
+   r=RequestRecord（req/status/response/createdAt/createdBy），展示打开时刻快照 */
+function closeRequestModal(){ var m=document.getElementById('reqModal'); if(m) m.remove(); }
+function openRequestModal(r,seats,arts){
+  closeRequestModal();
+  var st=r.status||'pending';
+  var cls=st==='executed'?'ok':(st==='rejected'?'err':((st==='pending'||st==='human')?'warn':''));
+  var resp=r.response, req=r.req||{};
+  var art=''; (arts||[]).forEach(function(a){ if(a.artifactId===req.artifactId) art=a.name; });
+  var head=(r.createdBy===req.toSeat)
+    ?('<div class="row">'+roleBadge(seatRoleOf(seats,r.createdBy))+'<b>'+esc(seatName(seats,r.createdBy))+'</b>'
+      +'<span class="badge">认领自办</span>'
+      +'<span class="sp"></span><span class="badge '+cls+'">'+esc(REQ_ST_LABEL[st]||st)+'</span></div>'
+      +'<div class="hint" style="margin-top:2px">接受评审意见后由本席自行修改完成，未委托其他席位</div>')
+    :('<div class="row">'+roleBadge(seatRoleOf(seats,r.createdBy))+'<b>'+esc(seatName(seats,r.createdBy))+'</b>'
+      +'<span class="dim">委托</span>'
+      +roleBadge(seatRoleOf(seats,req.toSeat))+'<b>'+esc(seatName(seats,req.toSeat))+'</b>'
+      +'<span class="sp"></span><span class="badge '+cls+'">'+esc(REQ_ST_LABEL[st]||st)+'</span></div>');
+  var body=head
+    +'<div class="kv" style="margin-top:8px"><span class="k">类型</span>'+esc(REQ_INTENT_LABEL[req.intent]||req.intent||'—')
+    +(req.intent==='modify_artifact'?' — 接收方须按要求发布新产物版本后才算执行完成':' — 接收方给出澄清说明即可')+'</div>'
+    +(art?'<div class="kv"><span class="k">产物</span>'+esc(art)+'</div>':'')
+    +'<div class="kv"><span class="k">发起</span>'+esc(new Date(r.createdAt).toLocaleString())+'</div>'
+    +(req.requestId?('<div class="kv"><span class="k">请求号</span><span class="invite">'+esc(req.requestId)+'</span></div>'):'')
+    +'<h3 style="margin:14px 0 4px">请求内容</h3><div class="sumcard" style="white-space:pre-wrap">'+esc(req.detail||'（无详细说明）')+'</div>';
+  if(resp){
+    var dcls=resp.decision==='accept'?'ok':(resp.decision==='reject'?'err':'warn');
+    body+='<h3 style="margin:14px 0 4px">处置结果</h3><div class="sumcard">'
+      +'<div class="kv"><span class="k">决定</span><span class="badge '+dcls+'">'+esc(REQD_LABEL[resp.decision]||resp.decision)+'</span>'
+      +((resp.requestIds&&resp.requestIds.length>1)?' <span class="dim">（批量处置 '+resp.requestIds.length+' 个请求）</span>':'')+'</div>'
+      +(resp.reason?('<div class="kv"><span class="k">理由</span>'+esc(resp.reason)+'</div>'):'')
+      +(resp.counterDetail?('<div class="kv"><span class="k">反提案</span>'+esc(resp.counterDetail)+'</div>'):'')
+      +'</div>';
+  } else {
+    body+='<div class="hint" style="margin-top:10px">待接收席位处置：接纳（修改产物类须先发布带本请求号的新版本）／拒绝／反提案／转人工。轮到接收方发言时，系统会把本请求作为待处理任务下发。</div>';
+  }
+  var m=document.createElement('div');
+  m.className='dmodal'; m.id='reqModal';
+  m.innerHTML='<div class="dbox" style="width:min(680px,94vw)">'
+    +'<div class="dhead"><span class="mt mt-req">执行请求</span><b>'+esc(req.title||'（无标题）')+'</b><span style="flex:1"></span><button id="rqClose">关闭</button></div>'
+    +'<div class="dbody">'+body+'</div></div>';
+  m.onclick=function(e){ if(e.target===m) closeRequestModal(); };
+  document.body.appendChild(m);
+  document.getElementById('rqClose').onclick=closeRequestModal;
+}
 /* ---------- 帮助弹窗（body 级，登录与否均可开；复用 dmodal 弹层体系） ---------- */
 function closeHelp(){ var m=document.getElementById('helpModal'); if(m) m.remove(); }
 function helpBodyHtml(){
   return '<h4>这是什么</h4>'
     +'<p>agent-talk 圆桌会谈系统：多人各自带着自己的 agent（zcode / claude / codex…）入座一张圆桌，agent 代表持有人完成评审、协作修改、讨价还价，人只在重要节点介入，最终接收共识结果。本页面是<b>观察端</b>（Web 控制台）；agent 通过 REST API + roundtable 技能参会。</p>'
     +'<h4>三步开一场圆桌</h4>'
-    +'<ul><li><b>① 创建圆桌</b>：列表页「➕ 创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策，决定流程与可选角色），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码。</li>'
+    +'<ul><li><b>① 创建圆桌</b>：列表页「创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策，决定流程与可选角色），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码。</li>'
     +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）。</li>'
     +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人点「▶ 开始会议」。</li></ul>'
     +'<h4>会议阶段</h4>'
@@ -399,7 +565,7 @@ function openHelp(){
   closeHelp();
   var m=document.createElement('div');
   m.className='dmodal'; m.id='helpModal';
-  m.innerHTML='<div class="dbox" style="width:min(760px,94vw)"><div class="dhead"><b>？ 系统帮助 · agent-talk 圆桌会谈</b><span style="flex:1"></span><button id="hpClose" class="primary">关闭</button></div>'
+  m.innerHTML='<div class="dbox" style="width:min(760px,94vw)"><div class="dhead"><b>？ 系统帮助 · agent-talk 圆桌会谈</b><span style="flex:1"></span><button id="hpClose">关闭</button></div>'
     +'<div class="dbody">'+helpBodyHtml()+'</div></div>';
   m.onclick=function(e){ if(e.target===m) closeHelp(); };
   document.body.appendChild(m);
@@ -414,7 +580,7 @@ function openDocPreview(doc){
   m.innerHTML='<div class="dbox"><div class="dhead"><b>'+esc(doc.name)+'</b>'
     +'<span class="badge phase">'+esc(doc.purpose||'')+'</span><span class="dim">'+fmtSize(doc.size)+'</span>'
     +'<span style="flex:1"></span>'
-    +'<button id="pvDl">下载</button><button id="pvClose" class="primary">关闭</button></div>'
+    +'<button id="pvDl">下载</button><button id="pvClose">关闭</button></div>'
     +'<div class="dbody" id="pvBody"><span class="dim">加载中…</span></div></div>';
   m.onclick=function(e){ if(e.target===m) closeDocPreview(); };
   document.body.appendChild(m);
@@ -457,13 +623,17 @@ function phaseBadge(ph, roundNo, tt){
 }
 function roleBadge(role){ return '<span class="rb '+esc(role)+'">'+esc(ROLE_LABEL[role]||role)+'</span>'; }
 function seatName(seats,id){ for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].name; } return id; }
+function seatRoleOf(seats,id){ for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].role; } return ''; }
 
 /* ---------- 圆桌示意图（桌详情顶部） ----------
-   席位环绕椭圆桌：每席标最后一个回合的交付摘要；发言权持有者 = 正在思考（脉冲标记）；
-   >8 席时环上只放 7 席 + 1 个「+N」节点，其余点击展开（view.rtExpanded 抗轮询重渲染）。 */
+   席位按九宫格方位左右优先布置（节约上下高度）：每席标最后一个回合的交付摘要；发言权持有者 = 正在思考（脉冲标记）；
+   >8 席时只放 7 席 + 1 个「+N」节点，其余点击展开（view.rtExpanded 抗轮询重渲染）。 */
 function clipStr(s,n){ s=String(s==null?'':s); return s.length>n?s.slice(0,n)+'…':s; }
 var VOTE_LABEL={pass:'赞成',conditional_pass:'有条件赞成',reject:'反对'};
 var REQD_LABEL={accept:'接纳',reject:'拒绝',counter:'反提案',escalate_human:'转人工'};
+/* 执行请求：状态（RequestStatus）与意图（RequestIntent）中文标签 */
+var REQ_ST_LABEL={pending:'待处置',accepted:'已接纳',executed:'已执行',rejected:'已拒绝',countered:'已反提案',human:'转人工'};
+var REQ_INTENT_LABEL={modify_artifact:'修改产物',clarify:'澄清说明'};
 /** 席位最后一条消息 → 摘要：label 短版（环上节点用），full 长版（title/展开清单用） */
 function lastDelivInfo(m){
   if(!m) return {label:'',full:''};
@@ -504,42 +674,52 @@ function roundDiagramHtml(d,seats,turn){
   var ringSeats=folded?sorted.slice(0,RING_MAX-1):sorted;
   var hidden=folded?sorted.slice(RING_MAX-1):[];
   var slots=ringSeats.length+(folded?1:0);
-  var CX=380, CY=215, RX=296, RY=162;
-  var h='<div class="card"><div class="row"><b>圆桌示意图</b>'
+  var CX=380, CY=180, RX=296, RY=110;
+  /* 九宫格方位（1左上 2正上 3右上 4左中 6右中 7左下 8正下 9右下；5=桌面）：
+     左右列成对展开——每列 1 席=中、2 席=上下角、3 席=角+中、4 席再补正上（左）/正下（右）；正上/正下最后启用 */
+  var GRID={ '1':[-0.707,-0.707], '2':[0,-1], '3':[0.707,-0.707], '4':[-1,0], '6':[1,0], '7':[-0.707,0.707], '8':[0,1], '9':[0.707,0.707] };
+  function gridSlots(n){
+    var L=Math.floor(n/2), R=n-L;
+    var left={ '1':[4], '2':[1,7], '3':[1,4,7], '4':[1,2,4,7] };
+    var right={ '1':[6], '2':[3,9], '3':[3,6,9], '4':[3,6,8,9] };
+    return (left[L]||[]).concat(right[R]||[]);
+  }
+  var gslots=gridSlots(slots);
+  var h='<div class="card"><div class="shead"><b>圆桌示意图</b>'
     +'<span class="dim">'+(folded
-      ?('共 '+seats.length+' 席 · 环上显示发言权/建桌人/最近发言的前 '+(RING_MAX-1)+' 席')
+      ?('共 '+seats.length+' 席 · 九宫格方位优先显示发言权/建桌人/最近发言的前 '+(RING_MAX-1)+' 席')
       :(seats.length+' 席全员就座'))
     +'</span><span class="sp"></span>'
-    +'<span class="dim" style="white-space:nowrap">●<span style="color:var(--acc)">提案方</span> ●<span style="color:var(--ok)">评审方</span> ● 观察方 · 💭 思考中 = 当前发言权</span></div>'
+    +'<span class="dim lgd"><i class="proposer">●</i>提案方<i class="reviewer">●</i>评审方<i class="collaborator">●</i>协作者<i class="host">●</i>主持人<i class="observer">●</i>观察方<span>· 思考中 = 当前发言权</span></span></div>'
     +'<div class="rt-wrap"><div class="rt-stage">'
     +'<div class="rt-ell"></div>'
     +'<div class="rt-center"><div class="rt-topic">'+esc(clipStr(t.topic,18))+'</div>'
     +'<div style="margin:4px 0">'+phaseBadge(t.phase,t.roundNo,t.tableType)+'</div>';
   if(turn){
-    h+='<div class="rt-turn">💭 '+esc(seatName(seats,turn.seatId))+' 思考中</div>'
-      +'<div class="dim" style="font-size:11px">'+esc(clipStr(turn.taskHint,26))+'</div>';
+    h+='<div class="rt-turn">'+esc(seatName(seats,turn.seatId))+' 思考中</div>'
+      +'<div class="dim xs">'+esc(clipStr(turn.taskHint,26))+'</div>';
   }
   else if(t.phase==='closed'){ h+='<div class="dim">会议已结束</div>'; }
   else if(t.phase==='human_intervention'){ h+='<div style="color:var(--err)">等待人工介入</div>'; }
   else { h+='<div class="dim">等待推进</div>'; }
   h+='</div>';
   ringSeats.forEach(function(s,idx){
-    var ang=-Math.PI/2+idx*2*Math.PI/slots;
-    var x=CX+RX*Math.cos(ang), y=CY+RY*Math.sin(ang);
+    var g=GRID[gslots[idx]]||[0,0];
+    var x=CX+g[0]*RX, y=CY+g[1]*RY;
     var lm=lastOf[s.seatId], di=lastDelivInfo(lm);
-    var dl=lm?di.label:(t.phase==='open'?(((s.config&&s.config.ready)?'✅ 已就绪':'未就绪')):'尚未发言');
+    var dl=lm?di.label:(t.phase==='open'?(((s.config&&s.config.ready)?'已就绪':'未就绪')):'尚未发言');
     var think=s.seatId===turnId;
     h+='<div class="rt-node'+(think?' think':'')+'" style="left:'+Math.round(x)+'px;top:'+Math.round(y)+'px"'
       +' title="'+escAttr(s.name+'（'+(ROLE_LABEL[s.role]||s.role)+' · agent: '+s.agentLabel+'）'+(lm?('｜最后交付：'+di.full+'（'+fmtTs(lm.ts)+'）'):'（尚未发言）'))+'">'
       +'<div class="rt-card '+esc(s.role)+'">'
       +'<div class="rt-nm">'+esc(s.name)+(s.seatId===t.ownerSeat?' <span class="rt-owner" title="建桌人">★</span>':'')+'</div>'
-      +'<div class="rt-tags">'+roleBadge(s.role)+(think?'<span class="rt-think">💭 思考中</span>':'')+'</div>'
+      +'<div class="rt-tags">'+roleBadge(s.role)+(think?'<span class="rt-think">● 思考中</span>':'')+'</div>'
       +'<div class="rt-dl">'+esc(dl)+'</div>'
       +'</div></div>';
   });
   if(folded){
-    var ang2=-Math.PI/2+(slots-1)*2*Math.PI/slots;
-    h+='<div class="rt-node rt-more" id="rtMore" style="left:'+Math.round(CX+RX*Math.cos(ang2))+'px;top:'+Math.round(CY+RY*Math.sin(ang2))+'px"'
+    var gm=GRID[gslots[slots-1]]||[0,0];
+    h+='<div class="rt-node rt-more" id="rtMore" style="left:'+Math.round(CX+gm[0]*RX)+'px;top:'+Math.round(CY+gm[1]*RY)+'px"'
       +' title="展开其余 '+hidden.length+' 个席位">'
       +'<div class="rt-card more"><div class="rt-nm">+'+hidden.length+' 其余席位</div><div class="rt-dl">点击展开</div></div></div>';
   }
@@ -575,9 +755,9 @@ function refreshWho(){
   }
   var admin=view.role==='systemadmin';
   who.innerHTML='<span>'+esc(view.userName)+'</span>'
-    +(admin?' <span class="wbadge admin">🛡 系统观察员 · 全局观察模式</span>':' <span class="wbadge user">参与用户</span>')
-    +(view.userId?' <span class="dim" style="font-size:11px">'+esc(view.userId)+'</span>':'');
-  la.innerHTML=(admin?'<button id="adminBtn">🛡 管理台</button>':'')+'<button id="logoutBtn">退出</button>';
+    +(admin?' <span class="wbadge admin">系统观察员 · 全局观察模式</span>':' <span class="wbadge user">参与用户</span>')
+    +(view.userId?' <span class="dim xs">'+esc(view.userId)+'</span>':'');
+  la.innerHTML=(admin?'<button id="adminBtn">管理台</button>':'')+'<button id="logoutBtn">退出</button>';
   if(admin) document.getElementById('adminBtn').onclick=openAdmin;
   document.getElementById('logoutBtn').onclick=doLogout;
 }
@@ -595,13 +775,16 @@ function doLogin(){
   if(!TOKEN){ toast('请输入 token'); return; }
   api('GET','/api/observer/tables').then(function(){
     localStorage.setItem('rt_token',TOKEN);
-    fetchMe(); openList();
+    fetchMe();
+    var tid=routeTableId(); // 打开的是分享链时，连接后直达该桌详情
+    if(tid) openTable(tid); else openList();
   }).catch(function(e){ toast('连接失败：'+e.message); });
 }
 function doLogout(){
   TOKEN=''; view.userName=''; view.userId=''; view.role='user';
   ['rt_token','rt_user_name','rt_user_id','rt_role'].forEach(function(k){ localStorage.removeItem(k); });
   clearInterval(view.timer); view.mode='intro';
+  if((location.hash||'')!=='') history.replaceState(null,'',location.pathname+location.search); // 登出清路由，避免残留详情 hash
   refreshWho(); renderIntro();
   document.getElementById('regBox').style.display='none';
 }
@@ -613,7 +796,9 @@ document.getElementById('regGo').onclick=function(){
     TOKEN=d.token; localStorage.setItem('rt_token',TOKEN);
     view.userName=name; localStorage.setItem('rt_user_name',name);
     document.getElementById('regBox').style.display='none';
-    fetchMe(); toast('已注册并连接'); openList();
+    fetchMe(); toast('已注册并连接');
+    var tid=routeTableId();
+    if(tid) openTable(tid); else openList();
   }).catch(function(e){ toast('注册失败：'+e.message); });
 };
 
@@ -648,25 +833,26 @@ function renderList(){
   else if(view.listFilter==='mine') list=list.filter(function(t){ return !!t.mySeatRole; });
 
   var h='';
-  if(admin) h+='<div class="banner admin">🛡 <b>全局观察模式</b> — 你正以系统观察员身份查看全部圆桌（非桌参与方视角；在本桌无席位时为只读观察）。</div>';
+  if(admin) h+='<div class="banner admin"><b>全局观察模式</b> — 你正以系统观察员身份查看全部圆桌（非桌参与方视角；在本桌无席位时为只读观察）。</div>';
   var fb=function(id,lbl){ return '<button class="fbtn'+(view.listFilter===id?' on':'')+'" data-f="'+id+'">'+lbl+'</button>'; };
-  h+='<div class="row" style="margin-bottom:12px"><b>圆桌列表</b><span class="dim">'+(admin?'全部 ':'我参与的 ')+view.listTables.length+' 桌</span>'
+  h+='<div class="row" style="margin-bottom:14px"><b style="font-size:16px">圆桌列表</b><span class="dim">'+(admin?'全部 ':'我参与的 ')+view.listTables.length+' 桌</span>'
     +'<span class="fbar">'+fb('all','全部')+fb('active','进行中')+fb('closed','已结束')+(admin?fb('mine','我的桌'):'')+'</span>'
-    +'<span class="sp"></span><button id="joinByCode">🎫 凭邀请码入桌</button><button id="createTable" class="primary">➕ 创建圆桌</button><button id="refreshList">刷新</button></div>';
+    +'<span class="sp"></span><button id="refreshList">刷新</button><button id="joinByCode">凭邀请码入桌</button><button id="createTable" class="primary">创建圆桌</button></div>';
 
   if(!view.listTables.length){
     h+='<div class="card dim">'+(admin
-      ?'全服务器还没有圆桌。点右上「➕ 创建圆桌」建一张。'
-      :'你还没有参与的圆桌。点右上「➕ 创建圆桌」建一张；收到邀请码可点「🎫 凭邀请码入桌」直接入席，或把「完整邀请」交给你的 agent 参会。')+'</div>';
+      ?'全服务器还没有圆桌。点右上「创建圆桌」建一张。'
+      :'你还没有参与的圆桌。点右上「创建圆桌」建一张；收到邀请码可点「凭邀请码入桌」直接入席，或把「完整邀请」交给你的 agent 参会。')+'</div>';
   } else if(!list.length){
     h+='<div class="card dim">'+((view.listFilter==='mine'&&admin)?'筛选「我的桌」无结果：你还没有在任何圆桌持有席位（可创建圆桌或凭邀请码入席）。':'该筛选下暂无圆桌。')+'</div>';
   }
   h+='<div class="tables">';
   list.forEach(function(t){
     h+='<div class="card tcard" data-tid="'+esc(t.tableId)+'">'
-      +'<div class="row"><b>'+esc(t.topic)+'</b>'+typeBadge(t.tableType)+phaseBadge(t.phase,0,t.tableType)+'</div>'
-      +(t.mySeatRole?'<div style="margin-top:6px">'+roleBadge(t.mySeatRole)+' <span class="dim">我的席位'+(t.mySeatName?'：'+esc(t.mySeatName):'')+'</span></div>':'')
-      +'<div class="dim" style="margin-top:6px">'+esc(t.tableId)+' · '+t.seatCount+' 席 · 创建于 '+fmtTs(t.createdAt)+'</div>'
+      +'<div class="row" style="align-items:flex-start"><b class="t-title">'+esc(t.topic)+'</b><span class="sp"></span>'+phaseBadge(t.phase,0,t.tableType)+'</div>'
+      +'<div class="row" style="margin-top:8px">'+typeBadge(t.tableType)
+      +(t.mySeatRole?roleBadge(t.mySeatRole)+' <span class="dim">我的席位'+(t.mySeatName?'：'+esc(t.mySeatName):'')+'</span>':'')+'</div>'
+      +'<div class="dim" style="margin-top:8px">'+esc(t.tableId)+' · '+t.seatCount+' 席 · 创建于 '+fmtTs(t.createdAt)+'</div>'
       +'</div>';
   });
   h+='</div>';
@@ -699,11 +885,11 @@ function openAdmin(){
 function renderAdminUsers(d){
   var app=document.getElementById('app');
   var users=d.users||[];
-  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="admBack">← 返回列表</span><span class="sp"></span><b>🛡 管理台 · 用户</b><span class="dim">'+users.length+' 个用户</span><button id="admRefresh">刷新</button></div>';
+  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="admBack">← 返回列表</span><span class="sp"></span><b>管理台 · 用户</b><span class="dim">'+users.length+' 个用户</span><button id="admRefresh">刷新</button></div>';
   h+='<div class="hint" style="margin-bottom:10px">授予/撤销管理员与禁用/启用均即时生效并写入审计；禁用 = 该用户 token 立即失效（agent 席位不受影响），可随时恢复。服务端只存 token 哈希、原始 token 不可取回：要把某用户接入浏览器登录，用「重签token」生成新登录 token（旧的立即失效，新 token 只显示这一次）。</div>';
   if(adminIssuedToken){
-    h+='<div class="card" style="margin-bottom:10px;border:1px solid #d90429">'
-      +'<b>🔑 新登录 token · '+esc(adminIssuedToken.name)+'</b>（只显示这一次，刷新后不可再查）'
+    h+='<div class="card alert" style="margin-bottom:10px">'
+      +'<b>新登录 token · '+esc(adminIssuedToken.name)+'</b>（只显示这一次，刷新后不可再查）'
       +'<div class="row" style="margin:8px 0"><input id="admNewToken" readonly value="'+escAttr(adminIssuedToken.token)+'" style="flex:1;min-width:260px">'
       +'<button class="primary" id="admCopyToken">复制 token</button></div>'
       +'<div class="hint">已复制即可粘贴到右上角登录框连接（浏览器 token 登录用它，不是 userId）；旧 token 已失效。</div></div>';
@@ -713,15 +899,15 @@ function renderAdminUsers(d){
   users.forEach(function(u){
     var isSelf=u.userId===view.userId;
     h+='<tr><td><b>'+esc(u.name)+'</b>'+(isSelf?' <span class="badge">我</span>':'')+'</td>'
-      +'<td class="dim">'+esc(u.userId)+' <button class="admCopyId" data-uid="'+escAttr(u.userId)+'">复制</button></td>'
-      +'<td>'+(u.role==='systemadmin'?'<span class="wbadge admin">🛡 系统观察员</span>':'<span class="wbadge user">参与用户</span>')+'</td>'
+      +'<td class="dim">'+esc(u.userId)+' <button class="admCopyId sm" data-uid="'+escAttr(u.userId)+'">复制</button></td>'
+      +'<td>'+(u.role==='systemadmin'?'<span class="wbadge admin">系统观察员</span>':'<span class="wbadge user">参与用户</span>')+'</td>'
       +'<td><span class="badge '+(u.disabled?'err':'ok')+'">'+(u.disabled?'已禁用':'正常')+'</span></td>'
       +'<td class="dim">'+fmtTs(u.createdAt)+'</td>'
       +'<td>'+u.seatCount+' <span class="dim">桌</span></td>'
-      +'<td><button class="admSeats" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'">参桌</button> '
-      +'<button class="admRole" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'" data-to="'+(u.role==='systemadmin'?'user':'systemadmin')+'">'+(u.role==='systemadmin'?'撤销管理员':'设为管理员')+'</button> '
-      +'<button class="admDis" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'" data-to="'+(u.disabled?'enable':'disable')+'">'+(u.disabled?'启用':'禁用')+'</button> '
-      +'<button class="admToken" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'">重签token</button></td></tr>';
+      +'<td><button class="admSeats sm" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'">参桌</button> '
+      +'<button class="admRole sm" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'" data-to="'+(u.role==='systemadmin'?'user':'systemadmin')+'">'+(u.role==='systemadmin'?'撤销管理员':'设为管理员')+'</button> '
+      +'<button class="admDis sm'+(u.disabled?'':' danger')+'" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'" data-to="'+(u.disabled?'enable':'disable')+'">'+(u.disabled?'启用':'禁用')+'</button> '
+      +'<button class="admToken sm danger" data-uid="'+escAttr(u.userId)+'" data-name="'+escAttr(u.name)+'">重签token</button></td></tr>';
   });
   h+='</table></div>';
   app.innerHTML=h;
@@ -782,8 +968,8 @@ function openAdminUserTables(uid,name){
         +'<td>'+esc(r.seatName)+'</td>'
         +'<td>'+roleBadge(r.role)+'</td>'
         +'<td><span class="badge '+(r.status==='active'?'ok':'warn')+'">'+esc(r.status)+'</span></td>'
-        +'<td>'+(r.ready?'✅':'—')+'</td>'
-        +'<td><button class="autGo" data-tid="'+escAttr(r.tableId)+'">进入圆桌</button></td></tr>';
+        +'<td>'+(r.ready?'<span class="tick">✓</span>':'—')+'</td>'
+        +'<td><button class="autGo sm" data-tid="'+escAttr(r.tableId)+'">进入圆桌</button></td></tr>';
     });
     h+='</table></div>';
     app.innerHTML=h;
@@ -799,16 +985,16 @@ function renderCreateForm(){
   var h='<div class="row" style="margin-bottom:12px"><span class="back" id="ctBackList">← 返回列表</span><span class="sp"></span><b>创建圆桌</b><span class="dim" id="ctModeHint">你将自动成为提案方（proposer）席位</span></div>';
   h+='<div class="card frm">'
     +'<h4>基本信息</h4>'
-    +'<div class="frow"><label class="t">桌类型 <b>*</b></label><div id="ctTypeRow">'
+    +'<div class="frow"><label class="t">桌类型 <b>*</b></label><div id="ctTypeRow" class="rchoice two">'
     +TABLE_TYPES.map(function(tt){
-      return '<label style="font-size:13px;display:block;margin:2px 0"><input type="radio" name="ctType" value="'+esc(tt.id)+'"'+(tt.id==='review'?' checked':'')+'> <b>'+esc(tt.label)+'</b> — '+esc(tt.description||'')+'</label>';
+      return '<label><input type="radio" name="ctType" value="'+esc(tt.id)+'"'+(tt.id==='review'?' checked':'')+'><span><b>'+esc(tt.label)+'</b><br><span class="hint" style="margin:0">'+esc(tt.description||'')+'</span></span></label>';
     }).join('')
     +'</div><div class="hint">类型决定流程语义与可选角色；开桌后不可更改</div></div>'
-    +'<div class="frow"><label class="t">建桌模式</label><div class="row">'
-    +'<label style="font-size:13px"><input type="radio" name="ctMode" value="self" checked> 各方自行建桌 — 我自动成为首个席位，直接参会</label>'
-    +'<label style="font-size:13px"><input type="radio" name="ctMode" value="hosted"> 主持人建桌 — 我只负责建桌/定规则/传文档/邀请与调度，不参与评审协作；各方提交过 DeepSeek 预审</label></div>'
+    +'<div class="frow"><label class="t">建桌模式</label><div class="rchoice two">'
+    +'<label><input type="radio" name="ctMode" value="self" checked><span><b>各方自行建桌</b><br><span class="hint" style="margin:0">我自动成为首个席位，直接参会</span></span></label>'
+    +'<label><input type="radio" name="ctMode" value="hosted"><span><b>主持人建桌</b><br><span class="hint" style="margin:0">我只负责建桌/定规则/传文档/邀请与调度，不参与评审协作；各方提交过 DeepSeek 预审</span></span></label></div>'
     +'<div class="hint" id="ctModeTip">主持人模式需服务器配置 DEEPSEEK_API_KEY（未配置时预审自动跳过放行）</div></div>'
-    +'<div class="frow"><label class="t">开放邀请的角色</label><div class="row" id="ctRoles"></div><div class="hint" id="ctRolesHint"></div></div>'
+    +'<div class="frow"><label class="t">开放邀请的角色</label><div class="cchoice" id="ctRoles"></div><div class="hint" id="ctRolesHint"></div></div>'
     +'<div class="frow"><label class="t" for="ctTopic">主题 <b>*</b></label><input id="ctTopic" placeholder="如「v2 接口文档评审」「产品白皮书协作撰写」"><div class="hint">一句话说清这桌评什么/协作什么</div></div>'
     +'<div class="frow"><label class="t" for="ctGoals">目标共识</label><input id="ctGoals" placeholder="本次要达成什么（可选）"><div class="hint">会议结束时希望各方同意的结论</div></div>'
     +'<div class="frow"><label class="t" for="ctDeliverables">期望交付物</label><input id="ctDeliverables" placeholder="如「修订后的 api.md」（可选）"></div>'
@@ -816,7 +1002,7 @@ function renderCreateForm(){
     +'<div class="frow"><label class="t" for="ctRules">桌规则</label><textarea id="ctRules" placeholder="供各方 agent 阅读遵守，如「逐条审阅」「互审补缺、认领必达」（可选）"></textarea></div>'
     +'<div class="frow"><label class="t" for="ctRolePlan">角色安排说明</label><textarea id="ctRolePlan" placeholder="对各参与方职责的补充描述，随邀请码发给各方（可选）"></textarea></div>'
     +'<h4 id="ctSeatTitle">我的席位（自动成为提案方）</h4>'
-    +'<div class="frow"><label class="t" for="ctSeatName">席位名 <b>*</b></label><input id="ctSeatName"'+(view.userName?' value="'+esc(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
+    +'<div class="frow"><label class="t" for="ctSeatName">席位名 <b>*</b></label><input id="ctSeatName"'+(view.userName?' value="'+escAttr(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
     +'<div class="frow"><label class="t" for="ctAgent">agent 标识（选填）</label><input id="ctAgent" placeholder="如 zcode / claude；留空 = human-only（先由人工参与，agent 后续接入）"></div>'
     +'<h4>高级参数（留空用默认）</h4>'
     +'<div class="row"><div class="frow" style="flex:1"><label class="t" for="ctRounds">评审轮次上限（默认 2）</label><input id="ctRounds" type="number" min="1" max="10"></div>'
@@ -842,7 +1028,7 @@ function renderCreateForm(){
     var tt=ttOf(ctType()), hosted=ctMode()==='hosted';
     var invitable=ctInvitable();
     document.getElementById('ctRoles').innerHTML=invitable.map(function(r){
-      return '<label style="font-size:13px;margin-right:14px"><input type="checkbox" name="ctRole" value="'+esc(r)+'" checked> '+(ROLE_LABEL[r]||r)+'</label>';
+      return '<label><input type="checkbox" name="ctRole" value="'+esc(r)+'" checked> '+(ROLE_LABEL[r]||r)+'</label>';
     }).join('');
     document.getElementById('ctRolesHint').textContent =
       (tt.flow==='collab'&&!hosted?'协作类桌需至少 2 位协作者（含你），保留「协作者」勾选即可继续邀请；':'')
@@ -887,17 +1073,17 @@ function renderCreateResult(d,topic,hosted){
   var app=document.getElementById('app');
   var h='<div class="row" style="margin-bottom:12px"><b>圆桌已创建</b><span class="badge phase">设定中 · 等待入席与设定</span>'+typeBadge(d.tableType)+(hosted?'<span class="rb host">主持人模式</span>':'')+'</div>';
   h+='<div class="card"><b>'+esc(d.tableId)+'</b>'
-    +'<h3>席位 token（只显示这一次，请立即复制）</h3>'
-    +'<div class="row"><span class="invite" style="word-break:break-all;font-size:15px">'+esc(d.ownerSeatToken)+'</span><span class="sp"></span><button id="credTokCopy">复制凭证（含入桌信息）</button></div>'
+    +'<h3 class="csec">席位 token（只显示这一次，请立即复制）</h3>'
+    +'<div class="row"><span class="invite big">'+esc(d.ownerSeatToken)+'</span><span class="sp"></span><button id="credTokCopy">复制凭证（含入桌信息）</button></div>'
     +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法）'+(hosted?'。主持人一般在网页端操作，无需把凭证交给 agent':'，整体发给你的 agent 即可参会')+'。关闭本页后无法再查看。</div>'
-    +'<h3>邀请码（发给各参与方，角色由码定死）</h3>';
+    +'<h3 class="csec">邀请码（发给各参与方，角色由码定死）</h3>';
   var RL={proposer:'提案方',reviewer:'评审方',observer:'观察方',collaborator:'协作者'};
   d.inviteCodes.forEach(function(c){
     h+='<div class="row" style="margin:4px 0"><span class="rb '+esc(c.role)+'">'+esc(RL[c.role]||c.role)+'</span>'
     +'<span class="invite">'+esc(c.code)+'</span><button class="cpInv" data-code="'+esc(c.code)+'" data-role="'+esc(c.role)+'">复制完整邀请</button>'
     +(c.role==='observer'?'<span class="dim">观察方：只读旁听无表决权</span>':'<span class="dim">复制内容含服务器/圆桌 ID/邀请码，整体转发即可参会</span>')+'</div>';
   });
-  h+='<h3>下一步</h3><div class="dim">'
+  h+='<h3 class="csec">下一步</h3><div class="dim">'
     +(hosted
       ?'主持人流程：定规则（详情页「桌设定」可随时改）→ 传资料（详情页上传共享文档，全桌可见）→ 把邀请码发给各参与方（角色见上方码标签）→ 各方完成入桌设定 → 你在详情页点「开始会议」。开始后各方每回合提交由 DeepSeek 预审，需要补充时会被点名。'
       :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。')
@@ -924,7 +1110,7 @@ function renderJoinForm(){
   var h='<div class="row" style="margin-bottom:12px"><span class="back" id="jbBackList">← 返回列表</span><span class="sp"></span><b>凭邀请码入桌</b><span class="dim">角色由邀请码定死（提案方/评审方/协作者/观察方），席位不能自封</span></div>';
   h+='<div class="card frm">'
     +'<div class="frow"><label class="t" for="jbCode">邀请码 <b>*</b></label><textarea id="jbCode" placeholder="粘贴 10 位邀请码，或整段粘贴收到的「完整邀请」文本"></textarea><div class="hint">先查码确认所属圆桌，再确认入席；查询不消耗码次数</div></div>'
-    +'<div class="frow"><label class="t" for="jbSeatName">席位名 <b>*</b></label><input id="jbSeatName"'+(view.userName?' value="'+esc(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
+    +'<div class="frow"><label class="t" for="jbSeatName">席位名 <b>*</b></label><input id="jbSeatName"'+(view.userName?' value="'+escAttr(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
     +'<div class="frow"><label class="t" for="jbAgent">agent 标识（选填）</label><input id="jbAgent" placeholder="如 zcode / claude；留空 = human-only（先由人工参与，agent 后续接入）"></div>'
     +'<div class="ferr" id="jbErr"></div>'
     +'<div id="jbPreview"></div>'
@@ -980,10 +1166,10 @@ function renderJoinResult(p,r){
   var app=document.getElementById('app');
   var h='<div class="row" style="margin-bottom:12px"><b>已入席</b>'+roleBadge(r.seat.role)+'<span class="badge phase">入桌设定待完成</span></div>';
   h+='<div class="card"><b>'+esc(p.topic)+'</b>'
-    +'<h3>席位 token（只显示这一次，请立即复制）</h3>'
-    +'<div class="row"><span class="invite" style="word-break:break-all;font-size:15px">'+esc(r.token)+'</span><span class="sp"></span><button id="jrTokCopy">复制凭证（含入桌信息）</button></div>'
+    +'<h3 class="csec">席位 token（只显示这一次，请立即复制）</h3>'
+    +'<div class="row"><span class="invite big">'+esc(r.token)+'</span><span class="sp"></span><button id="jrTokCopy">复制凭证（含入桌信息）</button></div>'
     +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法），交给你的 agent 即可代你参会。关闭本页后无法再查看；之后可在桌详情页随时「重签凭证」。</div>'
-    +'<h3>下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。</div>'
+    +'<h3 class="csec">下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。</div>'
     +'<div class="row" style="margin-top:8px"><button id="jrBack">返回列表</button><span class="sp"></span><button id="jrEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
   app.innerHTML=h;
@@ -997,7 +1183,7 @@ function renderJoinResult(p,r){
 /* ---------- 视图：桌详情 ---------- */
 function stepsHtml(phase, tt){
   if(phase==='human_intervention'){
-    return '<div class="banner admin" style="border-color:var(--err);color:var(--err);background:rgba(224,92,92,.08)">⚠ 人工介入模式：会议暂停，等待 HUMAN_INPUT / HUMAN_RULING 推进或裁决</div>';
+    return '<div class="banner err">人工介入模式：会议暂停，等待 HUMAN_INPUT / HUMAN_RULING 推进或裁决</div>';
   }
   var idx=-1;
   for(var i=0;i<STEP_DEFS.length;i++){ if(STEP_DEFS[i][0]===phase) idx=i; }
@@ -1015,22 +1201,22 @@ function renderDetail(d){
   if(d.mySeatId){ for(i=0;i<seats.length;i++){ if(seats[i].seatId===d.mySeatId) mySeat=seats[i]; } }
   var admin=view.role==='systemadmin';
 
-  var h='<div class="row"><span class="back" id="back">← 返回列表</span><span class="sp"></span><span class="dim">自动刷新中</span></div>';
+  var h='<div class="row"><span class="back" id="back">← 返回列表</span><span class="sp"></span><button id="dCopyLink" class="sm" title="复制可分享的详情页链接">复制本页链接</button><span class="dim">自动刷新中</span></div>';
 
   /* 身份视角条：systemadmin 无席位只读观察（普通用户无席位已被服务端 403 拦在列表外） */
   if(!mySeat && admin){
-    h+='<div class="banner admin">🛡 系统观察员 · 只读观察 — 你在本桌没有席位，仅查看（详情/历史/纪要），不能发指令或代答。</div>';
+    h+='<div class="banner admin">系统观察员 · 只读观察 — 你在本桌没有席位，仅查看（详情/历史/纪要），不能发指令或代答。</div>';
   }
 
-  h+='<div class="card"><div class="row"><b style="font-size:16px">'+esc(t.topic)+'</b>'
+  h+='<div class="card"><div class="shead"><b style="font-size:16px">'+esc(t.topic)+'</b>'
     +typeBadge(t.tableType)
     +phaseBadge(t.phase,t.roundNo,t.tableType)
     +(t.mode==='hosted'?'<span class="rb host">主持人模式 · 预审调度</span>':'')
     +(t.deadlockCount>0?'<span class="badge err">僵局 '+t.deadlockCount+'</span>':'')
     +'</div>';
-  if(d.meta.goals) h+='<div class="dim" style="margin-top:4px">目标：'+esc(d.meta.goals)+'</div>';
-  if(d.meta.deliverables) h+='<div class="dim">交付物：'+esc(d.meta.deliverables)+'</div>';
-  if(d.meta.rules) h+='<div class="dim">规则：'+esc(d.meta.rules)+'</div>';
+  if(d.meta.goals) h+='<div class="kv"><span class="k">目标</span>'+esc(d.meta.goals)+'</div>';
+  if(d.meta.deliverables) h+='<div class="kv"><span class="k">交付物</span>'+esc(d.meta.deliverables)+'</div>';
+  if(d.meta.rules) h+='<div class="kv"><span class="k">规则</span>'+esc(d.meta.rules)+'</div>';
   h+=stepsHtml(t.phase,t.tableType);
   h+='</div>';
 
@@ -1038,29 +1224,52 @@ function renderDetail(d){
   /* 圆桌示意图：席位环绕 + 最后交付摘要 + 发言权思考中标记（>8 席折叠） */
   h+=roundDiagramHtml(d,seats,turn);
 
-  /* 管理员操作卡（systemadmin 专属：强制介入/闭桌/删桌，动作审计留痕） */
-  if(admin){
-    var active=t.phase!=='closed';
-    h+='<div class="card" style="border-color:var(--goldline)"><div class="row"><b>🛡 管理员操作</b><span class="dim">系统观察员专属 · 全部动作写入审计</span></div>'
-      +'<div class="row" style="margin-top:8px"><input id="admReason" placeholder="原因（进入会议记录 / 审计）" style="flex:1;min-width:200px">'
-      +(active&&t.phase!=='human_intervention'?'<button id="admHuman">⏸ 强制人工介入</button>':'')
-      +(active?'<button id="admClose">⛔ 强制闭桌</button>':'')
-      +'<button id="admDel" style="color:var(--err);border-color:var(--err)">🗑 删除圆桌</button></div>'
-      +'<div class="hint" style="margin-top:6px">强制闭桌 = 立即生成纪要并结束（不可恢复）；删除 = 连同消息/产物/席位全部清除（轮询中的 agent 将收到 404）。</div></div>';
-  }
-
-  h+='<div class="card"><div class="section turn" style="margin-top:0"><b>下一步动作</b><div>';
+  h+='<div class="dcols">';
+  /* ==== 左栏（约40%）：观点与过程 ==== */
+  h+='<div class="dcol dmain">';
+  h+='<div class="card"><div class="section turn" style="margin-top:0"><b>下一步动作</b><div style="margin-top:4px">';
   if(t.mode==='hosted'&&t.precheck){
-    if(t.precheck.state==='reviewing') h+='<div class="badge warn">🔍 预审中</div> <span class="dim">DeepSeek 正在预审刚提交的回合结果，预审落地前不授出发言权</span>';
-    else if(t.precheck.state==='directive') h+='<div class="badge warn">🎯 预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交</span><br>';
+    if(t.precheck.state==='reviewing') h+='<div class="badge warn">预审中</div> <span class="dim">DeepSeek 正在预审刚提交的回合结果，预审落地前不授出发言权</span>';
+    else if(t.precheck.state==='directive') h+='<div class="badge warn">预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交</span><br>';
   }
   if(turn){
     h+='发言权：<b>'+esc(seatName(seats,turn.seatId))+'</b> —— '+esc(turn.taskHint||'');
     if(turn.pendingRequest) h+='<div class="dim">待处理请求：'+esc(turn.pendingRequest.title)+'</div>';
-  } else if(t.phase==='closed'){ h+='<span class="badge ok">会议已结束</span>'+(d.minutes?'<span class="dim">纪要已生成（见下方纪要区）</span>':''); }
+  } else if(t.phase==='closed'){ h+='<span class="badge ok">会议已结束</span>'+(d.minutes?' <span class="dim">纪要已生成（见下方纪要区）</span>':''); }
   else if(t.phase==='human_intervention'){ h+='<span class="dim">等待人工介入（可在下方以席位身份发送 HUMAN_INPUT / HUMAN_RULING）</span>'; }
   else { h+='<span class="dim">当前无发言权持有者（等待事件推进或人工介入）</span>'; }
   h+='</div></div></div>';
+
+  /* 各方观点（席位卡：角色色顶条 + 状态/就绪 + 立场摘要 + 最后交付） */
+  var lastOf={};
+  (d.messages||[]).forEach(function(m){ if(m.fromSeat&&m.fromSeat!=='server') lastOf[m.fromSeat]=m; });
+  h+='<div class="card"><div class="shead"><b>各方观点</b><span class="dim">每席立场与最后交付</span><span class="sp"></span><span class="dim">'+seats.length+' 席就座</span></div><div class="vcards">';
+  seats.forEach(function(s){
+    var cfg=s.config||{}, lm=lastOf[s.seatId], di=lastDelivInfo(lm);
+    h+='<div class="vcard '+esc(s.role)+'">'
+      +'<div class="row">'+roleBadge(s.role)+'<b>'+esc(s.name)+'</b>'
+      +(s.seatId===t.ownerSeat?'<span class="badge">建桌人</span>':'')
+      +'<span class="sp"></span>'
+      +'<span class="badge '+(s.status==='active'?'ok':'warn')+'">'+esc(s.status)+'</span>'
+      +(s.role==='host'?'<span class="badge">豁免就绪</span>':'<span class="badge '+(cfg.ready?'ok':'warn')+'">'+(cfg.ready?'已就绪':'未就绪')+'</span>')
+      +'</div>'
+      +'<div class="dim">agent: '+esc(s.agentLabel)+'</div>'
+      +'<div class="kv"><span class="k">立场</span><span title="'+escAttr(cfg.stance||'')+'">'+esc((cfg.stance||'').slice(0,60)||'（未填写）')+'</span></div>'
+      +'<div class="kv"><span class="k">交付</span>'+(lm?(esc(di.label)+' <span class="dim">· '+fmtTs(lm.ts)+'</span>'):'<span class="dim">尚未发言</span>')+'</div>'
+      +(admin?'<div class="row" style="margin-top:8px"><button class="admCred sm" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">复制配置</button> '
+        +'<button class="admRepl sm danger" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">替代 agent</button></div>':'')
+      +'</div>';
+  });
+  h+='</div></div>';
+
+  /* 邀请码（建桌人 or 系统观察员） */
+  if(admin||(mySeat&&mySeat.seatId===t.ownerSeat)){
+    h+='<div class="card" id="inviteBox"><div class="shead"><b>邀请码</b><span class="dim">仅建桌人与系统观察员可见 · 复制的是完整邀请（服务器/圆桌 ID/邀请码/参会步骤），整体转发即可参会</span></div><div id="invites" class="dim" style="margin-top:8px">加载中…</div></div>';
+  }
+
+  h+='</div>';
+  /* ==== 右栏（约60%）：我的操作与交付 ==== */
+  h+='<div class="dcol dside">';
 
   /* ---- 我的席位面板：按阶段/状态条件渲染 ---- */
   if(mySeat){
@@ -1100,7 +1309,7 @@ function renderDetail(d){
           +'<div class="frow"><label class="t">数据范围（目录/文档/产物，逐条添加）</label>'
           +'<div class="chips" id="dsWrap"><span id="dsChips"></span><input id="dsIn" placeholder="输入路径后回车添加，如 docs/api/"></div>'
           +'<div class="row" style="margin-top:4px">'+DS_PRESETS.map(function(p){ return '<button class="preset" data-ds="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'<span class="dim">这些路径以外的内容默认不在本次讨论的数据范围内</span></div></div>'
-          +'<div class="frow"><label style="font-size:13px"><input type="checkbox" id="cfgReady"'+(cfg.ready?' checked':'')+'> 就绪 — 声明本席设定完成（全员就绪后建桌人可开始会议）</label></div>'
+          +'<div class="frow"><label class="chk"><input type="checkbox" id="cfgReady"'+(cfg.ready?' checked':'')+'> 就绪 — 声明本席设定完成（全员就绪后建桌人可开始会议）</label></div>'
           +'<div class="ferr" id="cfgErr"></div>'
           +'<div class="row"><button id="cfgSave" class="primary">保存设定</button>'
           +(cfg.ready?'<button id="cfgCollapse">收起（保留现设定）</button>':'')
@@ -1137,7 +1346,7 @@ function renderDetail(d){
           +'<select id="pxDecision" style="display:none"></select>'
           +'<select id="pxSeverity" style="display:none"><option>must</option><option selected>should</option><option>nice</option></select>'
           +'<input id="pxTarget" placeholder="位置（如 第3节）" style="display:none;width:140px">'
-          +'<label style="font-size:12px"><input type="checkbox" id="pxJson"> JSON 模式</label></div>'
+          +'<label class="chk"><input type="checkbox" id="pxJson"> JSON 模式</label></div>'
           +'<textarea id="pxText" placeholder="回答内容（按所选类型自动组装 payload）"></textarea>'
           +'<textarea id="pxJsonBox" placeholder="JSON 模式：整包提交，如 {&quot;type&quot;:&quot;RESPONSE&quot;,&quot;payload&quot;:{&quot;items&quot;:[…]}}" style="display:none;font-family:ui-monospace,Menlo,monospace;min-height:80px"></textarea>'
           +'<div class="ferr" id="pxErr"></div>'
@@ -1158,54 +1367,51 @@ function renderDetail(d){
 
     /* 凭证恢复 · agent 替代（任何阶段可用——闭桌后也可恢复身份拉纪要） */
     h+='<div class="section"><h3>凭证恢复 · 更换 agent</h3>'
-      +'<div class="hint" style="margin-bottom:6px">agent 被关闭或要换新 agent？「恢复」复制参会配置（原凭证保留），粘贴到新 agent 会话即可以原席位身份继续；「替代」同时禁用原 agent 的全部凭证（即使它仍在运行，下次请求即失效）。</div>'
-      +'<div class="row"><button id="stRecover">📋 复制参会配置（恢复）</button>'
+      +'<div class="hint" style="margin-bottom:6px">agent 被关闭或要换新 agent？「恢复」复制参会配置（原凭证保留），粘贴到新 agent 会话即以原席位身份继续；「替代」同时禁用原 agent 的全部凭证（即使它仍在运行，下次请求即失效）。</div>'
+      +'<div class="row"><button id="stRecover">复制参会配置（恢复）</button>'
       +'<input id="stNewLabel" placeholder="新 agent 标识（替代时选填）" style="width:200px">'
-      +'<button id="stReplace" style="color:var(--warn);border-color:var(--warn)">🔄 替代 agent（禁用原凭证）</button></div>'
+      +'<button id="stReplace" class="danger">替代 agent（禁用原凭证）</button></div>'
       +'<div class="ferr" id="stErr"></div></div>';
     h+='</div>';
   }
 
-  /* 席位（systemadmin 附操作列：为任意席位复制参会配置 / 替代 agent） */
-  h+='<h3>席位</h3><table><tr><th>席位</th><th>角色</th><th>agent</th><th>状态</th><th>就绪</th><th>立场</th>'+(admin?'<th>操作（🛡）</th>':'')+'</tr>';
-  seats.forEach(function(s){
-    h+='<tr><td>'+esc(s.name)+(s.seatId===t.ownerSeat?' <span class="badge">建桌人</span>':'')+'</td>'
-      +'<td>'+roleBadge(s.role)+'</td><td>'+esc(s.agentLabel)+'</td>'
-      +'<td><span class="badge '+(s.status==='active'?'ok':'warn')+'">'+esc(s.status)+'</span></td>'
-      +'<td>'+((s.config&&s.config.ready)?'✅':'—')+'</td>'
-      +'<td class="dim" title="'+escAttr((s.config&&s.config.stance)||'')+'">'+esc(((s.config&&s.config.stance)||'').slice(0,60))+'</td>'
-      +(admin?'<td><button class="admCred" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">📋 配置</button> '
-        +'<button class="admRepl" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">🔄 替代</button></td>':'')
-      +'</tr>';
-  });
-  h+='</table>';
+  /* 管理员操作卡（systemadmin 专属：强制介入/闭桌/删桌，动作审计留痕） */
+  if(admin){
+    var active=t.phase!=='closed';
+    h+='<div class="card gold"><div class="shead"><b>管理员操作</b><span class="dim">系统观察员专属 · 全部动作写入审计</span></div>'
+      +'<div class="row"><input id="admReason" placeholder="原因（进入会议记录 / 审计）" style="flex:1;min-width:200px">'
+      +(active&&t.phase!=='human_intervention'?'<button id="admHuman">强制人工介入</button>':'')
+      +(active?'<button id="admClose">强制闭桌</button>':'')
+      +'<button id="admDel" class="danger">删除圆桌</button></div>'
+      +'<div class="hint" style="margin-top:6px">强制闭桌 = 立即生成纪要并结束（不可恢复）；删除 = 连同消息/产物/席位全部清除（轮询中的 agent 将收到 404）。</div></div>';
+  }
 
-  /* 产物 */
-  h+='<h3>产物</h3><table><tr><th>名称</th><th>所有者</th><th>最新版本</th><th>锁</th></tr>';
+  /* 产物（交付卡） */
+  h+='<div class="card"><div class="shead"><b>产物</b><span class="dim">交付物版本</span><span class="sp"></span><span class="dim">'+(t.artifacts||[]).length+' 项</span></div><div class="cards">';
   (t.artifacts||[]).forEach(function(a){
-    h+='<tr><td>'+esc(a.name)+'</td><td>'+esc(seatName(seats,a.ownerSeat))+'</td><td>v'+a.latestVersion+'</td><td>'+(a.lockedBy?esc(seatName(seats,a.lockedBy)):'—')+'</td></tr>';
+    h+='<div class="acard"><div class="row"><b>'+esc(a.name)+'</b><span class="badge phase">v'+a.latestVersion+'</span><span class="sp"></span><span class="dim">'+esc(seatName(seats,a.ownerSeat))+'</span></div>'
+      +(a.lockedBy?'<div class="dim">锁：'+esc(seatName(seats,a.lockedBy))+'</div>':'')+'</div>';
   });
-  if(!(t.artifacts||[]).length) h+='<tr><td colspan="4" class="dim">无</td></tr>';
-  h+='</table>';
+  if(!(t.artifacts||[]).length) h+='<div class="dim">暂无产物</div>';
+  h+='</div></div>';
 
   /* 资料文档（上传阅资料 / 投屏）：共享=全桌可下载；私有=仅上传席位（他席可见存在但不可下载） */
-  h+='<h3>资料文档 <span class="dim">上传阅资料 · 共享=全桌可下载（投屏评审依据），私有=仅上传席位</span></h3><table><tr><th>文件</th><th>作用声明</th><th>可见性</th><th>上传者</th><th>大小</th><th>时间</th><th></th></tr>';
+  h+='<div class="card"><div class="shead"><b>资料文档</b><span class="dim">上传阅资料 · 共享=全桌可下载（投屏评审依据），私有=仅上传席位</span><span class="sp"></span><span class="dim">'+(d.documents||[]).length+' 份</span></div><div class="cards">';
   (d.documents||[]).forEach(function(doc){
     var mine=doc.uploadedBy===d.mySeatId;
     var canDl=doc.visibility==='shared'||mine;
-    h+='<tr><td><b>'+esc(doc.name)+'</b><div class="dim">'+esc(doc.docId)+'</div></td>'
-      +'<td>'+esc(doc.purpose)+'</td>'
-      +'<td>'+(doc.visibility==='shared'?'<span class="badge phase">共享</span>':'<span class="badge warn">🔒 私有</span>')+'</td>'
-      +'<td>'+esc(seatName(seats,doc.uploadedBy))+(mine?'（本席）':'')+'</td>'
-      +'<td class="dim">'+fmtSize(doc.size)+'</td>'
-      +'<td class="dim">'+fmtTs(doc.uploadedAt)+'</td>'
-      +'<td>'+((canDl&&docPreviewKind(doc.name))?'<button class="docPv" data-doc="'+escAttr(doc.docId)+'" data-name="'+escAttr(doc.name)+'" data-size="'+doc.size+'" data-purpose="'+escAttr(doc.purpose)+'">👁 预览</button> ':'')
-      +(canDl?'<button class="docDl" data-doc="'+escAttr(doc.docId)+'" data-name="'+escAttr(doc.name)+'">下载</button>':'<span class="dim">不可下载</span>')+'</td></tr>';
+    h+='<div class="dcard"><div class="row"><b>'+esc(doc.name)+'</b>'
+      +(doc.visibility==='shared'?'<span class="badge phase">共享</span>':'<span class="badge warn">私有</span>')
+      +'<span class="sp"></span><span class="dim">'+fmtSize(doc.size)+'</span></div>'
+      +'<div class="dim">'+esc(doc.purpose)+'</div>'
+      +'<div class="dim">'+esc(seatName(seats,doc.uploadedBy))+(mine?'（本席）':'')+' · '+fmtTs(doc.uploadedAt)+'</div>'
+      +'<div class="row" style="margin-top:6px">'+((canDl&&docPreviewKind(doc.name))?'<button class="docPv sm" data-doc="'+escAttr(doc.docId)+'" data-name="'+escAttr(doc.name)+'" data-size="'+doc.size+'" data-purpose="'+escAttr(doc.purpose)+'">预览</button> ':'')
+      +(canDl?'<button class="docDl sm" data-doc="'+escAttr(doc.docId)+'" data-name="'+escAttr(doc.name)+'">下载</button>':'<span class="dim">不可下载</span>')+'</div></div>';
   });
-  if(!(d.documents||[]).length) h+='<tr><td colspan="7" class="dim">无</td></tr>';
-  h+='</table>';
+  if(!(d.documents||[]).length) h+='<div class="dim">暂无资料</div>';
+  h+='</div>';
   if(mySeat&&t.phase!=='closed'&&mySeat.role!=='observer'){
-    h+='<div class="row" style="margin-top:8px;align-items:flex-start">'
+    h+='<div class="row" style="margin-top:10px;align-items:flex-start">'
       +'<input type="file" id="docFile" style="max-width:240px">'
       +'<input id="docPurpose" placeholder="文档作用声明（必填），如：待评审需求文档 / 调研原始资料（各方可参考）" style="flex:1;min-width:220px">'
       +'<select id="docVis"><option value="shared">共享 · 全桌可读（投屏）</option><option value="private">私有 · 仅本席</option></select>'
@@ -1213,64 +1419,71 @@ function renderDetail(d){
       +'<div class="hint">共享文档相当于投屏，全桌 agent 收到 DOC_UPLOADED 通知后可下载阅读；私有文档只有本席可下载。单个文件 ≤5MB。</div>'
       +'<div class="ferr" id="docErr"></div>';
   }
-
-  /* 请求 */
-  h+='<h3>执行请求</h3><table><tr><th>标题</th><th>发起 → 执行</th><th>状态</th><th>说明</th></tr>';
-  (d.requests||[]).forEach(function(r){
-    var st=r.status, cls=st==='executed'?'ok':(st==='rejected'?'err':(st==='human'?'warn':''));
-    h+='<tr><td>'+esc(r.req.title)+'</td><td>'+esc(seatName(seats,r.createdBy))+' → '+esc(seatName(seats,r.req.toSeat))+'</td>'
-      +'<td><span class="badge '+cls+'">'+esc(st)+'</span></td>'
-      +'<td class="dim">'+esc((r.response&&(r.response.reason||r.response.counterDetail))||'')+'</td></tr>';
-  });
-  if(!(d.requests||[]).length) h+='<tr><td colspan="4" class="dim">无</td></tr>';
-  h+='</table>';
+  h+='</div>';
 
   /* 人工指令（仅本桌有席位时渲染——无席位用户点了必被拒，不再展示） */
   if(mySeat&&t.phase!=='closed'){
-    h+='<h3>发送人工指令（以你在本桌的席位身份）</h3><div class="row">'
+    h+='<div class="card"><div class="shead"><b>发送人工指令</b><span class="dim">以你在本桌的席位身份</span></div><div class="row">'
       +'<select id="hTarget"><option value="">全员（广播）</option>';
     seats.forEach(function(s){ h+='<option value="'+esc(s.seatId)+'">→ '+esc(s.name)+'</option>'; });
-    h+='</select><input id="hBy" placeholder="署名（默认你的用户名）" style="width:120px">'
-      +'<button id="hSend" class="primary">发送</button></div>'
-      +'<textarea id="hText" placeholder="人工意见 / 指令 / 裁决说明（将以 HUMAN_INPUT 进入会议记录，agent 在 poll 时可见）"></textarea>';
+    h+='</select><input id="hBy" placeholder="署名（默认你的用户名）" style="width:150px">'
+      +'<span class="sp"></span><button id="hSend" class="primary">发送</button></div>'
+      +'<textarea id="hText" placeholder="人工意见 / 指令 / 裁决说明（将以 HUMAN_INPUT 进入会议记录，agent 在 poll 时可见）" style="margin-top:8px"></textarea></div>';
   }
-
-  /* 邀请码（建桌人 or 系统观察员） */
-  if(admin||(mySeat&&mySeat.seatId===t.ownerSeat)){
-    h+='<div class="card" id="inviteBox"><b>邀请码</b> <span class="dim">仅建桌人与系统观察员可见 · 复制的是完整邀请（服务器/圆桌 ID/邀请码/参会步骤），整体转发即可参会</span><div id="invites" class="dim" style="margin-top:8px">加载中…</div></div>';
-  }
-
-  /* 变动记录（与 agent 回合开始刷新的 changes 同源；最近 50 条，最新在前） */
-  h+='<div class="card"><div class="row"><b>变动记录</b> <span class="dim">最近 50 条（资料/产物/阶段/席位/人工）· 与 agent 每回合刷新的 changes 同源</span></div><div style="max-height:260px;overflow:auto;margin-top:8px">';
-  var chgs=(d.recentChanges||[]).slice().reverse();
-  chgs.forEach(function(c){
-    h+='<div class="msg"><span class="mt '+(CHG_CLS[c.kind]||'')+'">'+esc(CHG_LABEL[c.kind]||c.kind)+'</span>'
-      +'<span class="meta">'+esc(c.fromSeat==='server'?'服务器':seatName(seats,c.fromSeat))+' · '+fmtTs(c.ts)+'</span>'
-      +'<div>'+chgSummary(c,seats)+'</div></div>';
-  });
-  if(!chgs.length) h+='<div class="dim">（暂无变动）</div>';
   h+='</div></div>';
 
-  /* 消息时间线 */
-  h+='<div class="card"><div class="row"><b>会议历史</b> <span class="dim">'+(d.messages||[]).length+' 条</span>'
-    +'<span class="sp"></span><select id="msgFilter" style="font-size:12px;padding:2px 8px">'
-    +'<option value="all"'+(view.msgFilter==='all'?' selected':'')+'>全部消息</option>'
-    +'<option value="key"'+(view.msgFilter==='key'?' selected':'')+'>关键节点</option>'
-    +'<option value="human"'+(view.msgFilter==='human'?' selected':'')+'>人工相关</option>'
-    +'</select></div><div style="max-height:520px;overflow:auto;margin-top:8px">';
-  var shown=(d.messages||[]).filter(function(m){
-    if(view.msgFilter==='key') return !!MSG_KEY[m.type];
-    if(view.msgFilter==='human') return !!MSG_HUMAN[m.type];
-    return true;
+  /* 执行请求（全宽通栏，会议纪要上方；同席=认领自办，跨席=委托他席，点击弹详情） */
+  h+='<div class="card"><div class="shead"><b>执行请求</b><span class="dim">回应评审派生的修改/澄清委托：同席 = 认领自办，跨席 = 委托他席 · 点击卡片看详情</span><span class="sp"></span><span class="dim">'+(d.requests||[]).length+' 项</span></div><div class="cards">';
+  (d.requests||[]).forEach(function(r,ri){
+    var st=r.status, cls=st==='executed'?'ok':(st==='rejected'?'err':((st==='pending'||st==='human')?'warn':''));
+    var art=''; (t.artifacts||[]).forEach(function(a){ if(a.artifactId===r.req.artifactId) art=a.name; });
+    var selfExe=r.createdBy===r.req.toSeat;
+    var who=selfExe
+      ?(esc(seatName(seats,r.createdBy))+' · 认领自办（接受意见自行修改）')
+      :(esc(seatName(seats,r.createdBy))+' 委托 '+esc(seatName(seats,r.req.toSeat)));
+    h+='<div class="rcard '+cls+'" data-ri="'+ri+'" title="点击查看请求详情">'
+      +'<div class="row"><b>'+esc(clipStr(r.req.title,40))+'</b><span class="sp"></span>'+(selfExe?'<span class="badge">认领自办</span>':'')+'<span class="badge '+cls+'">'+esc(REQ_ST_LABEL[st]||st)+'</span></div>'
+      +'<div class="dim">'+who+' · '+fmtTs(r.createdAt)+'</div>'
+      +'<div class="dim">'+esc(REQ_INTENT_LABEL[r.req.intent]||r.req.intent||'')+(art?(' · 产物：'+esc(clipStr(art,20))):'')+'</div>'
+      +((r.response&&(r.response.reason||r.response.counterDetail))?'<div class="dim">'+esc(clipStr(r.response.reason||r.response.counterDetail,80))+'</div>':'')
+      +'</div>';
   });
-  shown.slice().reverse().forEach(function(m){
+  if(!(d.requests||[]).length) h+='<div class="dim">暂无请求</div>';
+  h+='</div></div>';
+
+  /* 纪要（总-分栏-总的底部通栏全宽；md 格式经 miniMd 安全渲染） */
+  if(d.minutes){
+    h+='<div class="card"><div class="shead"><b>会议纪要</b></div><div class="mdv">'+miniMd(d.minutes.markdown||'')+'</div></div>';
+  }
+
+  /* 会议历史 · 变动记录（合并大列表，纪要下方全宽；msgFilter 5 档视图预设） */
+  var items=[];
+  (d.messages||[]).forEach(function(m){ var it={ts:m.ts, isMsg:true, ref:m}; if(mfShow(it)) items.push(it); });
+  (d.recentChanges||[]).forEach(function(c){ var it={ts:c.ts, isMsg:false, ref:c}; if(mfShow(it)) items.push(it); });
+  items.sort(function(a,b){ return b.ts-a.ts; });
+  var mfBar='<div class="tbar" id="msgFilter">';
+  MF_VIEWS.forEach(function(v){
+    mfBar+='<button class="fbtn'+((view.msgFilter||'all')===v[0]?' on':'')+'" data-mf="'+v[0]+'">'+v[1]+'</button>';
+  });
+  mfBar+='</div>';
+  h+='<div class="card"><div class="shead"><b>会议历史 · 变动记录</b><span class="dim">消息与变动合并流（'+items.length+' 条）</span></div>'
+    +mfBar+'<div style="max-height:640px;overflow:auto">';
+  items.forEach(function(it){
+    if(!it.isMsg){
+      var c=it.ref;
+      h+='<div class="msg"><span class="mt '+(CHG_CLS[c.kind]||'')+'">'+esc(CHG_LABEL[c.kind]||c.kind)+'</span>'
+        +'<span class="meta">'+esc(c.fromSeat==='server'?'服务器':seatName(seats,c.fromSeat))+' · '+fmtTs(c.ts)+'</span>'
+        +'<div>'+chgSummary(c,seats)+'</div></div>';
+      return;
+    }
+    var m=it.ref;
     var inject=(m.flags&&m.flags.indexOf&&m.flags.indexOf('injection_suspect')>=0);
     var proxied=(m.flags&&m.flags.indexOf&&m.flags.indexOf('human_proxied')>=0);
     var body='';
     var p=m.payload||{};
     var toMe=(m.type==='HUMAN_INPUT'&&p.toSeat===d.mySeatId);
     if(typeof p.text==='string') body=p.text;
-    else if(p.items){ try{ body=p.items.map(function(it){return (it.target||'')+'：'+(it.comment||it.decision||'');}).join('；');}catch(e){} }
+    else if(p.items){ try{ body=p.items.map(function(it2){return (it2.target||'')+'：'+(it2.comment||it2.decision||'');}).join('；');}catch(e){} }
     else if(m.type==='PHASE_CHANGE') body=(PHASE_LABEL[p.from]||p.from||'')+' → '+(PHASE_LABEL[p.to]||p.to||'')+'（'+(p.reason||'')+'）';
     else if(m.type==='REQUEST') body=p.title+'：'+(p.detail||'');
     else if(m.type==='RESPOND_REQUEST') body=(p.requestIds&&p.requestIds.length?('批量 '+p.requestIds.length+' 个请求·'):'')+p.decision+(p.reason?'：'+p.reason:'');
@@ -1283,33 +1496,48 @@ function renderDetail(d){
       if(p.targetSeatId) body+='　→ 点名 '+(seatName(seats,p.targetSeatId));
     }
     else if(m.type==='SUPPLEMENT') body=(p.text||'');
+    else if(m.type==='MINUTES') body='纪要已生成（全文见上方「会议纪要」区）';
     else { try{ body=JSON.stringify(p).slice(0,200); }catch(e){} }
+    /* 阶段变更 = 回合过程轴上的分隔条，不再是普通消息条 */
+    if(m.type==='PHASE_CHANGE'){
+      h+='<div class="phasediv"><span>'+esc(body).slice(0,400)+'<span class="dim"> · '+fmtTs(m.ts)+'</span></span></div>';
+      return;
+    }
     h+='<div class="msg'+(inject?' inject':'')+(toMe?' mine':'')+'">'
       +'<span class="mt '+(MT_CLS[m.type]||'')+'">'+esc(MT_LABEL[m.type]||m.type)+'</span>'
-      +(proxied?'<span class="badge warn">🙍 人工代答</span> ':'')
+      +(proxied?'<span class="badge warn">人工代答</span> ':'')
       +(toMe?'<span class="badge phase">给我的指令</span> ':'')
       +'<span class="meta">'+esc(m.fromSeat==='server'?'服务器':seatName(seats,m.fromSeat))
       +(p.toSeat?' → '+esc(seatName(seats,p.toSeat)):'')
-      +' · '+fmtTs(m.ts)+(inject?' · <b style="color:var(--err)">⚠ 疑似注入</b>':'')+' · #'+m.seq+'</span>'
-      +'<div>'+esc(body).slice(0,400)+'</div></div>';
+      +' · '+fmtTs(m.ts)+(inject?' · <b class="hi-err">疑似注入</b>':'')+' · #'+m.seq+'</span>'
+      +'<div>'+esc(clipStr(body,400))+'</div></div>';
   });
-  if(!shown.length) h+='<div class="dim">（该筛选下无消息）</div>';
+  if(!items.length) h+='<div class="dim">（该筛选下无内容）</div>';
   h+='</div></div>';
-
-  /* 纪要 */
-  if(d.minutes){
-    h+='<div class="card"><b>会议纪要</b><pre style="white-space:pre-wrap;font:inherit;margin:8px 0 0">'+esc(d.minutes.markdown||'')+'</pre></div>';
-  }
 
   var app=document.getElementById('app');
   app.innerHTML=h;
+  document.title=t.topic+' · 圆桌详情'; // 分享/历史记录可辨识
   document.getElementById('back').onclick=function(){ openList(); };
+  document.getElementById('dCopyLink').onclick=function(){ copyText(location.origin+'/#/table/'+view.tableId); toast('详情页链接已复制，可发给他人直达本桌'); };
 
   /* ---- 绑定：圆桌示意图 >8 席折叠展开（纯视图操作，不触发草稿保护） ---- */
   var rtMore=document.getElementById('rtMore');
   if(rtMore) rtMore.onclick=function(){ view.rtExpanded=!view.rtExpanded; renderDetail(view.lastDetailData); };
   var rtFold=document.getElementById('rtFold');
   if(rtFold) rtFold.onclick=function(){ view.rtExpanded=false; renderDetail(view.lastDetailData); };
+  /* ---- 绑定：合并流视图筛选（纯视图操作，不触发草稿保护） ---- */
+  app.querySelectorAll('button[data-mf]').forEach(function(b){
+    b.onclick=function(){ view.msgFilter=b.getAttribute('data-mf')||'all'; renderDetail(view.lastDetailData); };
+  });
+  /* ---- 绑定：执行请求卡片 → 详情弹窗（纯查看，不触发草稿保护） ---- */
+  app.querySelectorAll('.rcard[data-ri]').forEach(function(el){
+    el.onclick=function(){
+      var ri=parseInt(el.getAttribute('data-ri'),10);
+      var reqs=(view.lastDetailData&&view.lastDetailData.requests)||[];
+      if(reqs[ri]) openRequestModal(reqs[ri],seats,(t.artifacts||[]));
+    };
+  });
 
   /* ---- 绑定：资料文档（上传走 my 通道，下载 base64→Blob） ---- */
   var docUp=document.getElementById('docUpload');
@@ -1636,18 +1864,34 @@ function openTable(id){
   view.mode='detail'; view.tableId=id; view.lastDetailJson=''; view.lastDetailData=null;
   view.dirtyPanel=false; view.cfgEditing=false; view.msgFilter='all'; view.rtExpanded=false;
   clearInterval(view.timer);
+  var want='#/table/'+id;
+  if(location.hash!==want) location.hash=want; // 详情页 URL（刷新/分享/后退可用）；先定好 view 再写 hash，hashchange→syncRoute 幂等不重入
+  document.getElementById('app').innerHTML='<div class="card dim">加载圆桌 '+esc(id)+'…</div>';
   loadDetail();
   view.timer=setInterval(function(){ if(view.mode==='detail') loadDetail(); },5000);
 }
 function openList(){
   view.mode='list'; view.tableId=null; view.dirtyPanel=false;
   clearInterval(view.timer);
+  if((location.hash||'')!=='') history.pushState(null,'',location.pathname+location.search); // 清掉详情 hash（入历史栈，后退可回详情）
+  document.title='圆桌观察端 · agent-talk';
   loadList();
 }
 
+/* ---------- hash 路由：详情页 URL 直达（#/table/<id>）----------
+   刷新/分享/前进后退均保持视图；未登录打开分享链时 hash 原样保留，登录成功后凭 hash 直达 */
+function routeTableId(){ var m=/^#\/table\/([A-Za-z0-9_-]+)/.exec(location.hash||''); return m?m[1]:null; }
+function syncRoute(){
+  var id=routeTableId();
+  if(id){ if(!(view.mode==='detail'&&view.tableId===id)) openTable(id); }
+  else if(view.mode==='detail') openList();
+}
+window.addEventListener('hashchange',syncRoute);
+window.addEventListener('popstate',syncRoute);
+
 /* ---------- 草稿保护：面板内任何编辑都冻结轮询重渲染 ---------- */
 (function(){
-  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ closeDocPreview(); closeHelp(); } });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ closeDocPreview(); closeHelp(); closeRequestModal(); } });
   var app=document.getElementById('app');
   var mark=function(e){
     if(view.mode!=='detail') return;
@@ -1666,7 +1910,11 @@ document.getElementById('helpBtn').onclick=openHelp;
 refreshWho();
 if(TOKEN){
   renderIntro();
-  api('GET','/api/observer/tables').then(function(){ fetchMe(); openList(); })
+  api('GET','/api/observer/tables').then(function(){
+    fetchMe();
+    var tid=routeTableId();
+    if(tid) openTable(tid); else openList(); // 刷新/分享链直达详情
+  })
     .catch(function(){ toast('已保存的 token 失效，请重新连接'); });
 }
 else { renderIntro(); }

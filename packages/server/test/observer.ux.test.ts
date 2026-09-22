@@ -84,6 +84,44 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     expect(html).not.toContain("不开放注册"); // systemadmin 不开放注册信息已移除
   });
 
+  it("页面含详情页 hash 路由：#/table/<id> 直达/刷新保持/前进后退/复制链接", async () => {
+    const html = await (await fetch(base + "/")).text();
+    expect(html).toContain("routeTableId"); // hash 解析
+    expect(html).toContain("#/table/"); // 详情页 URL 形态
+    expect(html).toContain("syncRoute"); // hashchange/popstate 双事件同步
+    expect(html).toContain("addEventListener('hashchange'"); // 监听 hash 变更
+    expect(html).toContain("addEventListener('popstate'"); // 监听前进/后退
+    expect(html).toContain("dCopyLink"); // 复制本页链接按钮
+    expect(html).toContain("复制本页链接");
+    expect(html).toContain("document.title"); // 详情页标题随桌主题
+  });
+
+  it("页面含执行请求弹窗：中文状态/意图标签、卡片可点击、弹窗要素", async () => {
+    const html = await (await fetch(base + "/")).text();
+    expect(html).toContain("openRequestModal"); // 弹窗函数
+    expect(html).toContain("reqModal"); // body 级弹窗节点
+    expect(html).toContain("REQ_ST_LABEL"); // 状态中文标签映射
+    expect(html).toContain("REQ_INTENT_LABEL"); // 意图中文标签映射
+    expect(html).toContain("待处置"); // pending
+    expect(html).toContain("已执行"); // executed
+    expect(html).toContain("已反提案"); // countered
+    expect(html).toContain("修改产物"); // modify_artifact
+    expect(html).toContain("澄清说明"); // clarify
+    expect(html).toContain("点击查看请求详情"); // 卡片 title 提示
+    expect(html).toContain("data-ri"); // 卡片索引绑定
+    expect(html).toContain("处置结果"); // 弹窗处置区标题
+    expect(html).toContain("认领自办"); // 同席请求（executeBy=self）显示认领自办
+    expect(html).toContain("委托他席"); // 区头说明：同席/跨席两种形态
+    expect(html).toContain("closeRequestModal"); // Esc/背景关闭
+  });
+
+  it("内嵌 script 语法可解析（模板字符串手写 JS 防回归）", async () => {
+    const html = await (await fetch(base + "/")).text();
+    const m = /<script>([\s\S]*)<\/script>/.exec(html);
+    expect(m).not.toBeNull();
+    expect(() => new Function(m![1])).not.toThrow(); // 仅解析不执行
+  });
+
   it("/api/me 返回 role（默认 user）", async () => {
     const t = (await call("POST", "/api/users", { body: { name: "ux-甲" } })).data.token;
     const me = await call("GET", "/api/me", { token: t });

@@ -177,7 +177,7 @@ pm2 start ecosystem.config.cjs   # 日志出现「已将用户 … 引导为 sys
 # ③ 引导完成后把 env 里的 BOOTSTRAP_ADMIN_TOKEN 删掉，pm2 restart agent-talk（干净）
 ```
 
-之后授予/撤销其他管理员走管理台界面（🛡 管理台），不再需要该环境变量。
+之后授予/撤销其他管理员走管理台界面（管理台），不再需要该环境变量。
 
 ## 5. nginx 反向代理 + certbot 证书
 
@@ -245,7 +245,7 @@ curl -s https://roundtable.ctrlacv.com/skill.md | head  # 技能档可下发
 - [ ] `http://roundtable.ctrlacv.com/` 会 301 跳到 https
 - [ ] 注册用户 → 建桌 → 复制邀请码，确认邀请文本里的服务器地址是
       `https://roundtable.ctrlacv.com`（location.origin 自动生成，若不对说明代理头/端口没配好）
-- [ ] 管理员登录后可见 🛡 管理台
+- [ ] 管理员登录后可见「管理台」
 - [ ] `pm2 status` 为 online；`pm2 logs` 无周期性报错
 
 ## 7. 日常运维
