@@ -13,20 +13,35 @@
 npm install
 npm run build
 npm run server            # 默认 :8787，数据落项目根 roundtable_data/（SQLite + blobs）；可用 PORT= DATA_DIR= 覆盖
-npm test                  # 163 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度
+npm test                  # 179 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度 + 桌类型与协作全流程
 ```
+
+## 桌类型（开桌先选类型，按类型选角色）
+
+`GET /api/table-types` 返回注册表；建桌时 `tableType` 选定后不可改，`inviteRoles` 按类型勾选要开放邀请码的角色（缺省全开）。类型决定流程语义与可选角色，**消息协议不变**：
+
+| 类型 | 流程 | 角色 | 语义 |
+|---|---|---|---|
+| review 评审（默认） | 博弈流 | proposer / reviewer / observer | 提案 vs 评审：陈述 → 逐条评审 → 四态回应 → 执行 → 表决 |
+| collab 协作 | **协同流** | collaborator / observer | 同事共创交付：**各自初稿 → 互审补缺 → 意见归属方认领 → 补齐执行 → 定稿表决**；建桌人自动成为协作者，开始需 ≥2 位协作者 |
+| brainstorm 头脑风暴 | 协同流 | collaborator / observer | 共创点子清单（协作流变体：点子提交/互评/认领整合/清单定稿） |
+| decision 方案决策 | 博弈流 | proposer / reviewer / observer | 主张方 vs 评估方对垒选型（评审流变体） |
+
+协同流的「互相支持补缺」仍走 REQUEST 溯源通道：`RESPONSE accept` 时 `executeBy: self` 自己补 / `reviewerSeat` 请意见提出席帮改，被请求方发布带 `requestId` 的新版本后关闭——协作桌改他人产物同样有权限与溯源约束。互审意见的**归属**：指向产物的意见归产物 owner、指向资料的意见归上传者、无指向意见归建桌人（统稿），归属席退席回落建桌人。
 
 ## 一场评审会（3 步）
 
 ```bash
-# 1) 建桌（任何已注册方）：录入主题、目标共识、交付物、桌规则、参与方身份安排；
-#    建桌人自动成为提案方席位（返回 ownerSeatToken + reviewer/observer 两类邀请码）
+# 1) 建桌（任何已注册方）：先选桌类型（tableType，缺省 review），按类型勾选开放邀请码的角色（inviteRoles，缺省全开）；
+#    录入主题、目标共识、交付物、桌规则、参与方身份安排；
+#    建桌人自动成为首个席位（评审流=提案方 / 协同流=协作者），返回 ownerSeatToken 与所选角色的邀请码
 curl -s -X POST $SERVER/api/users  -d '{"name":"Alice"}'          # → user token
 curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
+  "tableType":"collab","inviteRoles":["collaborator","observer"],
   "topic":"API 网关选型评审","goals":"就 v1 接口契约达成一致","deliverables":"修订后的设计文档",
   "rules":"逐条审阅，must 意见必须处置","rolePlan":"Alice 提案，Bob/Carol 评审",
   "owner":{"seatName":"Alice","agentLabel":"zcode"}}'
-# → { tableId, ownerSeatToken, inviteCodes:[{code,role:"reviewer"},{code,role:"observer"}] }
+# → { tableId, tableType, ownerSeatToken, inviteCodes:[{code,role},…] }（角色集合随类型/勾选变化）
 
 # 2) 各方入席（用户 token + 邀请码，角色由邀请码固定，席位不能自封）
 curl -s -X POST $SERVER/api/tables/$TID/seats -H "authorization: Bearer $UT" \
@@ -94,7 +109,8 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 
 | 端点 | 说明 |
 |---|---|
-| `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（`mode:"hosted"` 为主持人模式；主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
+| `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（`tableType` 选类型 + `inviteRoles` 按类型选角色；`mode:"hosted"` 为主持人模式；主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
+| `GET /api/table-types` | 桌类型注册表（4 类：流程形态/角色集/阶段文案/说明） |
 | `POST /api/tables/:id/table-config` | 修改桌设定（定规则）：建桌人（席位 token）、仅 open 阶段；网页通道 `POST /api/tables/:id/my/table-config`（user token） |
 | `POST /api/tables/:id/seats` / `GET /api/stances` | 入席（角色随邀请码）/ 立场预设列表 |
 | `POST /api/tables/:id/seat-config` | 入桌设定：立场（预设+补充）/讨论范围/数据范围/就绪（open 阶段可改，开始后锁定） |
@@ -121,8 +137,8 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 服务器起来后浏览器打开 `http://HOST:8787/`：粘贴用户 token（或直接注册新用户）——
 
 - **身份体系**：注册即普通参与用户；系统观察员（systemadmin）见下节，页面身份区有明确徽章区分；
-- **圆桌列表（按角色收权）**：普通用户仅见**自己参与**（持有席位）的圆桌，systemadmin 见全部（「我的桌」筛选仅 systemadmin 有）；阶段中文化徽章、筛选（全部/进行中/已结束）、自己有席位的桌带角色标记；
-- **创建圆桌**：主题/目标/交付物/桌规则/角色安排/席位与 agent 标识/高级参数，创建后凭证卡一次性展示席位 token 与邀请码；
+- **圆桌列表（按角色收权）**：普通用户仅见**自己参与**（持有席位）的圆桌，systemadmin 见全部（「我的桌」筛选仅 systemadmin 有）；桌类型徽章、阶段中文化徽章（按类型语义：协作桌显示 初稿发布/互审补缺/缺口认领/补齐执行/定稿表决）、筛选（全部/进行中/已结束）、自己有席位的桌带角色标记；
+- **创建圆桌**：**先选桌类型**（评审/协作/头脑风暴/方案决策，带一句话说明）→ 建桌模式（self/hosted）→ **按类型勾选开放邀请的角色**（self 模式自动去掉建桌人已占的唯一角色）→ 主题/目标/交付物/桌规则/角色安排/席位与 agent 标识/高级参数，创建后凭证卡一次性展示席位 token 与所选角色邀请码；
 - **凭邀请码入桌**：列表页「🎫 凭邀请码入桌」——输入裸码或整段粘贴「完整邀请」文本，先预检（不扣次数）展示所属圆桌（主题/阶段/码定角色/剩余次数），再确认入席；已持有本桌席位则直接引导进桌，会议已开始则明确拒入；入席成功页一次性展示席位 token（可复制完整凭证交给 agent）；
 - **完整邀请复制**：席位 token 与邀请码的复制按钮带出的都是**完整入桌信息**——服务器地址、圆桌 ID、凭证本体、skill.md 自装指引与 .roundtable 配置写法，接收方整体转发给其 agent 即可参会（不是裸码）；
 - **桌详情（5 秒自动刷新，编辑表单时自动暂缓）**：阶段进度条（设定→陈述→评审→回应→执行→表决→结束）、**下一步动作**（谁持发言权 + taskHint + 待处理请求）、席位（角色/在线/就绪/立场）、产物版本、**资料文档**（投屏清单：文件/作用声明/共享·私有徽章/上传者/大小/**在线预览**/下载；**👁 预览**支持文本（txt/md/json/log/csv/yml/xml 等，md 极简渲染）、图片（png/jpg/gif/webp/svg 等）、PDF（浏览器原生）、docx（按需从 CDN 加载 mammoth 转换并净化，无外网时回退下载提示）；有席位者可直接上传——选文件 + 声明作用 + 选可见性，全桌 agent 即时收到通知；他席私有文档可见存在但不可下载）、执行请求簿记、**变动记录**（最近 50 条结构化变动：资料/产物/阶段/席位/人工，与 agent 每回合刷新的 changes 同源——网页上传新资料后可直观看到该变动已进入全桌可见的记录流）、会议历史（类型筛选 + 注入消息红色警示 + 人工代答徽标）、会议纪要；

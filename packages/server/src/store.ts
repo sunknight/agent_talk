@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import { sha256, type AuditRecord, type Envelope, type SeatInfo, type TableSummary } from "@rt/shared";
+import { sha256, tableTypeOf, type AuditRecord, type Envelope, type SeatInfo, type TableSummary } from "@rt/shared";
 import type { ArtifactRecord, DirectiveRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 
 const SCHEMA_VERSION = 1;
@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS tables (
   phase TEXT NOT NULL, round_no INTEGER NOT NULL, deadlock_count INTEGER NOT NULL,
   created_at INTEGER NOT NULL, closed_at INTEGER, seat_count INTEGER NOT NULL,
   max_review_rounds INTEGER NOT NULL, turn_timeout_ms INTEGER NOT NULL,
-  mode TEXT NOT NULL DEFAULT 'self');
+  mode TEXT NOT NULL DEFAULT 'self',
+  table_type TEXT NOT NULL DEFAULT 'review');
 CREATE TABLE IF NOT EXISTS seats (
   table_id TEXT NOT NULL, seat_id TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (table_id, seat_id));
@@ -117,7 +118,7 @@ export class Store extends EventEmitter {
       userSetRole: this.db.prepare("UPDATE users SET role = ? WHERE user_id = ?"),
       userSetDisabled: this.db.prepare("UPDATE users SET disabled = ? WHERE user_id = ?"),
 
-      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
       tableAll: this.db.prepare("SELECT * FROM tables ORDER BY rowid"),
 
@@ -189,6 +190,9 @@ export class Store extends EventEmitter {
     } catch { /* duplicate column：已是新 schema */ }
     try {
       this.db.exec("ALTER TABLE tables ADD COLUMN mode TEXT NOT NULL DEFAULT 'self'");
+    } catch { /* duplicate column：已是新 schema */ }
+    try {
+      this.db.exec("ALTER TABLE tables ADD COLUMN table_type TEXT NOT NULL DEFAULT 'review'");
     } catch { /* duplicate column：已是新 schema */ }
   }
 
@@ -357,11 +361,13 @@ export class Store extends EventEmitter {
       t.tableId, t.topic, t.template, t.goals, t.deliverables, t.rules, t.rolePlan, t.ownerSeat,
       t.phase, t.roundNo, t.deadlockCount, t.createdAt, nullable(t.closedAt), t.seatCount, t.maxReviewRounds, t.turnTimeoutMs,
       t.mode ?? "self",
+      t.tableType ?? "review",
     );
   }
   private rowTable(r: Row): TableMeta {
     return {
       tableId: String(r.table_id), topic: String(r.topic), template: String(r.template) as TableMeta["template"],
+      tableType: tableTypeOf(String(r.table_type ?? "review")).id,
       goals: String(r.goals), deliverables: String(r.deliverables), rules: String(r.rules), rolePlan: String(r.role_plan),
       ownerSeat: String(r.owner_seat), phase: String(r.phase) as TableMeta["phase"], roundNo: Number(r.round_no),
       deadlockCount: Number(r.deadlock_count), createdAt: Number(r.created_at),
@@ -381,7 +387,7 @@ export class Store extends EventEmitter {
       .sort((a, b) => Number(b.created_at) - Number(a.created_at))
       .map((r) => {
         const t = this.rowTable(r);
-        return { tableId: t.tableId, topic: t.topic, template: t.template, phase: t.phase, seatCount: t.seatCount, createdAt: t.createdAt };
+        return { tableId: t.tableId, topic: t.topic, template: t.template, phase: t.phase, tableType: t.tableType, seatCount: t.seatCount, createdAt: t.createdAt };
       });
   }
 

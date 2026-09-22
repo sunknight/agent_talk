@@ -39,7 +39,7 @@ const seatJoinSchema = s({
   type: "object", required: ["inviteCode", "seatName", "role", "agentLabel"],
   properties: {
     inviteCode: str(4, 64), seatName: str(1, 64),
-    role: { type: "string", enum: ["proposer", "reviewer", "observer"] },
+    role: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator"] },
     agentLabel: str(1, 64),
     capsOverride: {
       type: "object", additionalProperties: false,
@@ -202,6 +202,8 @@ const tableCreateSchema = s({
   properties: {
     topic: str(1, 300),
     template: { type: "string", enum: ["review-collab"] },
+    tableType: { type: "string", enum: ["review", "collab", "brainstorm", "decision"] },
+    inviteRoles: { type: "array", minItems: 1, maxItems: 4, uniqueItems: true, items: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator"] } },
     mode: { type: "string", enum: ["self", "hosted"] },
     goals: str(0, 4_000), deliverables: str(0, 4_000), rules: str(0, 4_000), rolePlan: str(0, 4_000),
     owner: {

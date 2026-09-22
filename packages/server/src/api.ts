@@ -4,7 +4,7 @@
  * 统一响应：{ok:true,data} / {ok:false,error:{code,message}}
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { STANCE_PRESETS, type MsgType } from "@rt/shared";
+import { STANCE_PRESETS, TABLE_TYPES, type MsgType } from "@rt/shared";
 import type { ServerSeat } from "./engine";
 import { ApiError, type Hub } from "./engine";
 import { SKILL_MD } from "./skill-template";
@@ -194,6 +194,10 @@ export function createHttpServer(hub: Hub) {
       if (path === "/api/stances" && method === "GET") {
         return ok(res, { stances: STANCE_PRESETS });
       }
+      // 桌类型注册表：开桌先选类型，按类型选可用角色（UI / skill 共享）
+      if (path === "/api/table-types" && method === "GET") {
+        return ok(res, { tableTypes: TABLE_TYPES });
+      }
       if (path === "/skill.md" && method === "GET") {
         const buf = Buffer.from(SKILL_MD, "utf8");
         res.writeHead(200, { ...SAFE_HEADERS, "content-type": "text/markdown; charset=utf-8", "content-length": buf.length });
@@ -271,6 +275,8 @@ export function createHttpServer(hub: Hub) {
         return ok(res, hub.createTable(bearer(req), {
           topic,
           mode: body.mode === "hosted" ? "hosted" : "self",
+          tableType: body.tableType !== undefined ? String(body.tableType) : undefined,
+          inviteRoles: Array.isArray(body.inviteRoles) ? body.inviteRoles.map((r: unknown) => String(r)) : undefined,
           goals: body.goals ? String(body.goals) : undefined,
           deliverables: body.deliverables ? String(body.deliverables) : undefined,
           rules: body.rules ? String(body.rules) : undefined,
@@ -296,7 +302,7 @@ export function createHttpServer(hub: Hub) {
           return ok(res, hub.joinTable(bearer(req), tableId, {
             inviteCode: String(body.inviteCode ?? ""),
             seatName: String(body.seatName ?? ""),
-            role: body.role as "proposer" | "reviewer" | "observer",
+            role: body.role as "proposer" | "reviewer" | "observer" | "collaborator",
             agentLabel: String(body.agentLabel ?? "unknown"),
             capsOverride: body.capsOverride as Record<string, boolean> | undefined,
           }));

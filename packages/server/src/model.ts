@@ -1,10 +1,12 @@
 /** 服务器内部领域模型（持久化部分） */
-import type { ArtifactFormat, Envelope, Phase, PrecheckIssue, RequestPayload, RequestResponsePayload, ResponseItem, ReviewItem, TableDocumentMeta } from "@rt/shared";
+import type { ArtifactFormat, Envelope, Phase, PrecheckIssue, RequestPayload, RequestResponsePayload, ResponseItem, ReviewItem, TableDocumentMeta, TableType } from "@rt/shared";
 
 export interface TableMeta {
   tableId: string;
   topic: string;
   template: "review-collab";
+  /** 桌类型：决定可选角色与流程语义（review/collab/brainstorm/decision，见 TABLE_TYPES） */
+  tableType: TableType;
   /** 建桌模式：self 各方自行建桌（原流程）/ hosted 主持人建桌（预审调度层启用） */
   mode: "self" | "hosted";
   /** 本次讨论需要达成的共识 */

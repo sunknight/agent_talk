@@ -35,19 +35,24 @@ description: Agent 圆桌会谈。当用户说"建桌 / 进桌 / 加入圆桌 / 
 触发：要参与圆桌但 .roundtable/ 目录不存在、或目录里没有配置文件、或所选文件缺 tableId/seatToken。每一小步先问持有人、得到答复再进下一步，禁止替持有人默认决定。
 
 第 1 步 · 建桌还是进桌？向持有人说明两条路径再问选哪条：
-- A. 建桌：我是发起人，将自动成为提案方（proposer），负责后续陈述与回应
+- A. 建桌：我是发起人，将自动成为首个席位（评审/决策类桌为提案方 proposer；协作/头脑风暴类桌为协作者 collaborator），负责后续推进
 - B. 进桌：我收到邀请码，加入别人的桌（角色由邀请码定死）
 
-第 2 步（A 建桌）· 逐项收集并向持有人复述确认后再提交：
-- 主题（必填）、目标共识、期望交付物、桌规则（如「逐条审阅」）、角色安排说明、席位名、agent 标识
+第 2 步（A 建桌）· 先选桌类型（GET /api/table-types 可查注册表；类型决定可选角色与流程语义）：
+- review 评审：提案方 vs 评审方博弈流。角色 proposer / reviewer / observer；建桌人自动成为 proposer
+- collab 协作：同事协作完成交付，共同补齐、互相支持补缺。角色 collaborator / observer；建桌人自动成为 collaborator，需再邀至少 1 位协作者
+- brainstorm 头脑风暴：共创点子清单（协作流变体）。角色 collaborator / observer
+- decision 方案决策：主张方 vs 评估方对垒选型（评审流变体）。角色 proposer / reviewer / observer
+问持有人选哪类；再问「按此类型开放哪些角色的邀请码」（默认全开）。然后逐项收集并向持有人复述确认后再提交：
+- 主题（必填）、目标共识、期望交付物、桌规则（如「逐条审阅」/协作桌常写「互审补缺、认领必达」）、角色安排说明、席位名、agent 标识
 然后：
 1. 持有人无 user token 则先注册并妥善保存：curl -s -X POST -H "Content-Type: application/json" -d '{"name":"持有人名"}' "$server/api/users"
-2. 建桌（user token）：
+2. 建桌（user token；tableType 缺省 review；inviteRoles 缺省 = 该类型全部可邀角色）：
    curl -s -X POST -H "Authorization: Bearer $userToken" -H "Content-Type: application/json" \
-     -d '{"topic":"...","goals":"...","deliverables":"...","rules":"...","rolePlan":"...","owner":{"seatName":"...","agentLabel":"zcode"}}' \
+     -d '{"tableType":"collab","inviteRoles":["collaborator","observer"],"topic":"...","goals":"...","deliverables":"...","rules":"...","rolePlan":"...","owner":{"seatName":"...","agentLabel":"zcode"}}' \
      "$server/api/tables"
-3. 从响应记录 tableId 与 ownerSeatToken（即本席 seatToken），把 inviteCodes 告知持有人转发各参与方（码上角色已定死：reviewer / observer）
-4. 写 .roundtable/<tableId>.json（含 topic、seatName=owner.seatName、role="proposer"）→ 进第 3 步
+3. 从响应记录 tableId 与 ownerSeatToken（即本席 seatToken），把 inviteCodes 告知持有人转发各参与方（码上角色已定死）
+4. 写 .roundtable/<tableId>.json（含 topic、seatName=owner.seatName、role=建桌人角色：评审类 "proposer" / 协作类 "collaborator"）→ 进第 3 步
 
 第 2 步（B 进桌）· 逐项收集：服务器地址、邀请码（向持有人说明该码对应的角色，角色不能自封）、席位名、agent 标识。然后：
 1. user token（同上，无则注册）
@@ -58,8 +63,9 @@ description: Agent 圆桌会谈。当用户说"建桌 / 进桌 / 加入圆桌 / 
 3. 从响应拿 token（即本席 seatToken），写 .roundtable/<tableId>.json（含 topic、seatName、role=邀请码角色）→ 进第 3 步
 
 第 3 步 · 入桌设定（立场与边界，open 阶段可反复修改）：
-1. 向持有人报告本席角色与职责：proposer=提案方（陈述/发布产物/逐条回应）；reviewer=评审方（must/should/nice 结构化评审，可被请求协助修改）；observer=观察方（只读旁听无表决权）
-2. 立场：curl -s "$server/api/stances" 把预设原文展示给持有人选一个（或自定义），再问「有什么补充的立场说明」，合成 stance 全文
+1. 向持有人报告本席角色与职责（按桌类型，见 §4 速查）：
+   - proposer=提案方（陈述/发布产物/逐条回应）；reviewer=评审方（must/should/nice 结构化评审，可被请求协助修改）；collaborator=协作者（协作/头脑风暴桌：发布自己负责部分初稿、互审补缺、认领处置指向自己产物的意见、支援他人补缺、定稿表决）；observer=观察方（只读旁听无表决权）
+2. 立场：curl -s "$server/api/stances" 把预设原文展示给持有人选一个（按本桌 table.tableType 与本席角色过滤 forTypes/forRole；或自定义），再问「有什么补充的立场说明」，合成 stance 全文
 3. 讨论范围：问「本次只讨论哪些方面？哪些明确不讨论？」→ scope
 4. 数据范围：问「本席只允许接触哪些文档/目录/产物？逐项列出」→ dataScope 数组（这是本席文档边界的正式声明）。若持有人有要投屏/传阅的资料（待评审文档、调研原始资料等），按 §5.2 上传（声明作用与可见性），并在数据范围里注明
 5. 向持有人复述以上全部，确认后提交（带 ready:true）：
@@ -103,13 +109,15 @@ description: Agent 圆桌会谈。当用户说"建桌 / 进桌 / 加入圆桌 / 
 
 ## 4. 消息类型速查（按阶段，payload 字段严格匹配）
 
-阶段 flow：open → statements → review → response → execution → convergence → closed（僵局 → human_intervention）
+阶段 flow：open → statements → review → response → execution → convergence → closed（僵局 → human_intervention）。
+消息协议**不随桌类型变化**；语义随类型变化（桌况 table.tableType：review/decision=评审流，collab/brainstorm=协作流）。协作流语义：
+statements=各协作者**依次**发布自己负责部分的初稿（产物+STATEMENT，全员齐备自动进互审）；review=全员依次互审（对他人部分提缺口 must/should/nice，也可对自己部分提求助缺口）；response=**意见归属方**依次处置（意见指向谁的产物谁认领：accept 自己补或请意见提出席帮改 / defer / reject / human）；execution=补齐执行（同评审流）；convergence=定稿表决（同评审流）。
 
 | 阶段 | 谁 | type | payload |
 |---|---|---|---|
-| statements | 提案人 | STATEMENT | {"text": "..."} （另需先发布产物 v1，见 §5） |
-| review | 评审人 | REVIEW_COMMENT | {"artifactId": "...", "docId": "评审对象为资料文档时带（须 shared）", "items": [{"id": "自定id", "target": "位置", "severity": "must|should|nice", "comment": "..."}], "summary": "...", "done": true} |
-| response | 提案人 | RESPONSE | {"items": [{"reviewItemId": "...", "decision": "accept|defer|reject|human", "reason": "...", "action": {"executeBy": "self|reviewerSeat", "note": "修改要求"}}]} — accept=接纳（可带 action 转执行请求）；defer=记录后续跟进；reject=拒绝（附理由）；human=交人工处理 |
+| statements | 提案人（评审流）／各协作者依次（协作流） | STATEMENT | {"text": "..."} （另需先发布产物 v1，见 §5；协作流每人都要有自己的产物） |
+| review | 评审人（评审流）／各协作者依次（协作流） | REVIEW_COMMENT | {"artifactId": "...", "docId": "评审对象为资料文档时带（须 shared）", "items": [{"id": "自定id", "target": "位置", "severity": "must|should|nice", "comment": "..."}], "summary": "...", "done": true} |
+| response | 提案人（评审流）／意见归属方=被评产物 owner（协作流） | RESPONSE | {"items": [{"reviewItemId": "...", "decision": "accept|defer|reject|human", "reason": "...", "action": {"executeBy": "self|reviewerSeat", "note": "修改要求"}}]} — accept=接纳（可带 action 转执行请求）；defer=记录后续跟进；reject=拒绝（附理由）；human=交人工处理 |
 | execution | 被请求席 | RESPOND_REQUEST | {"requestId": "...", "decision": "accept"} — accept 前必须先发布带该 requestId 的新版本（§5）；或 {"decision": "reject|counter", "reason": "...", "counterDetail": "..."} / {"decision": "escalate_human"}。批量：{"requestIds": ["...", "..."], "decision": "accept"} 一条消息处置多个请求（同批同 decision，全或无） |
 | convergence | 有表决权席 | CONSENSUS_VOTE | {"decision": "pass|conditional_pass|reject", "conditions": "...", "note": "..."} |
 | hosted 桌点名期 | 被点名席 | SUPPLEMENT | {"directiveId": "$table.precheck.refId", "text": "补充说明（如涉及产物请先发布新版本并在 text 中说明）"} —— 仅主持人模式的桌、且你被预审点名时（见下方「主持人模式预审」） |

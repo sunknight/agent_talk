@@ -2,7 +2,7 @@
 
 // ---------- 席位与能力 ----------
 
-export type Role = "proposer" | "reviewer" | "observer" | "host";
+export type Role = "proposer" | "reviewer" | "observer" | "host" | "collaborator";
 
 /** 能力声明：双端强制（请求方网关拒发越权请求，执行方网关拒绝越权执行） */
 export interface Caps {
@@ -23,6 +23,8 @@ export interface Caps {
 export const ROLE_PRESETS: Record<Role, Caps> = {
   proposer: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
   reviewer: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
+  /** 协作者（协作/头脑风暴桌）：与提案方同权——发布自己负责的部分、互审补缺、认领补齐、定稿表决 */
+  collaborator: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
   observer: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: false },
   /** 主持人：只负责初始化圆桌（建桌/定规则/传文档/邀请）与调度管理，不参与评审与协作 */
   host: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: true },
@@ -53,8 +55,9 @@ export interface SeatConfig {
   ready: boolean;
 }
 
-/** 内置立场预设（用户可在此基础上补充；服务器与网关共享展示） */
-export const STANCE_PRESETS: { id: string; label: string; forRole: Role | "any"; text: string }[] = [
+/** 内置立场预设（用户可在此基础上补充；服务器与网关共享展示）。
+ *  forTypes 缺省 = 适用所有桌类型；带 forTypes 的预设只在该类型桌的设定界面出现。 */
+export const STANCE_PRESETS: { id: string; label: string; forRole: Role | "any"; text: string; forTypes?: TableType[] }[] = [
   {
     id: "req-owner",
     label: "需求提出方",
@@ -79,19 +82,127 @@ export const STANCE_PRESETS: { id: string; label: string; forRole: Role | "any";
     forRole: "reviewer",
     text: "我方对提案进行结构化评审，逐条给出 must/should/nice 级别的意见与理由，并在被请求时协助修改文档。",
   },
+  {
+    id: "coauthor-lead",
+    label: "分工协作者",
+    forRole: "collaborator",
+    forTypes: ["collab"],
+    text: "我方是协作者，负责自己分工部分的初稿撰写与后续补齐；主动说明自己部分的已知缺口并求助，也审阅他人部分、指出缺口并支援补缺。对指向自己产物的意见逐条处置：认领补齐（自己改或请意见提出方协助）、记录后续、拒绝或交人工。",
+  },
+  {
+    id: "gap-supporter",
+    label: "支援协作者",
+    forRole: "collaborator",
+    forTypes: ["collab"],
+    text: "我方侧重支援：认真审阅各协作者的部分，逐条指出缺口与可行补法（must/should/nice），可被请求或主动认领补齐他人部分；同样完成自己的分工初稿。",
+  },
+  {
+    id: "idea-contributor",
+    label: "点子贡献者",
+    forRole: "collaborator",
+    forTypes: ["brainstorm"],
+    text: "我方贡献点子并展开可行性论证，欢迎他人补充与挑战；对他人的点子给出 must/should/nice 级别的补充建议，共同收敛出结构化清单。",
+  },
+  {
+    id: "idea-merger",
+    label: "点子整合者",
+    forRole: "collaborator",
+    forTypes: ["brainstorm"],
+    text: "我方负责把散点整合成结构化清单：归类去重、标注成熟度与归属，对无法归位的点子提出澄清问题，最终交付一份可执行的清单。",
+  },
+  {
+    id: "option-owner",
+    label: "方案主张方",
+    forRole: "proposer",
+    forTypes: ["decision"],
+    text: "我方是方案主张方，陈述选型主张与依据（收益/成本/风险），逐条回应评估意见：接纳并调整主张、记录保留意见、坚持原案（附理由）或交人工裁决。",
+  },
+  {
+    id: "option-evaluator",
+    label: "方案评估方",
+    forRole: "reviewer",
+    forTypes: ["decision"],
+    text: "我方独立评估候选方案：按可行性/成本/风险/迁移代价等维度逐条给出 must/should/nice 级意见，结论面向「选哪个、为何、条件是什么」。",
+  },
 ];
 
 // ---------- 会议阶段 ----------
 
 export type Phase =
   | "open" // 建桌、入席
-  | "statements" // 提案人陈述并发布产物 v1
-  | "review" // 评审人结构化评审
-  | "response" // 提案人逐条回应（改/驳）
+  | "statements" // 提案人陈述并发布产物 v1（协作流：各协作者依次发布负责部分初稿）
+  | "review" // 评审人结构化评审（协作流：协作者互审补缺）
+  | "response" // 提案人逐条回应（协作流：意见归属方逐条处置缺口）
   | "execution" // 已接受的修改请求逐个执行（含审批）
   | "convergence" // 共识表决
   | "human_intervention" // 僵局人工介入（状态机暂停）
   | "closed"; // 出纪要，只读
+
+// ---------- 桌类型 ----------
+
+/** 桌类型：开桌时选定，决定可选角色与流程语义；头脑风暴/方案决策为两种流程形态的变体 */
+export type TableType = "review" | "collab" | "brainstorm" | "decision";
+
+/** 流程形态：review = 博弈评审流（提案 vs 评审）；collab = 协同流（全员共创、互审补缺） */
+export type FlowShape = "review" | "collab";
+
+export interface TableTypeDef {
+  id: TableType;
+  /** 中文名（UI 徽章 / 开桌表单） */
+  label: string;
+  /** 一句话说明（开桌表单卡片） */
+  description: string;
+  flow: FlowShape;
+  /** 该类型可用的参与角色（不含 host——host 由 hosted 建桌模式引入，任何类型可用） */
+  roles: Role[];
+  /** 唯一席位角色（同桌至多一人，如评审流的 proposer） */
+  uniqueRoles: Role[];
+  /** 阶段显示名（按流程语义差异化；缺省项用评审流默认文案） */
+  phaseLabels: Partial<Record<Phase, string>>;
+}
+
+/** 桌类型注册表（单一事实来源：REST / 观察端 / skill 共享） */
+export const TABLE_TYPES: TableTypeDef[] = [
+  {
+    id: "review", label: "评审",
+    description: "提案方与评审方博弈：陈述 → 逐条评审 → 四态回应 → 执行 → 表决",
+    flow: "review", roles: ["proposer", "reviewer", "observer"], uniqueRoles: ["proposer"],
+    phaseLabels: {},
+  },
+  {
+    id: "collab", label: "协作",
+    description: "同事协作完成交付：各自初稿 → 互审补缺 → 缺口认领 → 补齐执行 → 定稿表决",
+    flow: "collab", roles: ["collaborator", "observer"], uniqueRoles: [],
+    phaseLabels: { statements: "初稿发布", review: "互审补缺", response: "缺口认领", execution: "补齐执行", convergence: "定稿表决" },
+  },
+  {
+    id: "brainstorm", label: "头脑风暴",
+    description: "共创点子清单：点子提交 → 互评补充 → 认领整合 → 整合执行 → 清单定稿",
+    flow: "collab", roles: ["collaborator", "observer"], uniqueRoles: [],
+    phaseLabels: { statements: "点子提交", review: "互评补充", response: "认领整合", execution: "整合执行", convergence: "清单定稿" },
+  },
+  {
+    id: "decision", label: "方案决策",
+    description: "主张方与评估方对垒选型：方案陈述 → 方案评估 → 决策回应 → 调整执行 → 决议表决",
+    flow: "review", roles: ["proposer", "reviewer", "observer"], uniqueRoles: ["proposer"],
+    phaseLabels: { statements: "方案陈述", review: "方案评估", response: "决策回应", execution: "调整执行", convergence: "决议表决" },
+  },
+];
+
+/** 类型解析：未知/缺失值回落 review（旧数据与旧客户端兼容） */
+export function tableTypeOf(id: string | undefined | null): TableTypeDef {
+  return TABLE_TYPES.find((t) => t.id === id) ?? TABLE_TYPES[0];
+}
+
+/** 阶段显示名：按桌类型取协作语义文案，缺省回落评审流默认文案 */
+export function phaseLabelOf(tableType: string | undefined | null, phase: Phase): string {
+  const def = tableTypeOf(tableType);
+  const DEFAULT_PHASE_LABELS: Record<Phase, string> = {
+    open: "设定", statements: "陈述", review: "评审", response: "回应",
+    execution: "执行", convergence: "表决", human_intervention: "人工介入", closed: "结束",
+  };
+  return def.phaseLabels[phase] ?? DEFAULT_PHASE_LABELS[phase];
+}
 
 // ---------- 消息类型 ----------
 
@@ -145,11 +256,13 @@ export interface InfoPayload { text: string; level?: "info" | "warn"; }
 
 export interface TableSummary {
   tableId: string; topic: string; template: string; phase: Phase;
+  tableType: TableType;
   seatCount: number; createdAt: number;
 }
 export interface TableListPayload { tables: TableSummary[]; }
 export interface TableInfoPayload {
   tableId: string; topic: string; template: string; phase: Phase;
+  tableType: TableType;
   /** 建桌模式：self 各方自行建桌 / hosted 主持人建桌（预审调度层启用） */
   mode: "self" | "hosted";
   /** 本次讨论要达成的共识 */
@@ -181,7 +294,11 @@ export interface PrecheckState {
 export interface TableCreatePayload {
   topic: string;
   template: "review-collab";
-  /** self（默认）= 建桌人自动成为提案方，原流程；hosted = 建桌人成为主持人（只管桌与调度，预审层启用） */
+  /** 桌类型（缺省 review 评审）：决定可选角色与流程语义，见 TABLE_TYPES */
+  tableType?: TableType;
+  /** 开放邀请码的角色（按类型勾选；缺省 = 该类型全部可邀角色；校验 ⊆ 类型角色 − 建桌人已占角色） */
+  inviteRoles?: Role[];
+  /** self（默认）= 建桌人自动成为提案方（协作类桌成为协作者），原流程；hosted = 建桌人成为主持人（只管桌与调度，预审层启用） */
   mode?: "self" | "hosted";
   /** 本次讨论需要达成的共识 */
   goals?: string;
