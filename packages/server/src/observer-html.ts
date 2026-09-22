@@ -559,7 +559,7 @@ function helpBodyHtml(){
     +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）；主持人建的问询桌另发「问询方」码，由要提问的人在本页凭码就位。</li>'
     +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人（主持人桌为主持人）点「▶ 开始会议」；问询桌由问询方点「▶ 开始问询」。</li></ul>'
     +'<h4>会议阶段</h4>'
-    +'<p>阶段按桌类型走不同流程：<b>评审 / 方案决策</b>：设定 → 陈述 → 评审 → 回应 → 执行 → 表决 → 结束；<b>协作 / 头脑风暴</b>：设定 → 初稿发布 → 互审补缺 → 缺口认领 → 补齐执行 → 定稿表决 → 结束；<b>问询</b>：设定 → 问答 → 结束。结束自动生成纪要（问询桌为问答对汇总的问询纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段；评审/协作类桌（两种建桌模式一致）各方每回合提交先经 DeepSeek 预审，需要补充时会被点名。</p>'
+    +'<p>阶段按桌类型走不同流程：<b>评审 / 方案决策</b>：设定 → 陈述 → 评审 → 回应 → 执行 → 表决 → 结束；<b>协作 / 头脑风暴</b>：设定 → 初稿发布 → 互审补缺 → 缺口认领 → 补齐执行 → 定稿表决 → 结束；<b>问询</b>：设定 → 问答 → 结束。结束自动生成纪要（问询桌为问答对汇总的问询纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段；评审/协作类桌的各方回合提交会先经系统预审，需要补充时会被点名。</p>'
     +'<h4>席位角色</h4>'
     +'<ul><li><b>提案方</b>（proposer）：发布产物、提案陈述、逐条回应评审意见；</li>'
     +'<li><b>评审方</b>（reviewer）：must / should / nice 结构化评审，可被请求协助修改；</li>'
@@ -888,8 +888,8 @@ function renderList(){
   h+='<div class="card"><div class="row"><b>帮助速览</b><span class="sp"></span>'
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
     +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
-    +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再注册用户（POST /api/users，返回 rtu_ token 即登录凭证）。</div>'
-    +'<div class="kv"><span class="k">介入</span>桌详情可发人工指令（可定向某席）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div>'
+    +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再注册用户（返回的 token 即登录凭证）。</div>'
+    +'<div class="kv"><span class="k">介入</span>桌详情可给本席 agent 发公开补充（可定向）或私有指令（仅本席 agent 可见）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div>'
     +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
   app.innerHTML=h;
   app.querySelectorAll('.tcard').forEach(function(el){ el.onclick=function(){ openTable(el.getAttribute('data-tid')); }; });
@@ -1020,8 +1020,7 @@ function renderCreateForm(){
     }).join('')
     +'</div><div class="hint">类型决定流程语义与可选角色；开桌后不可更改</div></div>'
     +'<div class="frow"><label class="t">我的角色</label><div id="ctRoleRow" class="rchoice two"></div>'
-    +'<div class="hint">自建桌＝你以所选角色入席直接参会；选「主持人」＝主持人建桌（只管规则/资料/邀请与调度，不参与评审协作）。问询桌选「问询方」＝你就是要提问的人</div>'
-    +'<div class="hint" id="ctModeTip">评审/协作类桌的回合提交都会过 DeepSeek 预审（两模式一致；问询桌问答不预审）；需服务器配置 DEEPSEEK_API_KEY，未配置时预审自动跳过放行</div></div>'
+    +'<div class="hint">自建桌＝你以所选角色入席直接参会；选「主持人」＝主持人建桌（只管规则/资料/邀请与调度，不参与评审协作）。问询桌选「问询方」＝你就是要提问的人</div></div>'
     +'<div class="frow"><label class="t">开放邀请的角色</label><div class="cchoice" id="ctRoles"></div><div class="hint" id="ctRolesHint"></div></div>'
     +'<div class="frow"><label class="t" for="ctTopic">主题 <b>*</b></label><input id="ctTopic" placeholder="如「v2 接口文档评审」「产品白皮书协作撰写」"><div class="hint">一句话说清这桌评什么/协作什么</div></div>'
     +'<div class="frow"><label class="t" for="ctGoals">目标共识</label><input id="ctGoals" placeholder="本次要达成什么（可选）"><div class="hint">会议结束时希望各方同意的结论</div></div>'
@@ -1161,8 +1160,8 @@ function renderCreateResult(d,topic){
         ?'主持人问询流程：定规则（详情页「桌设定」可随时改）→ 把「问询方」邀请码发给要提问的人（其凭码就位）、「回答方」码发给各 agent → 回答方入席设定并就绪 → 问询方在详情页点「开始问询」→ 提问 → 问完「结束问询」出问询纪要。'
         :'问询流程：把「回答方」完整邀请发给各 agent → 其入席并完成入桌设定（立场=回答范围、数据范围，就绪）→ 你在详情页点「开始问询」→ 随时提问（可定向某回答席或广播全员作答）→ 问完点「结束问询」自动生成问询纪要（问答对汇总）。')
       :hosted
-      ?'主持人流程：定规则（详情页「桌设定」可随时改）→ 传资料（详情页上传共享文档，全桌可见）→ 把邀请码发给各参与方（角色见上方码标签）→ 各方完成入桌设定 → 你在详情页点「开始会议」。开始后各方每回合提交由 DeepSeek 预审，需要补充时会被点名。'
-      :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。回合提交过 DeepSeek 预审，需要补充时会被点名。')
+      ?'主持人流程：定规则（详情页「桌设定」可随时改）→ 传资料（详情页上传共享文档，全桌可见）→ 把邀请码发给各参与方（角色见上方码标签）→ 各方完成入桌设定 → 你在详情页点「开始会议」。开始后各方回合提交先经系统预审，需要补充时会被点名。'
+      :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。回合提交先经系统预审，需要补充时会被点名。')
     +'</div>'
     +'<div class="row" style="margin-top:8px"><button id="ctBack">返回列表</button><span class="sp"></span><button id="ctEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
@@ -1264,7 +1263,7 @@ function renderJoinResult(p,r){
     +'<h3 class="csec">席位 token（只显示这一次，请立即复制）</h3>'
     +'<div class="row"><span class="invite big">'+esc(r.token)+'</span><span class="sp"></span><button id="jrTokCopy">复制凭证（含入桌信息）</button></div>'
     +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法），交给你的 agent 即可代你参会。关闭本页后无法再查看；之后可在桌详情页随时「重签凭证」。</div>'
-    +'<h3 class="csec">下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。回合提交过 DeepSeek 预审，需要补充时会被点名。</div>'
+    +'<h3 class="csec">下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。回合提交先经系统预审，需要补充时会被点名。</div>'
     +'<div class="row" style="margin-top:8px"><button id="jrBack">返回列表</button><span class="sp"></span><button id="jrEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
   app.innerHTML=h;
@@ -1363,7 +1362,7 @@ function renderDetail(d){
   h+='<div class="dcol dmain">';
   h+='<div class="card"><div class="section turn" style="margin-top:0"><b>下一步动作</b><div style="margin-top:4px">';
   if(t.precheck){
-    if(t.precheck.state==='reviewing') h+='<div class="badge warn">预审中</div> <span class="dim">DeepSeek 正在预审刚提交的回合结果，预审落地前不授出发言权</span>';
+    if(t.precheck.state==='reviewing') h+='<div class="badge warn">预审中</div> <span class="dim">系统正在预审刚提交的回合结果，预审完成前暂不轮转发言权</span>';
     else if(t.precheck.state==='directive') h+='<div class="badge warn">预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交</span><br>';
   }
   if(t.pause){
@@ -1462,7 +1461,7 @@ function renderDetail(d){
         if(!rolesOk) h+='<div class="ferr">角色不齐备：还需提案方/评审方席位凭邀请码入席。</div>';
         else if(!allReady) h+='<div class="ferr">尚有席位未就绪，各方就绪后才能开始。</div>';
         h+='<div class="row" style="margin-top:8px"><button id="stStart" class="primary"'+((allReady&&rolesOk)?'':' disabled')+'>▶ 开始会议</button>'
-          +'<span class="dim">开始后进入提案陈述阶段'+(t.mode==='hosted'?'，各方每回合提交将由 DeepSeek 预审':'')+'，席位设定锁定</span></div><div class="ferr" id="stErr"></div></div>';
+          +'<span class="dim">开始后进入提案陈述阶段，席位设定锁定</span></div><div class="ferr" id="stErr"></div></div>';
       } else if(cfg.ready){
         h+='<div class="section dim">已就绪，等待建桌人开始会议。</div>';
       }
