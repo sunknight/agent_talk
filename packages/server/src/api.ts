@@ -208,6 +208,18 @@ export function createHttpServer(hub: Hub) {
           return ok(res, hub.resumeByUser(bearer(req), tableId));
         }
       }
+      // ---------- 问询桌问询方通道（user token，建桌人专属） ----------
+      if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "ask" && method === "POST" && !seg[4]) {
+        const body = await readJson(req);
+        return ok(res, { message: hub.askByUser(bearer(req), seg[2], {
+          text: String(body.text ?? ""),
+          toSeat: body.toSeat ? String(body.toSeat) : undefined,
+        }) });
+      }
+      if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "end-inquiry" && method === "POST" && !seg[4]) {
+        const body = await readJson(req);
+        return ok(res, hub.endInquiryByUser(bearer(req), seg[2], body.reason !== undefined ? String(body.reason) : undefined));
+      }
       if (path === "/api/stances" && method === "GET") {
         return ok(res, { stances: STANCE_PRESETS });
       }
@@ -333,7 +345,7 @@ export function createHttpServer(hub: Hub) {
           return ok(res, hub.joinTable(bearer(req), tableId, {
             inviteCode: String(body.inviteCode ?? ""),
             seatName: String(body.seatName ?? ""),
-            role: body.role as "proposer" | "reviewer" | "observer" | "collaborator",
+            role: body.role as "proposer" | "reviewer" | "observer" | "collaborator" | "answerer",
             agentLabel: String(body.agentLabel ?? "unknown"),
             capsOverride: body.capsOverride as Record<string, boolean> | undefined,
           }));

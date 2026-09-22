@@ -409,7 +409,7 @@ export class Store extends EventEmitter {
       .sort((a, b) => Number(b.created_at) - Number(a.created_at))
       .map((r) => {
         const t = this.rowTable(r);
-        return { tableId: t.tableId, topic: t.topic, template: t.template, phase: t.phase, tableType: t.tableType, seatCount: t.seatCount, createdAt: t.createdAt, paused: !!t.pause };
+        return { tableId: t.tableId, topic: t.topic, template: t.template, phase: t.phase, tableType: t.tableType, ownerSeat: t.ownerSeat, seatCount: t.seatCount, createdAt: t.createdAt, paused: !!t.pause };
       });
   }
 

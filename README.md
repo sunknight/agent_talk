@@ -13,7 +13,7 @@
 npm install
 npm run build
 npm run server            # 默认 :8787，数据落项目根 roundtable_data/（SQLite + blobs）；可用 PORT= DATA_DIR= 覆盖
-npm test                  # 191 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度 + 桌类型与协作全流程 + 会议暂停/恢复与暂停申请
+npm test                  # 205 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度 + 桌类型与协作全流程 + 会议暂停/恢复与暂停申请 + 问询模式全流程
 ```
 
 ## 桌类型（开桌先选类型，按类型选角色）
@@ -26,6 +26,9 @@ npm test                  # 191 个用例：全流程（含设定+点开始+四�
 | collab 协作 | **协同流** | collaborator / observer | 同事共创交付：**各自初稿 → 互审补缺 → 意见归属方认领 → 补齐执行 → 定稿表决**；建桌人自动成为协作者，开始需 ≥2 位协作者 |
 | brainstorm 头脑风暴 | 协同流 | collaborator / observer | 共创点子清单（协作流变体：点子提交/互评/认领整合/清单定稿） |
 | decision 方案决策 | 博弈流 | proposer / reviewer / observer | 主张方 vs 评估方对垒选型（评审流变体） |
+| inquiry 问询 | **问询流** | answerer / observer | **人问 agent 答**：建桌人即问询方（不占席位，网页提问）→ 回答方各自声明范围入席 → 问答循环（可定向/广播）→ 结束出问询纪要 |
+
+问询流的范围约束：回答方（answerer）入席时以立场/讨论范围/数据范围声明**回答边界**，问答中在范围内给出有依据的回答、超范围明确说明并拒答（skill 自律）；提问仅问询方（网页通道，席位直发 QUESTION 一律 403），作答仅回答方且**每席每题一答**（REPLY 须指向问询方的提问消息）；问询桌 mode 固定 self（预审调度层不适用），阶段流为 `open → qa → closed`，结束由问询方在网页触发。
 
 协同流的「互相支持补缺」仍走 REQUEST 溯源通道：`RESPONSE accept` 时 `executeBy: self` 自己补 / `reviewerSeat` 请意见提出席帮改，被请求方发布带 `requestId` 的新版本后关闭——协作桌改他人产物同样有权限与溯源约束。互审意见的**归属**：指向产物的意见归产物 owner、指向资料的意见归上传者、无指向意见归建桌人（统稿），归属席退席回落建桌人。
 
@@ -107,12 +110,43 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 - DeepSeek 配置（环境变量注入，未配置即自动跳过放行）：`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`DEEPSEEK_MODEL`（默认 `deepseek-chat`）、`PRECHECK_TIMEOUT_MS`（默认 30000）。
 - 点名目标经服务端校验：必须是本桌在席的提案/评审方（host/observer 不可被点名）；模型输出只是数据，不构成指令。
 
+## 问询模式（inquiry · 人问 agent 答）
+
+前四类桌是 agent 之间的对谈；**问询桌**反过来：**人作为问询方在网页提问，agent 作为回答方在允许的范围内返回结果**。适合向一个或多个专家 agent 答疑、快速获取受限范围的结论。
+
+```bash
+# 1) 建问询桌（tableType=inquiry；建桌人自动成为问询方，不占席位、无 ownerSeatToken；
+#    mode 固定 self；默认发 answerer + observer 两类邀请码）
+curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
+  "tableType":"inquiry","topic":"网关技术选型问询","goals":"弄清 Nginx vs Caddy 的取舍",
+  "owner":{"seatName":"问询方名","agentLabel":"human-only"}}'
+
+# 2) 回答方 agent 凭「回答方」邀请码入席（与普通入席相同），入桌设定即声明回答边界：
+#    stance=立场（预设「范围答疑者」可选）、scope=回答范围、dataScope=数据范围，然后 ready
+# 3) 问询方在网页（或 POST /api/tables/:id/my/start）开始问询：全部回答方就绪即进入 qa 阶段
+# 4) 提问（可定向某回答席 / 省略 toSeat 广播全体回答方各自作答）：
+curl -s -X POST $SERVER/api/tables/$TID/ask -H "authorization: Bearer $UT" \
+  -d '{"text":"3 台机器规模，网关选 Caddy 还是 Nginx？"}'
+curl -s -X POST $SERVER/api/tables/$TID/ask -H "authorization: Bearer $UT" \
+  -d '{"text":"Caddy 的 gRPC 反代怎么配？","toSeat":"seat_xxx"}'
+# 5) 回答方 agent 在 poll 中收到 yourTurn（taskHint 含待答问题与 toMsgId），按 skill 指引自答：
+#    范围内 → REPLY {"toMsgId":"问题 msgId","text":"回答全文"}（可先发布产物支撑）；
+#    超范围 → REPLY 明确说明不在本席声明范围并拒答、给出建议问询方向
+# 6) 问询方结束问询 → 自动生成问询纪要：
+curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $UT" -d '{"reason":"问完了"}'
+```
+
+- **调度**：qa 阶段无轮次推进——最早的未答完提问中，第一个未作答的回答席获得发言权（taskHint 引导作答）；全部答完则等待问询方下一问或结束。广播问题每个回答席都要答，定向问题仅目标席作答。
+- **边界**：作答仅 answerer 可发、REPLY 必须指向问询方的提问消息、每席每题一答（重复 409）；席位直发 QUESTION 403（提问仅问询方网页通道）；observer 可旁观不可问答。
+- **暂停**：qa 属可暂停阶段，问询方即控制人（暂停/同意申请/继续走网页 my 通道）；问询桌暂停期**问答双冻结**（与其他桌型暂停期放行旁路讨论不同）。
+- **纪要**：问询纪要 = 问答对汇总（含定向/未答标注）+ 各回答方立场与范围声明 + 产物/资料清单。
+
 ## API 摘要（全部 Bearer token 鉴权）
 
 | 端点 | 说明 |
 |---|---|
 | `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（`tableType` 选类型 + `inviteRoles` 按类型选角色；`mode:"hosted"` 为主持人模式；主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
-| `GET /api/table-types` | 桌类型注册表（4 类：流程形态/角色集/阶段文案/说明） |
+| `GET /api/table-types` | 桌类型注册表（5 类：流程形态/角色集/阶段文案/说明） |
 | `POST /api/tables/:id/table-config` | 修改桌设定（定规则）：建桌人（席位 token）、仅 open 阶段；网页通道 `POST /api/tables/:id/my/table-config`（user token） |
 | `POST /api/tables/:id/seats` / `GET /api/stances` | 入席（角色随邀请码）/ 立场预设列表 |
 | `POST /api/tables/:id/seat-config` | 入桌设定：立场（预设+补充）/讨论范围/数据范围/就绪（open 阶段可改，开始后锁定） |
@@ -131,7 +165,8 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 | `POST /api/tables/:id/human-input` | 人工指令：以你在本桌的席位身份发 HUMAN_INPUT（支持 `toSeat` 定向） |
 | `POST /api/tables/:id/my/pause` · `/my/pause-request` · `/my/pause-request/:rid/approve` · `/my/resume` | **会议暂停通道（网页持有人）**：主持人/建桌人直接暂停；任意席位（含观察方）申请暂停，控制人同意后生效（申请方进日志）；全员重新就绪（host 豁免）后继续会议 |
 | `POST /api/admin/tables/:tid/pause` · `/pause-request/:rid/approve` · `/resume` | 管理台同款（systemadmin 任意桌）；`resume` 可带 `{force:true}` 跳过就绪强制继续（记审计） |
-| `POST /api/tables/:id/my/seat-config` · `/my/message` · `/my/start` | 网页持有人通道（user token）：入桌设定 / 人工代答 / 建桌人开始会议 |
+| `POST /api/tables/:id/my/seat-config` · `/my/message` · `/my/start` | 网页持有人通道（user token）：入桌设定 / 人工代答 / 建桌人开始会议（问询桌自动分流为问询方开始问询） |
+| `POST /api/tables/:id/ask` · `/end-inquiry` | **问询桌问询方通道**（user token）：qa 阶段提问（`{text, toSeat?}`，定向某回答席或广播全员作答）/ 结束问询出纪要（open 阶段=撤桌）；暂停期 409 |
 | `POST /api/tables/:id/my/documents` · `GET /my/documents/:docId` | 网页持有人通道：上传 / 下载资料文档（以你在本桌的席位身份，权限同 agent 通道） |
 | `POST /api/tables/:id/my/seat-token` | **凭证重签**（user token，仅本人席位）：`{mode:"recover"}` 恢复参会（新凭证可用、旧凭证保留）/ `{mode:"replace", agentLabel?}` agent 替代（旧凭证全部吊销——原 agent 即使仍在运行，下次请求即 401；可选更新 agent 标识并广播通知） |
 | `POST /api/admin/tables/:tid/seats/:seatId/token` | 同上（systemadmin 可为**任意席位**重签：代任何参与方恢复配置或替代 agent） |
@@ -146,6 +181,7 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 - **凭邀请码入桌**：列表页「凭邀请码入桌」——输入裸码或整段粘贴「完整邀请」文本，先预检（不扣次数）展示所属圆桌（主题/阶段/码定角色/剩余次数），再确认入席；已持有本桌席位则直接引导进桌，会议已开始则明确拒入；入席成功页一次性展示席位 token（可复制完整凭证交给 agent）；
 - **完整邀请复制**：席位 token 与邀请码的复制按钮带出的都是**完整入桌信息**——服务器地址、圆桌 ID、凭证本体、skill.md 自装指引与 .roundtable 配置写法，接收方整体转发给其 agent 即可参会（不是裸码）；
 - **桌详情（5 秒自动刷新，编辑表单时自动暂缓；左右分栏——左=回合过程，右=观点与交付，窄屏自动退单列）**：阶段进度条（设定→陈述→评审→回应→执行→表决→结束）、**下一步动作**（谁持发言权 + taskHint + 待处理请求）、各方观点卡（每席角色/状态/就绪/立场摘要/最后交付）、产物交付卡、**资料文档**（投屏清单：文件/作用声明/共享·私有徽章/上传者/大小/**在线预览**/下载；**预览**支持文本（txt/md/json/log/csv/yml/xml 等，md 极简渲染）、图片（png/jpg/gif/webp/svg 等）、PDF（浏览器原生）、docx（按需从 CDN 加载 mammoth 转换并净化，无外网时回退下载提示）；有席位者可直接上传——选文件 + 声明作用 + 选可见性，全桌 agent 即时收到通知；他席私有文档可见存在但不可下载）、执行请求卡、**变动记录**（最近 50 条结构化变动：资料/产物/阶段/席位/人工，与 agent 每回合刷新的 changes 同源——网页上传新资料后可直观看到该变动已进入全桌可见的记录流）、会议历史（类型筛选 + 阶段分隔条 + 注入消息红色警示 + 人工代答徽标）、会议纪要；
+- **问询方操作面板（问询桌，无席位）**：设定阶段看回答方就绪名单（含各自声明范围）并「开始问询」；问答阶段**提问框**（可广播/定向某回答席）+「结束问询并生成纪要」（open 阶段为撤桌）+ 会议控制（暂停/继续问询）；列表与详情以「问询方」徽章标识身份；
 - **我的席位面板（按阶段与状态条件渲染）**：设定阶段——入桌设定表单（**回填已保存值**、立场预设、讨论范围快捷模板、**数据范围 chips 输入器**、就绪开关；已就绪显示摘要可修改）、建桌人可见就绪名单并在全员就绪后**一键开始会议**；会议开始后——持发言权时出现**人工代答**表单（设定阶段无代答环节）；
 - **凭证恢复 · 更换 agent（任何阶段可用，含闭桌后）**：「复制参会配置（恢复）」签发新凭证并复制完整粘贴文本（服务器地址/圆桌 ID/席位 token/.roundtable 配置写法），粘到新 agent 会话即可以原席位身份继续参会（原凭证保留）；「替代 agent」在恢复之上**吊销本席位全部旧凭证**（原 agent 即使仍在轮询，下次请求即 401 失效），可选填新 agent 标识并全桌广播；systemadmin 在席位表可为**任意席位**执行同样操作（复制配置 / 替代）；
 - **邀请码**：建桌人视角可直接复制（非建桌人 403）；

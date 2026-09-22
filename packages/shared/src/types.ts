@@ -2,7 +2,7 @@
 
 // ---------- 席位与能力 ----------
 
-export type Role = "proposer" | "reviewer" | "observer" | "host" | "collaborator";
+export type Role = "proposer" | "reviewer" | "observer" | "host" | "collaborator" | "answerer";
 
 /** 能力声明：双端强制（请求方网关拒发越权请求，执行方网关拒绝越权执行） */
 export interface Caps {
@@ -28,6 +28,8 @@ export const ROLE_PRESETS: Record<Role, Caps> = {
   observer: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: false },
   /** 主持人：只负责初始化圆桌（建桌/定规则/传文档/邀请）与调度管理，不参与评审与协作 */
   host: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: true },
+  /** 回答方（问询桌）：在声明范围内答问询方所问，可发布产物支撑回答 */
+  answerer: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
 };
 
 export interface SeatInfo {
@@ -124,12 +126,20 @@ export const STANCE_PRESETS: { id: string; label: string; forRole: Role | "any";
     forTypes: ["decision"],
     text: "我方独立评估候选方案：按可行性/成本/风险/迁移代价等维度逐条给出 must/should/nice 级意见，结论面向「选哪个、为何、条件是什么」。",
   },
+  {
+    id: "scope-answerer",
+    label: "范围答疑者",
+    forRole: "answerer",
+    forTypes: ["inquiry"],
+    text: "我方是回答方，仅在本席声明的讨论范围与数据范围内作答：范围内给出准确、有依据的答案；超出范围的提问明确说明不在声明范围内、不作答，并建议可行的问询方向。",
+  },
 ];
 
 // ---------- 会议阶段 ----------
 
 export type Phase =
   | "open" // 建桌、入席
+  | "qa" // 问答（问询桌专用：问询方提问、回答方作答的循环，无轮次推进）
   | "statements" // 提案人陈述并发布产物 v1（协作流：各协作者依次发布负责部分初稿）
   | "review" // 评审人结构化评审（协作流：协作者互审补缺）
   | "response" // 提案人逐条回应（协作流：意见归属方逐条处置缺口）
@@ -141,10 +151,10 @@ export type Phase =
 // ---------- 桌类型 ----------
 
 /** 桌类型：开桌时选定，决定可选角色与流程语义；头脑风暴/方案决策为两种流程形态的变体 */
-export type TableType = "review" | "collab" | "brainstorm" | "decision";
+export type TableType = "review" | "collab" | "brainstorm" | "decision" | "inquiry";
 
-/** 流程形态：review = 博弈评审流（提案 vs 评审）；collab = 协同流（全员共创、互审补缺） */
-export type FlowShape = "review" | "collab";
+/** 流程形态：review = 博弈评审流（提案 vs 评审）；collab = 协同流（全员共创、互审补缺）；inquiry = 问询流（人问 agent 答） */
+export type FlowShape = "review" | "collab" | "inquiry";
 
 export interface TableTypeDef {
   id: TableType;
@@ -187,6 +197,12 @@ export const TABLE_TYPES: TableTypeDef[] = [
     flow: "review", roles: ["proposer", "reviewer", "observer"], uniqueRoles: ["proposer"],
     phaseLabels: { statements: "方案陈述", review: "方案评估", response: "决策回应", execution: "调整执行", convergence: "决议表决" },
   },
+  {
+    id: "inquiry", label: "问询",
+    description: "人问 agent 答：web 提问 → 回答方在声明范围内作答 → 问询纪要",
+    flow: "inquiry", roles: ["answerer", "observer"], uniqueRoles: [],
+    phaseLabels: { qa: "问答" },
+  },
 ];
 
 /** 类型解析：未知/缺失值回落 review（旧数据与旧客户端兼容） */
@@ -198,7 +214,7 @@ export function tableTypeOf(id: string | undefined | null): TableTypeDef {
 export function phaseLabelOf(tableType: string | undefined | null, phase: Phase): string {
   const def = tableTypeOf(tableType);
   const DEFAULT_PHASE_LABELS: Record<Phase, string> = {
-    open: "设定", statements: "陈述", review: "评审", response: "回应",
+    open: "设定", qa: "问答", statements: "陈述", review: "评审", response: "回应",
     execution: "执行", convergence: "表决", human_intervention: "人工介入", closed: "结束",
   };
   return def.phaseLabels[phase] ?? DEFAULT_PHASE_LABELS[phase];
@@ -259,6 +275,8 @@ export interface InfoPayload { text: string; level?: "info" | "warn"; }
 export interface TableSummary {
   tableId: string; topic: string; template: string; phase: Phase;
   tableType: TableType;
+  /** 建桌席位（问询桌为虚拟标识 "asker"，供问询方归属判定） */
+  ownerSeat: string;
   seatCount: number; createdAt: number;
   /** 会议暂停叠加态标记（列表页徽章；未暂停/false） */
   paused?: boolean;
@@ -600,6 +618,7 @@ export type AuditEvent =
   | "request_sent" | "request_responded"
   | "vote_cast" | "consensus_result" | "escalate" | "human_input" | "human_ruling"
   | "table_close" | "policy_reject" | "server_error"
+  | "asker_question"
   /** 主持人模式（hosted）：预审与点名补充 */
   | "precheck_result" | "directive_open" | "supplement_done" | "table_update"
   /** 会议暂停/恢复（叠加态）与暂停申请：pause_request/table_pause(via=request) 的 detail 均记录申请方 */

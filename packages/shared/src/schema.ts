@@ -39,7 +39,7 @@ const seatJoinSchema = s({
   type: "object", required: ["inviteCode", "seatName", "role", "agentLabel"],
   properties: {
     inviteCode: str(4, 64), seatName: str(1, 64),
-    role: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator"] },
+    role: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer"] },
     agentLabel: str(1, 64),
     capsOverride: {
       type: "object", additionalProperties: false,
@@ -158,7 +158,7 @@ const humanRulingSchema = s({
   type: "object", required: ["instruction"],
   properties: {
     instruction: str(1, 8_000),
-    resumePhase: { type: "string", enum: ["open", "statements", "review", "response", "execution", "convergence", "human_intervention", "closed"] },
+    resumePhase: { type: "string", enum: ["open", "qa", "statements", "review", "response", "execution", "convergence", "human_intervention", "closed"] },
     forceConvergence: { type: "boolean" },
   },
   additionalProperties: false,
@@ -202,8 +202,8 @@ const tableCreateSchema = s({
   properties: {
     topic: str(1, 300),
     template: { type: "string", enum: ["review-collab"] },
-    tableType: { type: "string", enum: ["review", "collab", "brainstorm", "decision"] },
-    inviteRoles: { type: "array", minItems: 1, maxItems: 4, uniqueItems: true, items: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator"] } },
+    tableType: { type: "string", enum: ["review", "collab", "brainstorm", "decision", "inquiry"] },
+    inviteRoles: { type: "array", minItems: 1, maxItems: 5, uniqueItems: true, items: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer"] } },
     mode: { type: "string", enum: ["self", "hosted"] },
     goals: str(0, 4_000), deliverables: str(0, 4_000), rules: str(0, 4_000), rolePlan: str(0, 4_000),
     owner: {

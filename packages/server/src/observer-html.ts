@@ -106,6 +106,8 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .rb.observer { color:var(--dim); border-color:var(--line); }
   .rb.host { color:#d9b23a; border-color:#c9a227; }
   .rb.collaborator { color:var(--vote); border-color:var(--vote); }
+  .rb.answerer { color:var(--ok); border-color:var(--ok); }
+  .rb.asker { color:var(--acc); border-color:var(--acc); border-style:dashed; }
   .rb.ttype { color:var(--warn); border-color:var(--warn); border-style:dashed; }
   /* chips 输入器（数据范围） */
   .chips { display:flex; flex-wrap:wrap; gap:6px; padding:6px 8px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel); min-height:38px; align-items:center; transition:border-color var(--tt),box-shadow var(--tt); }
@@ -288,9 +290,9 @@ var view = { mode:'intro', tableId:null, timer:null, lastDetailJson:'', lastDeta
   listFilter:'all', listTables:[], dirtyPanel:false, cfgEditing:false, dsDraft:[], msgFilter:'all', rtExpanded:false };
 
 /* ---------- 常量映射 ---------- */
-var PHASE_LABEL = { open:'设定中', statements:'提案陈述', review:'评审', response:'回应评审', execution:'执行修改', convergence:'共识表决', human_intervention:'人工介入', closed:'已结束' };
+var PHASE_LABEL = { open:'设定中', qa:'问答', statements:'提案陈述', review:'评审', response:'回应评审', execution:'执行修改', convergence:'共识表决', human_intervention:'人工介入', closed:'已结束' };
 var PHASE_CLS = { open:'', statements:'phase', review:'phase', response:'phase', execution:'phase', convergence:'phase', human_intervention:'err', closed:'ok' };
-var ROLE_LABEL = { proposer:'提案方', reviewer:'评审方', observer:'观察方', host:'主持人', collaborator:'协作者' };
+var ROLE_LABEL = { proposer:'提案方', reviewer:'评审方', observer:'观察方', host:'主持人', collaborator:'协作者', answerer:'回答方', asker:'问询方' };
 /* 桌类型注册表（构建期自服务端 TABLE_TYPES 注入，与 GET /api/table-types 同源）：id/label/description/flow/roles/uniqueRoles/phaseLabels */
 var TABLE_TYPES = ${JSON.stringify(TABLE_TYPES)};
 var TT_BY_ID = {}; TABLE_TYPES.forEach(function(t){ TT_BY_ID[t.id] = t; });
@@ -628,7 +630,7 @@ function phaseBadge(ph, roundNo, tt){
   return '<span class="badge '+(PHASE_CLS[ph]||'')+'">'+esc(lbl)+'</span>';
 }
 function roleBadge(role){ return '<span class="rb '+esc(role)+'">'+esc(ROLE_LABEL[role]||role)+'</span>'; }
-function seatName(seats,id){ for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].name; } return id; }
+function seatName(seats,id){ if(id==='asker') return '问询方'; for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].name; } return id; }
 function seatRoleOf(seats,id){ for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].role; } return ''; }
 
 /* ---------- 圆桌示意图（桌详情顶部） ----------
@@ -1022,6 +1024,8 @@ function renderCreateForm(){
   function ctType(){ var r=document.querySelector('input[name="ctType"]:checked'); return r?r.value:'review'; }
   function ctInvitable(){
     var tt=ttOf(ctType()), hosted=ctMode()==='hosted';
+    /* 问询桌：建桌人=问询方（不占席位），全部角色可邀 */
+    if(tt.flow==='inquiry') return tt.roles.slice();
     var ownerRole = hosted ? 'host' : (tt.flow==='collab' ? 'collaborator' : 'proposer');
     /* self 模式去掉建桌人已占的唯一角色（协作流 collaborator 可多席，保留） */
     return tt.roles.filter(function(r){ return !(hosted===false && tt.uniqueRoles.indexOf(r)>=0 && r===ownerRole); });
@@ -1033,20 +1037,30 @@ function renderCreateForm(){
   }
   function syncType(){
     var tt=ttOf(ctType()), hosted=ctMode()==='hosted';
+    var inq=tt.flow==='inquiry';
+    if(inq) hosted=false; /* 问询桌不支持主持人模式：强制 self */
     var invitable=ctInvitable();
     document.getElementById('ctRoles').innerHTML=invitable.map(function(r){
       return '<label><input type="checkbox" name="ctRole" value="'+esc(r)+'" checked> '+(ROLE_LABEL[r]||r)+'</label>';
     }).join('');
     document.getElementById('ctRolesHint').textContent =
-      (tt.flow==='collab'&&!hosted?'协作类桌需至少 2 位协作者（含你），保留「协作者」勾选即可继续邀请；':'')
+      (inq?'问询桌：把「回答方」邀请码发给各 agent（凭码入席后各自声明回答范围），你是问询方、在详情页网页提问；':'')
+      +(tt.flow==='collab'&&!hosted&&!inq?'协作类桌需至少 2 位协作者（含你），保留「协作者」勾选即可继续邀请；':'')
       +'每个勾选角色发 1 张邀请码（各 10 次 / 7 天），角色由码定死';
-    document.getElementById('ctModeHint').textContent=hosted
+    document.getElementById('ctModeHint').textContent=inq
+      ?'你将成为问询方（不占席位）：回答方就绪后你在本页开始问询、随时提问、结束时自动出问询纪要'
+      :hosted
       ?'你将成为主持人（host）：只管建桌/规则/资料/邀请与调度，不参与评审协作'
       :(tt.flow==='collab'?'你将自动成为协作者（collaborator）席位':'你将自动成为提案方（proposer）席位');
-    document.getElementById('ctSeatTitle').textContent=hosted
+    document.getElementById('ctSeatTitle').textContent=inq
+      ?'问询方信息（不占席位，仅作显示名）'
+      :hosted
       ?'我的席位（自动成为主持人）'
       :(tt.flow==='collab'?'我的席位（自动成为协作者）':'我的席位（自动成为提案方）');
-    document.getElementById('ctModeTip').style.display=hosted?'':'none';
+    document.getElementById('ctModeTip').style.display=(hosted&&!inq)?'':'none';
+    /* 问询桌禁用主持人模式选项 */
+    document.querySelectorAll('input[name="ctMode"]').forEach(function(r){ r.disabled=inq; });
+    if(inq){ var self=document.querySelector('input[name="ctMode"][value="self"]'); if(self) self.checked=true; }
   }
   function syncMode(){ syncType(); }
   document.querySelectorAll('input[name="ctMode"]').forEach(function(r){ r.onchange=syncMode; });
@@ -1078,27 +1092,36 @@ function renderCreateForm(){
 
 function renderCreateResult(d,topic,hosted){
   var app=document.getElementById('app');
+  var inq=d.tableType==='inquiry';
   var h='<div class="row" style="margin-bottom:12px"><b>圆桌已创建</b><span class="badge phase">设定中 · 等待入席与设定</span>'+typeBadge(d.tableType)+(hosted?'<span class="rb host">主持人模式</span>':'')+'</div>';
-  h+='<div class="card"><b>'+esc(d.tableId)+'</b>'
-    +'<h3 class="csec">席位 token（只显示这一次，请立即复制）</h3>'
-    +'<div class="row"><span class="invite big">'+esc(d.ownerSeatToken)+'</span><span class="sp"></span><button id="credTokCopy">复制凭证（含入桌信息）</button></div>'
-    +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法）'+(hosted?'。主持人一般在网页端操作，无需把凭证交给 agent':'，整体发给你的 agent 即可参会')+'。关闭本页后无法再查看。</div>'
-    +'<h3 class="csec">邀请码（发给各参与方，角色由码定死）</h3>';
-  var RL={proposer:'提案方',reviewer:'评审方',observer:'观察方',collaborator:'协作者'};
+  h+='<div class="card"><b>'+esc(d.tableId)+'</b>';
+  if(inq){
+    h+='<h3 class="csec">你是问询方（不占席位）</h3>'
+      +'<div class="dim" style="margin-top:4px">无需席位凭证：直接在圆桌详情页开始问询、提问与结束。把下方「回答方」邀请码发给各 agent，其凭码入席并声明回答范围后就绪。</div>';
+  }else{
+    h+='<h3 class="csec">席位 token（只显示这一次，请立即复制）</h3>'
+      +'<div class="row"><span class="invite big">'+esc(d.ownerSeatToken)+'</span><span class="sp"></span><button id="credTokCopy">复制凭证（含入桌信息）</button></div>'
+      +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法）'+(hosted?'。主持人一般在网页端操作，无需把凭证交给 agent':'，整体发给你的 agent 即可参会')+'。关闭本页后无法再查看。</div>';
+  }
+  h+='<h3 class="csec">邀请码（发给各参与方，角色由码定死）</h3>';
+  var RL={proposer:'提案方',reviewer:'评审方',observer:'观察方',collaborator:'协作者',answerer:'回答方'};
   d.inviteCodes.forEach(function(c){
     h+='<div class="row" style="margin:4px 0"><span class="rb '+esc(c.role)+'">'+esc(RL[c.role]||c.role)+'</span>'
     +'<span class="invite">'+esc(c.code)+'</span><button class="cpInv" data-code="'+esc(c.code)+'" data-role="'+esc(c.role)+'">复制完整邀请</button>'
-    +(c.role==='observer'?'<span class="dim">观察方：只读旁听无表决权</span>':'<span class="dim">复制内容含服务器/圆桌 ID/邀请码，整体转发即可参会</span>')+'</div>';
+    +(c.role==='observer'?'<span class="dim">观察方：只读旁听无表决权</span>':(c.role==='answerer'?'<span class="dim">回答方 agent：凭码入席，声明回答范围后作答</span>':'<span class="dim">复制内容含服务器/圆桌 ID/邀请码，整体转发即可参会</span>'))+'</div>';
   });
   h+='<h3 class="csec">下一步</h3><div class="dim">'
-    +(hosted
+    +(inq
+      ?'问询流程：把「回答方」完整邀请发给各 agent → 其入席并完成入桌设定（立场=回答范围、数据范围，就绪）→ 你在详情页点「开始问询」→ 随时提问（可定向某回答席或广播全员作答）→ 问完点「结束问询」自动生成问询纪要（问答对汇总）。'
+      :hosted
       ?'主持人流程：定规则（详情页「桌设定」可随时改）→ 传资料（详情页上传共享文档，全桌可见）→ 把邀请码发给各参与方（角色见上方码标签）→ 各方完成入桌设定 → 你在详情页点「开始会议」。开始后各方每回合提交由 DeepSeek 预审，需要补充时会被点名。'
       :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。')
     +'</div>'
     +'<div class="row" style="margin-top:8px"><button id="ctBack">返回列表</button><span class="sp"></span><button id="ctEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
   app.innerHTML=h;
-  document.getElementById('credTokCopy').onclick=function(){
+  var tokCopy=document.getElementById('credTokCopy');
+  if(tokCopy) tokCopy.onclick=function(){
     copyText(seatTokenText(topic||'',d.tableId,d.ownerSeatToken)); toast('完整凭证已复制（含服务器/圆桌ID/token）');
   };
   app.querySelectorAll('button.cpInv').forEach(function(b){
@@ -1192,8 +1215,9 @@ function stepsHtml(phase, tt, pause){
   if(phase==='human_intervention'){
     return '<div class="banner err">人工介入模式：会议暂停，等待 HUMAN_INPUT / HUMAN_RULING 推进或裁决</div>';
   }
+  var defs=(ttOf(tt).flow==='inquiry')?[['open','设定'],['qa','问答'],['closed','结束']]:STEP_DEFS;
   var idx=-1;
-  for(var i=0;i<STEP_DEFS.length;i++){ if(STEP_DEFS[i][0]===phase) idx=i; }
+  for(var i=0;i<defs.length;i++){ if(defs[i][0]===phase) idx=i; }
   var h='';
   if(pause){
     var viaReq=(pause.via==='request'&&pause.requestedByName)?('（经 '+esc(pause.requestedByName)+' 申请）'):'';
@@ -1202,7 +1226,7 @@ function stepsHtml(phase, tt, pause){
       +'<div class="dim" style="margin-top:3px">各方持有人：在「我的席位」人工补充或调整立场（保存时勾选「重新就绪」）、给本席 agent 发指令补充信息；无需补充的席位保持就绪即可。全员就绪后，由 主持人 / 建桌人 / 系统管理员 在网页继续会议。</div></div>';
   }
   h+='<div class="steps">';
-  STEP_DEFS.forEach(function(s,i){
+  defs.forEach(function(s,i){
     var cls=(i<idx)?'done':(i===idx?'cur':'');
     h+='<div class="step '+cls+'"><div class="bar"></div><div>'+esc(phaseLabel(tt,s[0]))+'</div></div>';
   });
@@ -1240,12 +1264,16 @@ function renderDetail(d){
   var mySeat=null, i;
   if(d.mySeatId){ for(i=0;i<seats.length;i++){ if(seats[i].seatId===d.mySeatId) mySeat=seats[i]; } }
   var admin=view.role==='systemadmin';
+  var isAsker=!!d.isAsker&&!mySeat; /* 问询方（建桌人，不占席位） */
 
   var h='<div class="row"><span class="back" id="back">← 返回列表</span><span class="sp"></span><button id="dCopyLink" class="sm" title="复制可分享的详情页链接">复制本页链接</button><span class="dim">自动刷新中</span></div>';
 
   /* 身份视角条：systemadmin 无席位只读观察（普通用户无席位已被服务端 403 拦在列表外） */
   if(!mySeat && admin){
     h+='<div class="banner admin">系统观察员 · 只读观察 — 你在本桌没有席位，仅查看（详情/历史/纪要），不能发指令或代答。</div>';
+  }
+  if(isAsker){
+    h+='<div class="banner">问询方视角 — 你不占席位：回答方就绪后开始问询，在本页提问（可定向/广播）与结束问询。</div>';
   }
 
   h+='<div class="card"><div class="shead"><b style="font-size:16px">'+esc(t.topic)+'</b>'
@@ -1293,7 +1321,9 @@ function renderDetail(d){
   /* 各方观点（席位卡：角色色顶条 + 状态/就绪 + 立场摘要 + 最后交付） */
   var lastOf={};
   (d.messages||[]).forEach(function(m){ if(m.fromSeat&&m.fromSeat!=='server') lastOf[m.fromSeat]=m; });
-  h+='<div class="card"><div class="shead"><b>各方观点</b><span class="dim">每席立场与最后交付</span><span class="sp"></span><span class="dim">'+seats.length+' 席就座</span></div><div class="vcards">';
+  h+='<div class="card"><div class="shead"><b>各方观点</b><span class="dim">每席立场与最后交付</span><span class="sp"></span>'
+    +(ttOf(t.tableType).flow==='inquiry'?'<span class="rb asker">问询方 · '+esc(view.userName||'')+'</span>':'')
+    +'<span class="dim">'+seats.length+' 席就座</span></div><div class="vcards">';
   seats.forEach(function(s){
     var cfg=s.config||{}, lm=lastOf[s.seatId], di=lastDelivInfo(lm);
     h+='<div class="vcard '+esc(s.role)+'">'
@@ -1445,6 +1475,59 @@ function renderDetail(d){
       +'<input id="stNewLabel" placeholder="新 agent 标识（替代时选填）" style="width:200px">'
       +'<button id="stReplace" class="danger">替代 agent（禁用原凭证）</button></div>'
       +'<div class="ferr" id="stErr"></div></div>';
+    h+='</div>';
+  } else if(isAsker){
+    /* ---- 问询方面板（无席位）：open=就绪名单+开始问询；qa=提问+结束问询+会议控制 ---- */
+    var ansSeats=seats.filter(function(s){ return s.role==='answerer'; });
+    var ansReady=ansSeats.filter(function(s){ return s.config&&s.config.ready; });
+    var inqAll=ansSeats.length>0&&ansReady.length===ansSeats.length;
+    h+='<div class="card mine"><div class="row"><b>问询方</b><b>'+esc(view.userName||'')+'</b>'
+      +'<span class="rb asker">问询方</span><span class="dim">不占席位 · 网页提问</span></div>';
+    if(t.phase==='open'){
+      h+='<div class="section sumcard"><h3 style="margin-top:0">开局状态（问询方）</h3>';
+      if(!ansSeats.length) h+='<div class="ferr">还没有回答方入席：把「回答方」邀请码发给各 agent。</div>';
+      ansSeats.forEach(function(s){
+        h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span>'
+          +((s.config&&s.config.scope)?' <span class="dim" title="'+escAttr(s.config.scope)+'">范围：'+esc(s.config.scope.slice(0,40))+'</span>':'')+'</div>';
+      });
+      h+='<div class="row" style="margin-top:8px"><button id="stStart" class="primary"'+(inqAll?'':' disabled')+'>▶ 开始问询</button>'
+        +'<span class="dim">全部回答方就绪后可开始；开始后进入问答阶段，随时提问</span></div><div class="ferr" id="stErr"></div></div>';
+    } else if(t.phase==='qa'){
+      if(t.pause){
+        h+='<div class="banner warn" style="margin-top:8px">问询已暂停：提问与作答冻结；回答方调整/补充并重新就绪后，在下方「会议控制」继续。</div>';
+      } else {
+        h+='<div class="section"><h3>提问</h3>'
+          +'<textarea id="askText" placeholder="向回答方提问…（回答方只在各自声明的范围内作答，超范围会明确说明并拒答）"></textarea>'
+          +'<div class="row" style="margin-top:6px"><select id="askTo"><option value="">广播 · 全体回答方各自作答</option>'
+          +ansSeats.map(function(s){ return '<option value="'+escAttr(s.seatId)+'">定向 · '+esc(s.name)+'</option>'; }).join('')
+          +'</select><span class="sp"></span><button id="askSend" class="primary">提问</button></div>'
+          +'<div class="ferr" id="askErr"></div></div>';
+      }
+      h+='<div class="section sumcard"><h3 style="margin-top:0">结束问询</h3>'
+        +'<div class="dim">结束后自动生成问询纪要（问答对汇总 + 各回答方范围声明），本桌转为只读。</div>'
+        +'<div class="row" style="margin-top:6px"><button id="inqEnd" class="danger">■ 结束问询并生成纪要</button></div><div class="ferr" id="inqErr"></div></div>';
+    } else if(t.phase==='closed'){
+      h+='<div class="section dim">问询已结束：纪要在下方「会议纪要」区。</div>';
+    }
+    /* 会议控制（问询方=控制人）：暂停 / 继续 */
+    if(t.phase==='qa'){
+      if(t.pause){
+        var ctlSeats2=ansSeats;
+        var ctlAll2=ctlSeats2.length>0&&ctlSeats2.every(function(s){ return s.config&&s.config.ready; });
+        h+='<div class="section sumcard"><h3 style="margin-top:0">会议控制（暂停中）</h3>';
+        ctlSeats2.forEach(function(s){
+          h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
+        });
+        h+='<div class="row" style="margin-top:8px"><button id="ctlResume" class="primary"'+(ctlAll2?'':' disabled')+'>▶ 继续问询</button>'
+          +'<span class="dim">恢复到「问答」继续；需全部回答方就绪（系统管理员可强制继续）</span></div><div class="ferr" id="ctlErr"></div></div>';
+      } else {
+        h+='<div class="section sumcard"><h3 style="margin-top:0">会议控制</h3>'
+          +'<div class="row"><input id="ctlPauseReason" placeholder="暂停原因（进入会议记录，可空）" style="flex:1;min-width:180px">'
+          +'<button id="ctlPause">⏸ 暂停问询</button></div>'
+          +'<div class="hint" style="margin-top:4px">暂停后提问与作答都冻结；回答方可调整立场/补充信息并重新就绪，全就绪后在这里继续。</div>'
+          +'<div class="ferr" id="ctlErr"></div></div>';
+      }
+    }
     h+='</div>';
   }
 
@@ -1754,15 +1837,6 @@ function renderDetail(d){
     var cfgEdit=document.getElementById('cfgEdit');
     if(cfgEdit) cfgEdit.onclick=function(){ view.cfgEditing=true; view.dirtyPanel=true; renderDetail(view.lastDetailData); };
 
-    /* 开始会议（建桌人） */
-    var stStart=document.getElementById('stStart');
-    if(stStart) stStart.onclick=function(){
-      if(stStart.disabled) return;
-      api('POST','/api/tables/'+view.tableId+'/my/start',{}).then(function(){
-        toast('会议已开始，进入提案陈述阶段'); view.dirtyPanel=false; loadDetail();
-      }).catch(function(e){ document.getElementById('stErr').textContent='开始失败：'+e.message; });
-    };
-
     /* 主持人桌设定保存（定规则，网页 user token 通道） */
     var tcSave=document.getElementById('tcSave');
     if(tcSave) tcSave.onclick=function(){
@@ -1778,10 +1852,40 @@ function renderDetail(d){
     };
   }
 
+  /* ---- 绑定：开始会议/问询（建桌人席位或问询方，统一 my/start 按桌类型分流） ---- */
+  var stStart=document.getElementById('stStart');
+  if(stStart) stStart.onclick=function(){
+    if(stStart.disabled) return;
+    var inq=t.tableType==='inquiry';
+    api('POST','/api/tables/'+view.tableId+'/my/start',{}).then(function(){
+      toast(inq?'问询已开始，可以提问了':'会议已开始，进入提案陈述阶段'); view.dirtyPanel=false; loadDetail();
+    }).catch(function(e){ document.getElementById('stErr').textContent='开始失败：'+e.message; });
+  };
+
+  /* ---- 绑定：问询方提问 / 结束问询（无席位通道） ---- */
+  var askSend=document.getElementById('askSend');
+  if(askSend) askSend.onclick=function(){
+    var text=document.getElementById('askText').value.trim();
+    var errEl=document.getElementById('askErr'); errEl.textContent='';
+    if(!text){ errEl.textContent='请输入问题'; return; }
+    var to=document.getElementById('askTo').value;
+    askSend.disabled=true;
+    api('POST','/api/tables/'+view.tableId+'/ask',{text:text,toSeat:to||undefined})
+      .then(function(){ toast('已提问'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ askSend.disabled=false; errEl.textContent='提问失败：'+e.message; });
+  };
+  var inqEnd=document.getElementById('inqEnd');
+  if(inqEnd) inqEnd.onclick=function(){
+    if(!window.confirm('结束问询？将生成问询纪要并关闭本桌（不可恢复）。')) return;
+    api('POST','/api/tables/'+view.tableId+'/end-inquiry',{})
+      .then(function(){ toast('问询已结束，纪要已生成'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ document.getElementById('inqErr').textContent='结束失败：'+e.message; });
+  };
+
   /* ---- 绑定：代答（会议中持发言权） ---- */
   var pxType=document.getElementById('pxType');
   if(pxType){
-    var PHASE_TYPES={statements:['STATEMENT'],'review':['REVIEW_COMMENT'],'response':['RESPONSE'],'execution':['RESPOND_REQUEST'],'convergence':['CONSENSUS_VOTE']};
+    var PHASE_TYPES={statements:['STATEMENT'],'review':['REVIEW_COMMENT'],'response':['RESPONSE'],'execution':['RESPOND_REQUEST'],'convergence':['CONSENSUS_VOTE'],qa:['REPLY']};
     var types=(PHASE_TYPES[t.phase]||[]).concat(['QUESTION']);
     /* hosted 点名期：被点名席（含本人代答）可提交 SUPPLEMENT */
     if(t.mode==='hosted'&&t.precheck&&t.precheck.state==='directive'&&turn&&turn.seatId===d.mySeatId) types=types.concat(['SUPPLEMENT']);
@@ -1819,6 +1923,7 @@ function renderDetail(d){
         var text=document.getElementById('pxText').value.trim();
         if(!text){ errEl.textContent='请输入内容'; return; }
         if(type==='STATEMENT'||type==='QUESTION'){ payload={text:text}; }
+        else if(type==='REPLY'){ var qm=/\"toMsgId\":\"(msg_[^\"]+)\"/.exec(turn.taskHint||''); payload={toMsgId:qm?qm[1]:'',text:text}; }
         else if(type==='SUPPLEMENT'){ payload={directiveId:(t.precheck&&t.precheck.refId)||'',text:text}; }
         else if(type==='REVIEW_COMMENT'){
           payload={items:[{id:'web-'+Date.now(),target:document.getElementById('pxTarget').value.trim()||'（未指明位置）',severity:document.getElementById('pxSeverity').value,comment:text}],summary:'观察页人工代答',done:true};

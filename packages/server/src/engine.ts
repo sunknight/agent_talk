@@ -14,7 +14,7 @@ import {
   type ConsensusResultPayload, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
   type HumanInputPayload, type HumanRulingPayload, type MeetingPausedPayload, type MeetingResumedPayload,
   type MsgType, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type Phase, type PhaseChangePayload,
-  type PrecheckState, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
+  type PrecheckState, type QuestionPayload, type ReplyPayload, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
   type ReviewCommentPayload, type Role, type SeatDocumentMeta, type SeatInfo, type SupplementPayload,
   type TableChange, type TableChangesPayload, type TableDocumentMeta, type TableType, type TableTypeDef,
   type TableInfoPayload, type TurnGrantPayload,
@@ -62,7 +62,9 @@ const SERVER_ONLY_TYPES: MsgType[] = ["HOST_PREREVIEW", "MEETING_PAUSED", "MEETI
 /** hosted 桌预审点名链上限：同一根提交上最多连续点名次数（防 ping-pong），超出强制放行 */
 const DIRECTIVE_CHAIN_MAX = 3;
 /** 可暂停的会议阶段：open 未开始、human_intervention 已是人工态、closed 已结束，均不可暂停 */
-const PAUSABLE_PHASES: Phase[] = ["statements", "review", "response", "execution", "convergence"];
+const PAUSABLE_PHASES: Phase[] = ["qa", "statements", "review", "response", "execution", "convergence"];
+/** 问询桌问询方虚拟席位 ID：建桌人不占席位，ownerSeat 与提问消息 fromSeat 用它标识（UI 显示「问询方」） */
+const ASKER_SEAT = "asker";
 
 /** 字段长度/范围校验：超限即 422（防巨字段撑库、撑大 poll/changes 全量响应） */
 function checkField(value: string, field: string, max: number, min = 1): string {
@@ -150,13 +152,16 @@ export class Hub {
     maxReviewRounds?: number; turnTimeoutMs?: number;
   }): {
     tableId: string; ownerSeatId: string; ownerSeatToken: string; tableType: TableType;
-    inviteCodes: { code: string; role: "proposer" | "reviewer" | "observer" | "collaborator" }[];
+    inviteCodes: { code: string; role: "proposer" | "reviewer" | "observer" | "collaborator" | "answerer" }[];
   } {
     const user = this.requireUser(userToken);
     const mode: "self" | "hosted" = p.mode === "hosted" ? "hosted" : "self";
     const def = tableTypeOf(p.tableType ?? "review");
-    if (p.tableType !== undefined && !["review", "collab", "brainstorm", "decision"].includes(p.tableType)) {
-      throw new ApiError(422, "bad_table_type", `tableType 只能是 review / collab / brainstorm / decision`);
+    if (p.tableType !== undefined && !["review", "collab", "brainstorm", "decision", "inquiry"].includes(p.tableType)) {
+      throw new ApiError(422, "bad_table_type", `tableType 只能是 review / collab / brainstorm / decision / inquiry`);
+    }
+    if (def.id === "inquiry" && mode === "hosted") {
+      throw new ApiError(422, "bad_mode", "问询桌不支持主持人模式（mode 固定 self，预审调度层不适用）");
     }
     const topic = checkField(p.topic, "topic", 300);
     const ownerSeatName = checkField(p.owner?.seatName ?? "", "owner.seatName", 64);
@@ -175,6 +180,28 @@ export class Hub {
       roundNo: 1, deadlockCount: 0, createdAt: Date.now(), seatCount: 0,
       maxReviewRounds, turnTimeoutMs,
     };
+
+    // 问询桌：建桌人即问询方，不占席位（ownerSeat=ASKER_SEAT 虚拟标识，提问走 my 通道）；
+    // 回答方（answerer）凭邀请码入席。owner.seatName/agentLabel 仅用于审计与广播文案。
+    if (def.id === "inquiry") {
+      meta.ownerSeat = ASKER_SEAT;
+      meta.seatCount = 0;
+      this.store.saveTable(meta);
+      this.store.bindSeatOwner(tableId, ASKER_SEAT, user.userId);
+      const inviteRoles = p.inviteRoles !== undefined ? [...new Set(p.inviteRoles)] : def.roles.slice();
+      for (const r of inviteRoles) {
+        if (!def.roles.includes(r as Role)) {
+          throw new ApiError(422, "bad_invite_role", `问询桌的邀请角色只能是 ${def.roles.join(" / ")}（${r} 不可选）`);
+        }
+      }
+      const inviteCodes = inviteRoles.map((role) => ({
+        code: randomBytes(5).toString("hex").toUpperCase(), role: role as "proposer" | "reviewer" | "observer" | "collaborator" | "answerer",
+      }));
+      for (const inv of inviteCodes) this.store.addInvite(inv.code, tableId, inv.role);
+      this.sysMsg(tableId, "INFO", { text: `问询桌已创建：问询方 ${ownerSeatName}，等待回答方凭邀请码入席并设定回答范围`, level: "info" });
+      this.audit(tableId, ASKER_SEAT, "table_open", { topic, by: user.name, mode, tableType: def.id, inviteRoles });
+      return { tableId, ownerSeatId: ASKER_SEAT, ownerSeatToken: "", tableType: def.id, inviteCodes };
+    }
 
     // 建桌人席位（self：评审流 proposer / 协同流 collaborator；hosted：host），绑定用户身份
     const ownerRole: "proposer" | "host" | "collaborator" =
@@ -242,7 +269,7 @@ export class Hub {
   }
 
   joinTable(userToken: string, tableId: string, p: {
-    inviteCode: string; seatName: string; role: "proposer" | "reviewer" | "observer" | "collaborator"; agentLabel: string;
+    inviteCode: string; seatName: string; role: "proposer" | "reviewer" | "observer" | "collaborator" | "answerer"; agentLabel: string;
     capsOverride?: Partial<Record<"canPublish" | "canModifyOwn" | "canExecuteRequests" | "canSendRequests" | "canVote", boolean>>;
   }): { seatId: string; token: string; seat: SeatInfo } {
     const user = this.requireUser(userToken);
@@ -324,6 +351,9 @@ export class Hub {
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已在进行中");
     if (meta.ownerSeat !== seat.seatId) throw new ApiError(403, "not_owner", "只有建桌人可以点开始");
+    if (tableTypeOf(meta.tableType).id === "inquiry") {
+      throw new ApiError(409, "not_inquiry", "问询桌由问询方在网页开始（POST /api/tables/:id/start 同一入口按桌类型分流）");
+    }
     const def = tableTypeOf(meta.tableType);
     const seats = this.activeSeats(tableId);
     const notReady = seats.filter((s) => !s.config.ready && s.role !== "host");
@@ -339,6 +369,81 @@ export class Hub {
     }
     this.setPhase(tableId, "statements", `全员就绪，建桌人 ${seat.name} 开始会议`);
     return { started: true };
+  }
+
+  // ================= 问询桌（inquiry：人问 agent 答） =================
+
+  /** 问询方归属校验：操作者是否本桌问询方（建桌人，ownerSeat=ASKER_SEAT 的绑定用户） */
+  private requireInquiryOwner(meta: TableMeta, tableId: string, user: { userId: string }) {
+    if (this.store.seatOwnerOf(tableId, meta.ownerSeat) !== user.userId) {
+      throw new ApiError(403, "not_asker", "仅问询方（建桌人）可执行本操作");
+    }
+  }
+
+  /** 问询桌开始问询（my 通道）：问询方专属；至少 1 个回答方且全部回答方就绪 → 进入问答阶段 */
+  startInquiryByUser(userToken: string, tableId: string): { started: boolean } {
+    const user = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    if (tableTypeOf(meta.tableType).id !== "inquiry") {
+      throw new ApiError(409, "not_inquiry", "仅问询桌走问询开始（其他桌型由建桌人席位开始）");
+    }
+    this.requireInquiryOwner(meta, tableId, user);
+    if (meta.phase !== "open") throw new ApiError(409, "already_started", "问询已在进行中");
+    const answerers = this.activeSeats(tableId).filter((s) => s.role === "answerer");
+    if (answerers.length === 0) {
+      throw new ApiError(409, "no_answerer", "问询桌需至少 1 个回答方席位凭邀请码入席");
+    }
+    const notReady = answerers.filter((s) => !s.config.ready);
+    if (notReady.length) {
+      throw new ApiError(409, "not_ready", `回答方未就绪：${notReady.map((s) => `${s.name}(${s.role})`).join("、")}`);
+    }
+    this.setPhase(tableId, "qa", `回答方就绪，问询方 ${user.name} 开始问询`);
+    return { started: true };
+  }
+
+  /** 问询方提问（my 通道）：qa 阶段向回答方提问；toSeat 省略=广播全体回答方各自作答，指定=仅该回答席作答 */
+  askByUser(userToken: string, tableId: string, p: { text: string; toSeat?: string }): StoredMsg {
+    const user = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    if (tableTypeOf(meta.tableType).id !== "inquiry") {
+      throw new ApiError(409, "not_inquiry", "仅问询桌支持提问通道");
+    }
+    this.requireInquiryOwner(meta, tableId, user);
+    if (meta.phase === "open") throw new ApiError(409, "not_started", "问询尚未开始（回答方就绪后先开始问询）");
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "问询已结束，只读");
+    if (meta.phase !== "qa") throw new ApiError(409, "wrong_phase", `阶段 ${meta.phase} 不接受提问`);
+    if (meta.pause) throw new ApiError(409, "meeting_paused", "问询已暂停，恢复后再提问");
+    const text = checkField(p.text, "text", 4_000);
+    const toSeat = p.toSeat?.trim();
+    if (toSeat) {
+      const target = this.store.getSeat(tableId, toSeat);
+      if (!target || target.status === "left") throw new ApiError(404, "no_seat", "定向回答席位不存在");
+      if (target.role !== "answerer") throw new ApiError(422, "bad_payload", "定向目标必须是回答方（answerer）席位");
+    }
+    const payload: QuestionPayload = toSeat ? { text, toSeat } : { text };
+    const env = makeEnvelope({ tableId, from: ASKER_SEAT, to: "all", type: "QUESTION", payload });
+    const v = validateEnvelope(env);
+    if (!v.ok) throw new ApiError(422, "bad_payload", `消息校验失败：${v.errors.join("; ")}`);
+    const msg = this.store.addMessage(tableId, env);
+    this.audit(tableId, ASKER_SEAT, "asker_question", { msgId: env.msgId, toSeat: toSeat ?? "all" });
+    return msg;
+  }
+
+  /** 问询方结束问询（my 通道）：open=撤桌 / qa=生成问询纪要并闭桌；暂停态须先恢复 */
+  endInquiryByUser(userToken: string, tableId: string, reason?: string): { closed: boolean } {
+    const user = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    if (tableTypeOf(meta.tableType).id !== "inquiry") {
+      throw new ApiError(409, "not_inquiry", "仅问询桌支持结束问询");
+    }
+    this.requireInquiryOwner(meta, tableId, user);
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "问询已结束");
+    if (meta.phase !== "open" && meta.phase !== "qa") {
+      throw new ApiError(409, "wrong_phase", `阶段 ${meta.phase} 不支持结束问询`);
+    }
+    if (meta.pause) throw new ApiError(409, "meeting_paused", "问询已暂停，请先恢复再结束");
+    this.closeTable(tableId, reason?.trim() || (meta.phase === "open" ? "问询方撤桌（未开始问询）" : "问询方结束问询"));
+    return { closed: true };
   }
 
   /** 建桌人修改桌设定（定规则）：仅 open 阶段、建桌人专属；hosted 主持人与 self 建桌人均可用 */
@@ -537,10 +642,14 @@ export class Hub {
       const notReady = seats.filter((s) => !s.config.ready && s.role !== "host");
       const rolesOk = def.flow === "collab"
         ? seats.filter((s) => s.role === "collaborator").length >= 2
-        : seats.some((s) => s.role === "proposer") && seats.some((s) => s.role === "reviewer");
+        : def.flow === "inquiry"
+          ? seats.some((s) => s.role === "answerer")
+          : seats.some((s) => s.role === "proposer") && seats.some((s) => s.role === "reviewer");
       const rolesGap = def.flow === "collab"
         ? `角色不齐备：${def.label}桌还需协作者席位凭邀请码入席（至少 2 位协作者）`
-        : "角色不齐备：还需提案方/评审方席位凭邀请码入席";
+        : def.flow === "inquiry"
+          ? "角色不齐备：还需回答方席位凭邀请码入席（问询方在网页开始问询）"
+          : "角色不齐备：还需提案方/评审方席位凭邀请码入席";
       if (seat.role === "host") {
         // 主持人不参与就绪设定：只看各方就绪与角色齐备，然后点开始
         if (notReady.length) return `等待各方完成设定：${notReady.map((s) => s.name).join("、")}`;
@@ -827,6 +936,27 @@ export class Hub {
     }
     const role = seat.role, caps = seat.caps;
 
+    // 问询桌专属：提问仅问询方（网页 my 通道内部构造，席位直发必拒）；
+    // 作答仅回答方、须指向问询方的提问消息且每席每题一答；暂停期问答双冻结
+    // （不同于其他桌型暂停期放行旁路讨论——问询桌的 QUESTION/REPLY 即回合本体）
+    if (tableTypeOf(meta.tableType).flow === "inquiry") {
+      if (type === "QUESTION") {
+        throw new ApiError(403, "role", "问询桌仅问询方可提问（网页提问通道）");
+      }
+      if (type === "REPLY") {
+        if (meta.pause) throw new ApiError(409, "meeting_paused", "问询已暂停，恢复后再作答");
+        if (role !== "answerer") throw new ApiError(403, "role", "问询桌仅回答方（answerer）可作答");
+        const rp = payload as ReplyPayload;
+        const q = this.store.getMessages(meta.tableId).find((m) => m.msgId === rp.toMsgId);
+        if (!q || q.type !== "QUESTION" || q.fromSeat !== ASKER_SEAT) {
+          throw new ApiError(404, "no_question", "REPLY 须指向问询方的提问消息（payload.toMsgId）");
+        }
+        const dup = this.store.getMessages(meta.tableId).some(
+          (m) => m.type === "REPLY" && m.fromSeat === seat.seatId && (m.payload as ReplyPayload).toMsgId === rp.toMsgId);
+        if (dup) throw new ApiError(409, "already_replied", "本席已回答过该问题（每席每题一答，如需补充请持有人经 HUMAN_INPUT 下达）");
+      }
+    }
+
     // 人工裁决通道闸门（先于阶段判定，保证 agent 直发任何阶段都得到明确的 403）：
     // 仅网页持有人（user token → postByUser 携带 human_proxied 标记）可发，
     // agent 席位 token 直发一律拒绝 —— 防任一参会 agent 一条消息强制闭桌/改写阶段
@@ -976,6 +1106,32 @@ export class Hub {
     }
 
     switch (meta.phase) {
+      case "qa": {
+        // 问询桌：按时间序找最早的未答完提问（本阶段起问询方 QUESTION），
+        // 其应答目标（定向席 / 广播全体 answerer）中第一个未作答者获发言权（taskHint 引导 REPLY）
+        const answerers = seats.filter((s) => s.role === "answerer");
+        if (answerers.length === 0) return null;
+        const startIdx = this.phaseStartSeq(tableId, "qa", null);
+        const answered = new Map<string, Set<string>>();
+        for (const m of msgs) {
+          if (m.seq <= startIdx || m.type !== "REPLY") continue;
+          const to = (m.payload as ReplyPayload).toMsgId;
+          if (!answered.has(to)) answered.set(to, new Set());
+          answered.get(to)!.add(m.fromSeat);
+        }
+        for (const q of msgs) {
+          if (q.seq <= startIdx || q.type !== "QUESTION" || q.fromSeat !== ASKER_SEAT) continue;
+          const qp = q.payload as QuestionPayload;
+          const targets = qp.toSeat ? answerers.filter((s) => s.seatId === qp.toSeat) : answerers;
+          const next = targets.find((s) => !answered.get(q.msgId)?.has(s.seatId));
+          if (next) {
+            return grant(next.seatId,
+              `问询方提问待你作答：${qp.text.slice(0, 120)}…——在本席声明的讨论/数据范围内作答（超范围请明确说明并拒答、给出建议问询方向），POST /api/tables/:id/messages type=REPLY payload={"toMsgId":"${q.msgId}","text":"回答全文"}；如需文档支撑可先发布产物`);
+          }
+        }
+        return null;
+      }
+
       case "open": {
         const owner = seats.find((s) => s.seatId === meta.ownerSeat);
         if (!owner) return null;
@@ -1140,6 +1296,10 @@ export class Hub {
         // open 停在设定阶段：全员就绪后由建桌人 startTable 显式开始（不自动流转）
         break;
 
+      case "qa":
+        // 问询桌问答循环不自动流转：问与答都是自由消息流，结束由问询方 endInquiryByUser 显式触发
+        break;
+
       case "statements": {
         if (def.flow === "collab") {
           const collaborators = seats.filter((s) => s.role === "collaborator");
@@ -1253,11 +1413,12 @@ export class Hub {
 
   private closeTable(tableId: string, reason: string) {
     const meta = this.requireTable(tableId);
+    const from = meta.phase;
     this.sysMsg(tableId, "MINUTES", this.buildMinutes(tableId, reason));
     meta.phase = "closed";
     meta.closedAt = Date.now();
     this.store.saveTable(meta);
-    this.sysMsg(tableId, "PHASE_CHANGE", { from: "convergence", to: "closed", reason });
+    this.sysMsg(tableId, "PHASE_CHANGE", { from, to: "closed", reason });
     this.audit(tableId, "-", "table_close", { reason });
   }
 
@@ -1618,17 +1779,20 @@ export class Hub {
     if (meta.pause) throw new ApiError(409, "already_paused", "会议已暂停，请先继续会议");
   }
 
-  /** 网页持有人通道入口的公共骨架：user token → 本桌席位，不满足控制人即 403 */
-  private controllerSeatOf(userToken: string, tableId: string): { meta: TableMeta; seat: ServerSeat } {
+  /** 网页持有人通道入口的公共骨架：user token → 本桌控制人身份（席位，或问询桌的问询方），不满足即 403 */
+  private controllerOf(userToken: string, tableId: string): { meta: TableMeta; by: { seatId: string; name: string; role: string } } {
     const user = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    if (tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(tableId, meta.ownerSeat) === user.userId) {
+      return { meta, by: { seatId: ASKER_SEAT, name: user.name, role: "asker" } };
+    }
     const seatId = this.store.seatOfUser(tableId, user.userId);
     if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位（暂停/继续会议由主持人、建桌人、系统管理员执行）");
     const seat = this.requireSeat(tableId, seatId) as ServerSeat;
-    const meta = this.requireTable(tableId);
     if (!this.isPauseController(meta, seat)) {
       throw new ApiError(403, "not_controller", "仅主持人/建桌人/系统管理员可执行本操作；参与方请申请暂停（POST /api/tables/:id/my/pause-request）");
     }
-    return { meta, seat };
+    return { meta, by: { seatId: seat.seatId, name: seat.name, role: seat.role } };
   }
 
   /**
@@ -1675,10 +1839,10 @@ export class Hub {
     return { paused: true };
   }
 
-  /** 网页持有人通道：主持人/建桌人直接暂停 */
+  /** 网页持有人通道：主持人/建桌人（问询桌为问询方）直接暂停 */
   pauseByUser(userToken: string, tableId: string, reason: string) {
-    const { seat } = this.controllerSeatOf(userToken, tableId);
-    return this.doPause(tableId, { seatId: seat.seatId, name: seat.name, role: seat.role }, reason, "direct");
+    const { by } = this.controllerOf(userToken, tableId);
+    return this.doPause(tableId, by, reason, "direct");
   }
 
   /** 管理台：systemadmin 直接暂停（任意桌） */
@@ -1723,10 +1887,10 @@ export class Hub {
     return { paused: true, requestId };
   }
 
-  /** 网页持有人通道：主持人/建桌人同意某条暂停申请 */
+  /** 网页持有人通道：主持人/建桌人（问询桌为问询方）同意某条暂停申请 */
   approvePauseByUser(userToken: string, tableId: string, requestId: string) {
-    const { seat } = this.controllerSeatOf(userToken, tableId);
-    return this.doApprovePause(tableId, requestId, { seatId: seat.seatId, name: seat.name, role: seat.role });
+    const { by } = this.controllerOf(userToken, tableId);
+    return this.doApprovePause(tableId, requestId, by);
   }
 
   /** 管理台：systemadmin 同意暂停申请（任意桌） */
@@ -1759,10 +1923,10 @@ export class Hub {
     return { resumed: true, phase: meta.phase };
   }
 
-  /** 网页持有人通道：主持人/建桌人继续会议（要求全员就绪，host 豁免） */
+  /** 网页持有人通道：主持人/建桌人（问询桌为问询方）继续会议（要求全员就绪，host 豁免） */
   resumeByUser(userToken: string, tableId: string) {
-    const { seat } = this.controllerSeatOf(userToken, tableId);
-    return this.doResume(tableId, { seatId: seat.seatId, name: seat.name, role: seat.role }, false);
+    const { by } = this.controllerOf(userToken, tableId);
+    return this.doResume(tableId, by, false);
   }
 
   /** 管理台：systemadmin 继续会议；force=true 跳过就绪检查（逃生门，记审计） */
@@ -1788,23 +1952,33 @@ export class Hub {
     return s && s.status !== "left" ? seatId : null;
   }
 
-  /** 桌列表（按角色收权）：systemadmin 全量；普通用户仅自己持有 active 席位的桌 */
+  /** 桌列表（按角色收权）：systemadmin 全量；普通用户 = 自己持有 active 席位的桌 + 自己是问询方的问询桌 */
   tablesForUser(user: { userId: string; role: string }) {
     if (user.role === "systemadmin") return this.store.listTables();
-    return this.store.listTables().filter((t) => this.activeSeatOfUser(t.tableId, user.userId));
+    return this.store.listTables().filter((t) =>
+      this.activeSeatOfUser(t.tableId, user.userId)
+      || (tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, t.ownerSeat) === user.userId));
   }
 
-  /** 观察端桌列表：可见桌摘要 + 当前用户在各桌的席位标记（null = 无席位，供「我的席位」徽章/筛选） */
+  /** 观察端桌列表：可见桌摘要 + 当前用户在各桌的席位标记（null = 无席位，供「我的席位」徽章/筛选）；
+   *  问询桌的问询方（无席位）以 mySeatRole="asker" 标记 */
   observerTables(userId: string, role: "user" | "systemadmin" = "user") {
     return this.tablesForUser({ userId, role }).map((t) => {
       const seatId = this.store.seatOfUser(t.tableId, userId);
       const seat = seatId ? this.store.getSeat(t.tableId, seatId) : null;
+      if (!seat && tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, t.ownerSeat) === userId) {
+        return { ...t, mySeatRole: "asker" as const, mySeatName: null };
+      }
       return { ...t, mySeatRole: seat ? seat.role : null, mySeatName: seat ? seat.name : null };
     });
   }
 
   /** 网页持有人（user token）以建桌人席位开始会议：my 通道（网页只有 user token，席位 token 在 agent 手里） */
   startByUser(userToken: string, tableId: string): { started: boolean } {
+    // 问询桌：问询方（建桌人）不占席位，同一入口分流到问询开始
+    if (tableTypeOf(this.requireTable(tableId).tableType).id === "inquiry") {
+      return this.startInquiryByUser(userToken, tableId);
+    }
     const user = this.requireUser(userToken);
     const seatId = this.store.seatOfUser(tableId, user.userId);
     if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位（开始会议是建桌人专属动作）");
@@ -1816,7 +1990,8 @@ export class Hub {
    *  收权：普通用户仅可查看自己参与的圆桌（systemadmin 全量观察） */
   observerDetail(tableId: string, userId?: string, role: "user" | "systemadmin" = "user") {
     const meta = this.requireTable(tableId);
-    if (userId && role !== "systemadmin" && !this.activeSeatOfUser(tableId, userId)) {
+    const isAsker = tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(tableId, meta.ownerSeat) === userId;
+    if (userId && role !== "systemadmin" && !this.activeSeatOfUser(tableId, userId) && !isAsker) {
       throw new ApiError(403, "not_participant", "仅可查看自己参与的圆桌（你在本桌没有席位）");
     }
     return {
@@ -1829,6 +2004,8 @@ export class Hub {
       recentChanges: this.changesOf(tableId, 0).slice(-50),
       meta: { createdAt: meta.createdAt, closedAt: meta.closedAt ?? null, goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, rolePlan: meta.rolePlan },
       mySeatId: userId ? this.activeSeatOfUser(tableId, userId) : null,
+      /** 问询桌：当前用户是否问询方（建桌人，无席位）——详情页提问区/结束按钮的显示依据 */
+      isAsker: userId ? isAsker : false,
       pauseRequests: this.pendingPauseViews(tableId),
     };
   }
@@ -1982,8 +2159,81 @@ export class Hub {
 
   // ================= 纪要 =================
 
+  /** 问询纪要：问答对汇总 + 回答方范围声明 + 产物/资料（无评审与表决段） */
+  private buildInquiryMinutes(tableId: string, meta: TableMeta, closeReason: string): { tableId: string; topic: string; markdown: string; finalArtifacts: { artifactId: string; name: string; version: number }[] } {
+    const seats = this.store.getSeats(tableId);
+    const artifacts = this.store.getArtifacts(tableId);
+    const msgs = this.store.getMessages(tableId);
+    const seatName = (id: string) => seats.find((s) => s.seatId === id)?.name ?? id;
+    const askerId = this.store.seatOwnerOf(tableId, meta.ownerSeat);
+    const askerName = askerId ? this.store.listUsers().find((u) => u.userId === askerId)?.name ?? "问询方" : "问询方";
+    const lines: string[] = [];
+    lines.push(`# 问询纪要：${meta.topic}`);
+    lines.push("");
+    lines.push(`- 圆桌：${tableId} ｜ 桌类型：${tableTypeOf(meta.tableType).label} ｜ 结束：${new Date().toISOString()}`);
+    lines.push(`- 结束方式：${closeReason}`);
+    if (meta.goals) lines.push(`- 问询目标：${meta.goals}`);
+    if (meta.rules) lines.push(`- 桌规则：${meta.rules}`);
+    lines.push(`- 问询方：${askerName}（未答问题即问询方自行决断）`);
+    const answerers = seats.filter((s) => s.role === "answerer");
+    lines.push(`- 回答方席位：${answerers.map((s) => `${s.name}(${s.agentLabel})`).join("、") || "（无）"}`);
+    lines.push("");
+    lines.push("## 回答方立场与范围");
+    for (const s of answerers) {
+      if (!s.config.stance) continue;
+      lines.push(`- **${s.name}**：${s.config.stance}`);
+      if (s.config.scope) lines.push(`  - 回答范围：${s.config.scope}`);
+      if (s.config.dataScope.length) lines.push(`  - 数据范围：${s.config.dataScope.join("；")}`);
+    }
+    lines.push("");
+    lines.push("## 问答记录");
+    const questions = msgs.filter((m) => m.type === "QUESTION" && m.fromSeat === ASKER_SEAT);
+    if (questions.length === 0) lines.push("- （无提问）");
+    for (const q of questions) {
+      const qp = q.payload as QuestionPayload;
+      const target = qp.toSeat ? `（定向 ${seatName(qp.toSeat)}）` : "（广播全体回答方）";
+      lines.push(`- **问**：${qp.text}${target}`);
+      const replies = msgs.filter((m) => m.type === "REPLY" && (m.payload as ReplyPayload).toMsgId === q.msgId);
+      if (replies.length === 0) lines.push("  - （未获作答）");
+      for (const r of replies) {
+        lines.push(`  - **${seatName(r.fromSeat)} 答**：${(r.payload as ReplyPayload).text}`);
+      }
+    }
+    lines.push("");
+    if (artifacts.length) {
+      lines.push("## 最终产物");
+      for (const a of artifacts) {
+        const v = a.versions[a.versions.length - 1];
+        lines.push(`- **${a.name}** (${a.artifactId}) 终版 v${v.v}：${v.changeNote}，by ${seatName(v.publishedBy)}`);
+      }
+      lines.push("");
+    }
+    const docs = this.store.getDocuments(tableId);
+    if (docs.length) {
+      lines.push("## 桌内资料（上传阅文档）");
+      for (const d of docs) {
+        lines.push(`- **${d.name}** (${d.docId})｜作用：${d.purpose}｜${d.visibility === "shared" ? "共享·全桌可读" : "私有·仅本席"}｜by ${seatName(d.uploadedBy)}`);
+      }
+      lines.push("");
+    }
+    const humans = msgs.filter((m) => m.type === "HUMAN_INPUT" || m.type === "HUMAN_RULING");
+    if (humans.length) {
+      lines.push("## 人工介入记录");
+      for (const m of humans) {
+        const pl = m.payload as { byHuman?: string; instruction?: string; text?: string };
+        lines.push(`- ${m.fromSeat === "server" ? "服务器" : seatName(m.fromSeat)}${pl.byHuman ? `（${pl.byHuman}）` : ""}：${pl.instruction ?? pl.text ?? ""}`);
+      }
+      lines.push("");
+    }
+    return {
+      tableId, topic: meta.topic, markdown: lines.join("\n"),
+      finalArtifacts: artifacts.map((a) => ({ artifactId: a.artifactId, name: a.name, version: a.versions.length })),
+    };
+  }
+
   private buildMinutes(tableId: string, closeReason: string): { tableId: string; topic: string; markdown: string; finalArtifacts: { artifactId: string; name: string; version: number }[] } {
     const meta = this.requireTable(tableId);
+    if (tableTypeOf(meta.tableType).flow === "inquiry") return this.buildInquiryMinutes(tableId, meta, closeReason);
     const seats = this.store.getSeats(tableId);
     const artifacts = this.store.getArtifacts(tableId);
     const seatName = (id: string) => seats.find((s) => s.seatId === id)?.name ?? id;

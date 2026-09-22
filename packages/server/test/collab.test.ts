@@ -97,11 +97,11 @@ afterAll(() => new Promise<void>((r) => {
 }));
 
 describe("桌类型注册与建桌校验", () => {
-  it("GET /api/table-types 返回 4 类注册表", async () => {
+  it("GET /api/table-types 返回 5 类注册表", async () => {
     const r = await call("GET", "/api/table-types");
     expect(r.ok).toBe(true);
     const ids = r.data.tableTypes.map((t: { id: string }) => t.id);
-    expect(ids).toEqual(["review", "collab", "brainstorm", "decision"]);
+    expect(ids).toEqual(["review", "collab", "brainstorm", "decision", "inquiry"]);
     const collab = r.data.tableTypes.find((t: { id: string }) => t.id === "collab");
     expect(collab.roles).toEqual(["collaborator", "observer"]);
     expect(collab.flow).toBe("collab");
