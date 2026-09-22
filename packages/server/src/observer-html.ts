@@ -298,9 +298,9 @@ function ttOf(id){ return TT_BY_ID[id] || TT_BY_ID.review; }
 function typeBadge(tt){ return '<span class="rb ttype" title="'+escAttr(ttOf(tt).description||'')+'">'+esc(ttOf(tt).label)+'</span>'; }
 function phaseLabel(tt, ph){ var d = ttOf(tt); return (d.phaseLabels && d.phaseLabels[ph]) || PHASE_LABEL[ph] || ph; }
 var STEP_DEFS = [['open','设定'],['statements','陈述'],['review','评审'],['response','回应'],['execution','执行'],['convergence','表决'],['closed','结束']];
-var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交' };
-var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st' };
-var MSG_KEY = { PHASE_CHANGE:1, ARTIFACT_PUBLISHED:1, DOC_UPLOADED:1, CONSENSUS_RESULT:1, MINUTES:1, REQUEST:1, RESPOND_REQUEST:1, HOST_PREREVIEW:1 };
+var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交', MEETING_PAUSED:'会议暂停', MEETING_RESUMED:'继续会议', PAUSE_REQUESTED:'暂停申请' };
+var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st', MEETING_PAUSED:'mt-req', MEETING_RESUMED:'mt-phase', PAUSE_REQUESTED:'mt-human' };
+var MSG_KEY = { PHASE_CHANGE:1, ARTIFACT_PUBLISHED:1, DOC_UPLOADED:1, CONSENSUS_RESULT:1, MINUTES:1, REQUEST:1, RESPOND_REQUEST:1, HOST_PREREVIEW:1, MEETING_PAUSED:1, MEETING_RESUMED:1, PAUSE_REQUESTED:1 };
 var PRV_LABEL = { pass:'通过', redirect:'点名补充', skipped:'跳过（放行）' };
 var SEV_LABEL = { must:'必须', should:'建议', nice:'可选' };
 var MSG_HUMAN = { HUMAN_INPUT:1, HUMAN_RULING:1, ESCALATE:1, QUESTION:1, REPLY:1 };
@@ -315,8 +315,8 @@ function mfShow(it){
   return it.isMsg?!!MSG_HUMAN[it.ref.type]:(it.ref.kind==='human');
 }
 /* 变动记录（recentChanges，与 agent 回合刷新的 changes 同源） */
-var CHG_LABEL = { doc:'资料', artifact:'产物', phase:'阶段', seat:'席位', human:'人工', message:'消息' };
-var CHG_CLS = { doc:'mt-sys', artifact:'mt-sys', phase:'mt-phase', seat:'mt-sys', human:'mt-human', message:'mt-q' };
+var CHG_LABEL = { doc:'资料', artifact:'产物', phase:'阶段', seat:'席位', human:'人工', pause:'暂停', message:'消息' };
+var CHG_CLS = { doc:'mt-sys', artifact:'mt-sys', phase:'mt-phase', seat:'mt-sys', human:'mt-human', pause:'mt-req', message:'mt-q' };
 function chgSummary(c,seats){
   var k=c.kind;
   if(k==='doc') return (c.doc?esc(c.doc.name):'')+' — '+(c.doc?esc(c.doc.purpose):'')+'（'+(c.doc&&c.doc.visibility==='private'?'私有·仅本席':'共享·全桌可读')+'，'+fmtSize(c.doc&&c.doc.size||0)+'）';
@@ -324,6 +324,12 @@ function chgSummary(c,seats){
   if(k==='phase') return (PHASE_LABEL[c.from]||c.from||'')+' → '+(PHASE_LABEL[c.to]||c.to||'')+'（'+esc(c.reason||'')+'）';
   if(k==='seat') return esc(c.seatName||'')+(c.role?'（'+(ROLE_LABEL[c.role]||c.role)+'）':'')+(c.what==='join'?' 入席':(c.what==='config'?' 更新入桌设定':' 退席'));
   if(k==='human') return '人工指令'+(c.toSeat?' → '+esc(seatName(seats,c.toSeat)):'')+(c.byHuman?'（'+esc(c.byHuman)+'）':'');
+  if(k==='pause'){
+    var who=(c.byName?esc(c.byName):'')+(c.byRole?'（'+(ROLE_LABEL[c.byRole]||c.byRole)+'）':'');
+    if(c.what==='request') return who+' 申请暂停'+(c.reason?(' — '+esc(c.reason)):'')+'，等待主持人/建桌人/系统管理员同意';
+    if(c.what==='pause') return '会议暂停 by '+who+(c.reason?(' — '+esc(c.reason)):'')+'；各方补充信息/调整立场后重新就绪';
+    return '继续会议 by '+who;
+  }
   return MT_LABEL[c.type]||c.type||'';
 }
 var SCOPE_PRESETS = ['全部内容均可讨论', '仅限本次产物范围内讨论'];
@@ -700,6 +706,7 @@ function roundDiagramHtml(d,seats,turn){
       +'<div class="dim xs">'+esc(clipStr(turn.taskHint,26))+'</div>';
   }
   else if(t.phase==='closed'){ h+='<div class="dim">会议已结束</div>'; }
+  else if(t.pause){ h+='<div style="color:var(--warn)">⏸ 会议已暂停</div>'; }
   else if(t.phase==='human_intervention'){ h+='<div style="color:var(--err)">等待人工介入</div>'; }
   else { h+='<div class="dim">等待推进</div>'; }
   h+='</div>';
@@ -849,7 +856,7 @@ function renderList(){
   h+='<div class="tables">';
   list.forEach(function(t){
     h+='<div class="card tcard" data-tid="'+esc(t.tableId)+'">'
-      +'<div class="row" style="align-items:flex-start"><b class="t-title">'+esc(t.topic)+'</b><span class="sp"></span>'+phaseBadge(t.phase,0,t.tableType)+'</div>'
+      +'<div class="row" style="align-items:flex-start"><b class="t-title">'+esc(t.topic)+'</b><span class="sp"></span>'+phaseBadge(t.phase,0,t.tableType)+(t.paused?'<span class="badge warn">⏸</span>':'')+'</div>'
       +'<div class="row" style="margin-top:8px">'+typeBadge(t.tableType)
       +(t.mySeatRole?roleBadge(t.mySeatRole)+' <span class="dim">我的席位'+(t.mySeatName?'：'+esc(t.mySeatName):'')+'</span>':'')+'</div>'
       +'<div class="dim" style="margin-top:8px">'+esc(t.tableId)+' · '+t.seatCount+' 席 · 创建于 '+fmtTs(t.createdAt)+'</div>'
@@ -1181,18 +1188,51 @@ function renderJoinResult(p,r){
 }
 
 /* ---------- 视图：桌详情 ---------- */
-function stepsHtml(phase, tt){
+function stepsHtml(phase, tt, pause){
   if(phase==='human_intervention'){
     return '<div class="banner err">人工介入模式：会议暂停，等待 HUMAN_INPUT / HUMAN_RULING 推进或裁决</div>';
   }
   var idx=-1;
   for(var i=0;i<STEP_DEFS.length;i++){ if(STEP_DEFS[i][0]===phase) idx=i; }
-  var h='<div class="steps">';
+  var h='';
+  if(pause){
+    var viaReq=(pause.via==='request'&&pause.requestedByName)?('（经 '+esc(pause.requestedByName)+' 申请）'):'';
+    h+='<div class="banner warn" style="margin:10px 0 6px"><b>⏸ 会议已暂停</b> — 由 '+esc(pause.byName)+'（'+esc(ROLE_LABEL[pause.byRole]||pause.byRole)+'）于 '+fmtTs(pause.pausedAt)+' 暂停'+viaReq
+      +(pause.reason?('：'+esc(pause.reason)):'')
+      +'<div class="dim" style="margin-top:3px">各方持有人：在「我的席位」人工补充或调整立场（保存时勾选「重新就绪」）、给本席 agent 发指令补充信息；无需补充的席位保持就绪即可。全员就绪后，由 主持人 / 建桌人 / 系统管理员 在网页继续会议。</div></div>';
+  }
+  h+='<div class="steps">';
   STEP_DEFS.forEach(function(s,i){
     var cls=(i<idx)?'done':(i===idx?'cur':'');
     h+='<div class="step '+cls+'"><div class="bar"></div><div>'+esc(phaseLabel(tt,s[0]))+'</div></div>';
   });
   return h+'</div>';
+}
+/* 入桌设定表单（open 设定阶段与会议暂停期共用；pausedMode=true 时标题与就绪文案切到「暂停期调整/重新就绪」）
+   表单元素 id 与原 open 分支一致（cfgPreset/cfgSup/cfgStance/cfgScope/dsWrap/dsChips/dsIn/cfgReady/cfgErr/cfgSave），绑定见 renderDetail */
+function seatCfgFormHtml(cfg, pausedMode){
+  cfg=cfg||{};
+  var title=pausedMode?'暂停期调整（立场 / 范围）':(cfg.ready?'修改入桌设定':'入桌设定');
+  var readyLabel=pausedMode
+    ?'重新就绪 — 补充/调整完成后声明本席可以继续（不动设定的席位无需任何操作，保持就绪）'
+    :'就绪 — 声明本席设定完成（全员就绪后建桌人可开始会议）';
+  return '<div class="section"><h3>'+esc(title)+'</h3>'
+    +'<div class="frow"><label class="t">立场</label>'
+    +'<div class="row"><select id="cfgPreset"><option value="">（选择立场预设…）</option></select>'
+    +'<input id="cfgSup" placeholder="立场补充说明（附加在预设文本后，可选）" style="flex:1"></div>'
+    +'<textarea id="cfgStance" placeholder="立场声明全文（选预设自动填入可再改；保存必填）">'+esc(cfg.stance||'')+'</textarea></div>'
+    +'<div class="frow"><label class="t">讨论范围</label>'
+    +'<input id="cfgScope" value="'+escAttr(cfg.scope||'')+'" placeholder="只讨论…／不讨论…（一句话）">'
+    +'<div class="row" style="margin-top:4px">'+SCOPE_PRESETS.map(function(p){ return '<button class="preset" data-scope="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'</div></div>'
+    +'<div class="frow"><label class="t">数据范围（目录/文档/产物，逐条添加）</label>'
+    +'<div class="chips" id="dsWrap"><span id="dsChips"></span><input id="dsIn" placeholder="输入路径后回车添加，如 docs/api/"></div>'
+    +'<div class="row" style="margin-top:4px">'+DS_PRESETS.map(function(p){ return '<button class="preset" data-ds="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'<span class="dim">这些路径以外的内容默认不在本次讨论的数据范围内</span></div></div>'
+    +'<div class="frow"><label class="chk"><input type="checkbox" id="cfgReady"'+(cfg.ready?' checked':'')+'> '+esc(readyLabel)+'</label></div>'
+    +'<div class="ferr" id="cfgErr"></div>'
+    +'<div class="row"><button id="cfgSave" class="primary">保存设定</button>'
+    +((!pausedMode&&cfg.ready)?'<button id="cfgCollapse">收起（保留现设定）</button>':'')
+    +(pausedMode?'<span class="dim">暂停期保存：未勾选「重新就绪」将被视为补充中（未就绪）</span>':'<span class="dim">保存后可再修改，开始会议后设定锁定</span>')
+    +'</div></div>';
 }
 
 function renderDetail(d){
@@ -1211,13 +1251,14 @@ function renderDetail(d){
   h+='<div class="card"><div class="shead"><b style="font-size:16px">'+esc(t.topic)+'</b>'
     +typeBadge(t.tableType)
     +phaseBadge(t.phase,t.roundNo,t.tableType)
+    +(t.pause?'<span class="badge warn">⏸ 已暂停</span>':'')
     +(t.mode==='hosted'?'<span class="rb host">主持人模式 · 预审调度</span>':'')
     +(t.deadlockCount>0?'<span class="badge err">僵局 '+t.deadlockCount+'</span>':'')
     +'</div>';
   if(d.meta.goals) h+='<div class="kv"><span class="k">目标</span>'+esc(d.meta.goals)+'</div>';
   if(d.meta.deliverables) h+='<div class="kv"><span class="k">交付物</span>'+esc(d.meta.deliverables)+'</div>';
   if(d.meta.rules) h+='<div class="kv"><span class="k">规则</span>'+esc(d.meta.rules)+'</div>';
-  h+=stepsHtml(t.phase,t.tableType);
+  h+=stepsHtml(t.phase,t.tableType,t.pause);
   h+='</div>';
 
   var turn=t.activeTurn;
@@ -1232,7 +1273,16 @@ function renderDetail(d){
     if(t.precheck.state==='reviewing') h+='<div class="badge warn">预审中</div> <span class="dim">DeepSeek 正在预审刚提交的回合结果，预审落地前不授出发言权</span>';
     else if(t.precheck.state==='directive') h+='<div class="badge warn">预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交</span><br>';
   }
-  if(turn){
+  if(t.pause){
+    /* 暂停叠加态：阶段保留、无发言权；展示就绪进度与继续条件 */
+    var pseats=seats.filter(function(s){ return s.role!=='host'; });
+    var pReady=pseats.filter(function(s){ return s.config&&s.config.ready; }).length;
+    h+='<span class="badge warn">⏸ 会议已暂停</span> <span class="dim">阶段保留在「'+esc(phaseLabel(t.tableType,t.phase))+'」，继续后从原处推进</span>';
+    h+='<div class="dim" style="margin-top:4px">就绪进度：'+pReady+' / '+pseats.length
+      +(pseats.length&&pReady===pseats.length
+        ?' — 全员已就绪，可继续会议'
+        :' — 未就绪：'+pseats.filter(function(s){ return !(s.config&&s.config.ready); }).map(function(s){ return esc(s.name); }).join('、'));
+  } else if(turn){
     h+='发言权：<b>'+esc(seatName(seats,turn.seatId))+'</b> —— '+esc(turn.taskHint||'');
     if(turn.pendingRequest) h+='<div class="dim">待处理请求：'+esc(turn.pendingRequest.title)+'</div>';
   } else if(t.phase==='closed'){ h+='<span class="badge ok">会议已结束</span>'+(d.minutes?' <span class="dim">纪要已生成（见下方纪要区）</span>':''); }
@@ -1298,22 +1348,7 @@ function renderDetail(d){
           +'<div class="ferr" id="tcErr"></div>'
           +'<div class="row"><button id="tcSave" class="primary">保存桌设定</button><span class="dim">仅设定阶段可改；资料文档在下方「资料文档」区上传（选共享，全桌可见）</span></div></div>';
       } else if(!cfg.ready||view.cfgEditing){
-        h+='<div class="section"><h3>'+(cfg.ready?'修改入桌设定':'入桌设定')+'</h3>'
-          +'<div class="frow"><label class="t">立场</label>'
-          +'<div class="row"><select id="cfgPreset"><option value="">（选择立场预设…）</option></select>'
-          +'<input id="cfgSup" placeholder="立场补充说明（附加在预设文本后，可选）" style="flex:1"></div>'
-          +'<textarea id="cfgStance" placeholder="立场声明全文（选预设自动填入可再改；保存必填）">'+esc(cfg.stance||'')+'</textarea></div>'
-          +'<div class="frow"><label class="t">讨论范围</label>'
-          +'<input id="cfgScope" value="'+escAttr(cfg.scope||'')+'" placeholder="只讨论…／不讨论…（一句话）">'
-          +'<div class="row" style="margin-top:4px">'+SCOPE_PRESETS.map(function(p){ return '<button class="preset" data-scope="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'</div></div>'
-          +'<div class="frow"><label class="t">数据范围（目录/文档/产物，逐条添加）</label>'
-          +'<div class="chips" id="dsWrap"><span id="dsChips"></span><input id="dsIn" placeholder="输入路径后回车添加，如 docs/api/"></div>'
-          +'<div class="row" style="margin-top:4px">'+DS_PRESETS.map(function(p){ return '<button class="preset" data-ds="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'<span class="dim">这些路径以外的内容默认不在本次讨论的数据范围内</span></div></div>'
-          +'<div class="frow"><label class="chk"><input type="checkbox" id="cfgReady"'+(cfg.ready?' checked':'')+'> 就绪 — 声明本席设定完成（全员就绪后建桌人可开始会议）</label></div>'
-          +'<div class="ferr" id="cfgErr"></div>'
-          +'<div class="row"><button id="cfgSave" class="primary">保存设定</button>'
-          +(cfg.ready?'<button id="cfgCollapse">收起（保留现设定）</button>':'')
-          +'<span class="dim">保存后可再修改，开始会议后设定锁定</span></div></div>';
+        h+=seatCfgFormHtml(cfg,false);
       } else {
         h+='<div class="section"><h3>当前设定 <span class="dim">（已就绪，开始会议前可修改）</span></h3><div class="sumcard">'
           +'<div class="kv"><span class="k">立场</span>'+esc(cfg.stance||'')+'</div>'
@@ -1339,8 +1374,15 @@ function renderDetail(d){
     } else if(t.phase==='closed'){
       h+='<div class="section dim">会议已结束：纪要在下方「会议纪要」区。</div>';
     } else {
-      /* 会议进行中：仅持发言权时出现代答表单（设定阶段不出现代答） */
-      if(turn&&turn.seatId===d.mySeatId){
+      /* 会议进行中（含暂停态） */
+      if(t.pause){
+        /* 暂停期：人工补充或调整主张（保存时勾选「重新就绪」）；主持人无设定，只看控制区 */
+        if(isHost){
+          h+='<div class="section dim">会议已暂停：主持人无需设定立场，等待各方补充并重新就绪后，在下方「会议控制」继续会议。</div>';
+        } else {
+          h+=seatCfgFormHtml(cfg,true);
+        }
+      } else if(turn&&turn.seatId===d.mySeatId){
         h+='<div class="section"><h3>替我回答本轮（人工代答）</h3><div class="dim">'+esc(turn.taskHint||'')+'</div>'
           +'<div class="row" style="margin-top:6px"><select id="pxType"></select>'
           +'<select id="pxDecision" style="display:none"></select>'
@@ -1354,6 +1396,37 @@ function renderDetail(d){
           +'<span class="sp"></span><button id="pxSend" class="primary">代答发送</button></div></div>';
       } else {
         h+='<div class="section dim">'+(turn?('当前发言权：'+esc(seatName(seats,turn.seatId))+'。轮到本席时，这里会出现人工代答表单。'):'等待会议推进。')+'</div>';
+      }
+
+      /* 申请暂停（未暂停时，非控制人席位；控制人直接用下方「会议控制」的暂停按钮） */
+      if(!t.pause&&!(isOwner||isHost)){
+        h+='<div class="section sumcard"><h3 style="margin-top:0">申请暂停</h3>'
+          +'<div class="row"><input id="prReason" placeholder="申请原因（给主持人/建桌人/系统管理员看，可空）" style="flex:1;min-width:180px">'
+          +'<button id="prApply">申请暂停会议</button></div>'
+          +'<div class="hint" style="margin-top:4px">申请将通知 主持人/建桌人/系统管理员，其在网页同意后会议暂停；届时各席（含本席）可补充信息/调整立场后重新就绪。</div>'
+          +'<div class="ferr" id="prErr"></div></div>';
+      }
+    }
+
+    /* 会议控制（建桌人/主持人，会议中）：暂停 / 就绪名单 + 继续 */
+    if((isOwner||isHost)&&t.phase!=='open'&&t.phase!=='closed'){
+      if(t.pause){
+        var ctlSeats=seats.filter(function(s){ return s.role!=='host'; });
+        var ctlReady=ctlSeats.filter(function(s){ return s.config&&s.config.ready; });
+        var ctlAll=ctlSeats.length>0&&ctlReady.length===ctlSeats.length;
+        h+='<div class="section sumcard"><h3 style="margin-top:0">会议控制（暂停中）</h3>';
+        ctlSeats.forEach(function(s){
+          h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
+        });
+        h+='<div class="row" style="margin-top:8px"><button id="ctlResume" class="primary"'+(ctlAll?'':' disabled')+'>▶ 继续会议</button>'
+          +'<span class="dim">恢复到「'+esc(phaseLabel(t.tableType,t.phase))+'」继续；需全员就绪（系统管理员可强制继续）</span></div>'
+          +'<div class="ferr" id="ctlErr"></div></div>';
+      } else {
+        h+='<div class="section sumcard"><h3 style="margin-top:0">会议控制</h3>'
+          +'<div class="row"><input id="ctlPauseReason" placeholder="暂停原因（进入会议记录，可空）" style="flex:1;min-width:180px">'
+          +'<button id="ctlPause">⏸ 暂停会议</button></div>'
+          +'<div class="hint" style="margin-top:4px">暂停后各方可在「我的席位」调整立场 / 给 agent 补充信息并重新就绪；全员就绪后在这里继续会议。</div>'
+          +'<div class="ferr" id="ctlErr"></div></div>';
       }
     }
 
@@ -1375,15 +1448,30 @@ function renderDetail(d){
     h+='</div>';
   }
 
-  /* 管理员操作卡（systemadmin 专属：强制介入/闭桌/删桌，动作审计留痕） */
+  /* 暂停申请（主持人/建桌人/系统管理员可见 pending：同意后会议暂停；申请方与理由进会议记录与审计） */
+  var isController=(mySeat&&(mySeat.seatId===t.ownerSeat||mySeat.role==='host'))||admin;
+  if(isController&&(d.pauseRequests||[]).length&&t.phase!=='closed'){
+    h+='<div class="card"><div class="shead"><b>暂停申请</b><span class="dim">参与方申请暂停会议 · 同意后进入暂停（记录申请方）</span></div>';
+    (d.pauseRequests||[]).forEach(function(pr){
+      h+='<div class="row sumcard" style="align-items:flex-start"><div style="flex:1;min-width:0">'
+        +'<div class="row">'+roleBadge(pr.byRole)+'<b>'+esc(pr.byName)+'</b><span class="dim">'+fmtTs(pr.createdAt)+'</span></div>'
+        +(pr.reason?'<div class="dim" style="margin-top:2px">理由：'+esc(pr.reason)+'</div>':'')
+        +'</div><button class="prOk primary sm" data-rid="'+escAttr(pr.requestId)+'">同意暂停</button></div>';
+    });
+    h+='</div>';
+  }
+
+  /* 管理员操作卡（systemadmin 专属：强制介入/暂停/继续/闭桌/删桌，动作审计留痕） */
   if(admin){
     var active=t.phase!=='closed';
     h+='<div class="card gold"><div class="shead"><b>管理员操作</b><span class="dim">系统观察员专属 · 全部动作写入审计</span></div>'
       +'<div class="row"><input id="admReason" placeholder="原因（进入会议记录 / 审计）" style="flex:1;min-width:200px">'
+      +(active&&!t.pause&&t.phase!=='human_intervention'?'<button id="admPause">暂停会议</button>':'')
+      +(t.pause?'<button id="admResume">继续会议</button><button id="admForce" class="danger">强制继续（跳过就绪）</button>':'')
       +(active&&t.phase!=='human_intervention'?'<button id="admHuman">强制人工介入</button>':'')
       +(active?'<button id="admClose">强制闭桌</button>':'')
       +'<button id="admDel" class="danger">删除圆桌</button></div>'
-      +'<div class="hint" style="margin-top:6px">强制闭桌 = 立即生成纪要并结束（不可恢复）；删除 = 连同消息/产物/席位全部清除（轮询中的 agent 将收到 404）。</div></div>';
+      +'<div class="hint" style="margin-top:6px">暂停/继续与参与方网页操作同源（记入会议记录与审计）；强制闭桌 = 立即生成纪要并结束（不可恢复）；删除 = 连同消息/产物/席位全部清除（轮询中的 agent 将收到 404）。</div></div>';
   }
 
   /* 产物（交付卡） */
@@ -1496,6 +1584,9 @@ function renderDetail(d){
       if(p.targetSeatId) body+='　→ 点名 '+(seatName(seats,p.targetSeatId));
     }
     else if(m.type==='SUPPLEMENT') body=(p.text||'');
+    else if(m.type==='MEETING_PAUSED') body='会议暂停 by '+(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）'+(p.via==='request'&&p.requestedByName?('，经 '+p.requestedByName+' 申请'):'')+(p.reason?('：'+p.reason):'')+'；'+(p.note||'');
+    else if(m.type==='MEETING_RESUMED') body='继续会议 by '+(p.byName||'')+'，恢复到「'+(PHASE_LABEL[p.phase]||p.phase||'')+'」'+(p.forced?'［强制 · 跳过就绪检查］':'');
+    else if(m.type==='PAUSE_REQUESTED') body=(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）申请暂停'+(p.reason?('：'+p.reason):'')+' — 等待 主持人/建桌人/系统管理员 同意';
     else if(m.type==='MINUTES') body='纪要已生成（全文见上方「会议纪要」区）';
     else { try{ body=JSON.stringify(p).slice(0,200); }catch(e){} }
     /* 阶段变更 = 回合过程轴上的分隔条，不再是普通消息条 */
@@ -1586,8 +1677,8 @@ function renderDetail(d){
       .catch(function(e){ toast('发送失败：'+e.message); });
   };
 
-  /* ---- 绑定：我的席位面板 ---- */
-  if(mySeat&&t.phase==='open'){
+  /* ---- 绑定：我的席位面板（open 设定阶段与会议暂停期共用同一套设定表单 id） ---- */
+  if(mySeat&&(t.phase==='open'||t.pause)){
     var cfgPreset=document.getElementById('cfgPreset');
     if(cfgPreset){
       /* 立场预设 + 回填（按本桌类型 forTypes 与本席角色过滤） */
@@ -1797,6 +1888,63 @@ function renderDetail(d){
       text:txt, toSeat:d.mySeatId, byHuman:document.getElementById('myInstrBy').value.trim()
     }).then(function(){ toast('指令已发送（agent 下次 poll 即见）'); view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ toast('发送失败：'+e.message); });
+  };
+
+  /* ---- 绑定：会议控制（暂停/继续，建桌人/主持人） ---- */
+  var ctlPause=document.getElementById('ctlPause');
+  if(ctlPause) ctlPause.onclick=function(){
+    api('POST','/api/tables/'+view.tableId+'/my/pause',{reason:document.getElementById('ctlPauseReason').value.trim()})
+      .then(function(){ toast('会议已暂停，各方已收到通知'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ document.getElementById('ctlErr').textContent='暂停失败：'+e.message; });
+  };
+  var ctlResume=document.getElementById('ctlResume');
+  if(ctlResume) ctlResume.onclick=function(){
+    if(ctlResume.disabled) return;
+    api('POST','/api/tables/'+view.tableId+'/my/resume',{})
+      .then(function(){ toast('会议已继续'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ document.getElementById('ctlErr').textContent='继续失败：'+e.message; });
+  };
+
+  /* ---- 绑定：申请暂停（普通席位，会议中未暂停时） ---- */
+  var prApply=document.getElementById('prApply');
+  if(prApply) prApply.onclick=function(){
+    api('POST','/api/tables/'+view.tableId+'/my/pause-request',{reason:document.getElementById('prReason').value.trim()})
+      .then(function(){ toast('暂停申请已提交，等待主持人/建桌人/系统管理员同意'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ document.getElementById('prErr').textContent='申请失败：'+e.message; });
+  };
+
+  /* ---- 绑定：同意暂停申请（主持人/建桌人走 my 通道；无席位的管理员走 admin 通道） ---- */
+  app.querySelectorAll('button.prOk').forEach(function(b){
+    b.onclick=function(){
+      var rid=encodeURIComponent(b.getAttribute('data-rid')||'');
+      var asAdmin=admin&&!(mySeat&&(mySeat.seatId===t.ownerSeat||mySeat.role==='host'));
+      var url=asAdmin
+        ?('/api/admin/tables/'+view.tableId+'/pause-request/'+rid+'/approve')
+        :('/api/tables/'+view.tableId+'/my/pause-request/'+rid+'/approve');
+      api('POST',url,{}).then(function(){ toast('已同意暂停申请，会议已暂停'); view.dirtyPanel=false; loadDetail(); })
+        .catch(function(e){ toast('同意失败：'+e.message); });
+    };
+  });
+
+  /* ---- 绑定：管理员操作（暂停/继续/强制继续） ---- */
+  var admPause=document.getElementById('admPause');
+  if(admPause) admPause.onclick=function(){
+    api('POST','/api/admin/tables/'+view.tableId+'/pause',{reason:document.getElementById('admReason').value.trim()})
+      .then(function(){ toast('会议已暂停'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ toast('失败：'+e.message); });
+  };
+  var admResume=document.getElementById('admResume');
+  if(admResume) admResume.onclick=function(){
+    api('POST','/api/admin/tables/'+view.tableId+'/resume',{})
+      .then(function(){ toast('会议已继续'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ toast('失败：'+e.message); });
+  };
+  var admForce=document.getElementById('admForce');
+  if(admForce) admForce.onclick=function(){
+    if(!confirm('强制继续将跳过「全员就绪」检查立即恢复会议（写入审计）。确定？')) return;
+    api('POST','/api/admin/tables/'+view.tableId+'/resume',{force:true})
+      .then(function(){ toast('已强制继续会议（跳过就绪检查，已记审计）'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ toast('失败：'+e.message); });
   };
 
   /* ---- 绑定：管理员操作 ---- */

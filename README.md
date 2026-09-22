@@ -13,7 +13,7 @@
 npm install
 npm run build
 npm run server            # 默认 :8787，数据落项目根 roundtable_data/（SQLite + blobs）；可用 PORT= DATA_DIR= 覆盖
-npm test                  # 179 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度 + 桌类型与协作全流程
+npm test                  # 191 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度 + 桌类型与协作全流程 + 会议暂停/恢复与暂停申请
 ```
 
 ## 桌类型（开桌先选类型，按类型选角色）
@@ -61,6 +61,8 @@ curl -s -X POST $SERVER/api/tables/$TID/start -H "authorization: Bearer $OWNER_S
 ```
 
 会议流（服务器状态机自动推进）：`open（建桌/入席/设定立场，建桌人点开始）→ statements（提案人发布产物+陈述）→ review（评审人逐条 must/should/nice 意见）→ response（提案人四态回应：accept 接纳[可委派 self 或评审席修改] / defer 记录后续跟进 / reject 拒绝 / human 交人工）→ execution（被请求方发布带 requestId 的新版本后 accept；或 reject/counter/escalate_human）→ convergence（全员表决）→ closed（自动纪要：立场/处置/跟进清单/表决/人工记录）`。表决连续未通过 → `human_intervention`（人工裁决可 `forceConvergence` 收会或恢复指定阶段）。
+
+**会议暂停（叠加态，阶段保留）**：会议进行中（statements~convergence），主持人 / 建桌人 / 系统管理员可在网页暂停会议，参与方（含观察方）可在网页申请暂停、经上述控制人同意后生效（申请方记入会议记录与审计）。暂停期发言权与阶段推进冻结（仅 QUESTION/REPLY/HUMAN_INPUT/ESCALATE 与资料上传、席位设定可动），各方持有人人工补充或调整立场、给本席 agent 补充信息后重新就绪（无需补充的席位保持就绪）；全员就绪后控制人在网页继续会议，恢复到原阶段原发言权。systemadmin 可跳过就绪强制继续（记审计）。
 
 ## 调度机制（发言权与执行次序）
 
@@ -127,6 +129,8 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 | `POST /api/invites/preview` | **邀请码预检**（user token；不消费次数）：裸码或整段「完整邀请」文本均可（服务端提取 10 位码），返回所属桌摘要（topic/phase/角色/剩余次数）与 `mySeat`——只有邀请码也能准确定位对应圆桌；入席仍走 `POST /api/tables/:id/seats`（**服务端强制校验码归属本桌**，跨桌 403；同用户已有本桌 active 席位 409 `already_seated`） |
 | `GET /api/observer/tables/:id/invites` | 邀请码（仅建桌人，可复制） |
 | `POST /api/tables/:id/human-input` | 人工指令：以你在本桌的席位身份发 HUMAN_INPUT（支持 `toSeat` 定向） |
+| `POST /api/tables/:id/my/pause` · `/my/pause-request` · `/my/pause-request/:rid/approve` · `/my/resume` | **会议暂停通道（网页持有人）**：主持人/建桌人直接暂停；任意席位（含观察方）申请暂停，控制人同意后生效（申请方进日志）；全员重新就绪（host 豁免）后继续会议 |
+| `POST /api/admin/tables/:tid/pause` · `/pause-request/:rid/approve` · `/resume` | 管理台同款（systemadmin 任意桌）；`resume` 可带 `{force:true}` 跳过就绪强制继续（记审计） |
 | `POST /api/tables/:id/my/seat-config` · `/my/message` · `/my/start` | 网页持有人通道（user token）：入桌设定 / 人工代答 / 建桌人开始会议 |
 | `POST /api/tables/:id/my/documents` · `GET /my/documents/:docId` | 网页持有人通道：上传 / 下载资料文档（以你在本桌的席位身份，权限同 agent 通道） |
 | `POST /api/tables/:id/my/seat-token` | **凭证重签**（user token，仅本人席位）：`{mode:"recover"}` 恢复参会（新凭证可用、旧凭证保留）/ `{mode:"replace", agentLabel?}` agent 替代（旧凭证全部吊销——原 agent 即使仍在运行，下次请求即 401；可选更新 agent 标识并广播通知） |
@@ -145,7 +149,8 @@ agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败�
 - **我的席位面板（按阶段与状态条件渲染）**：设定阶段——入桌设定表单（**回填已保存值**、立场预设、讨论范围快捷模板、**数据范围 chips 输入器**、就绪开关；已就绪显示摘要可修改）、建桌人可见就绪名单并在全员就绪后**一键开始会议**；会议开始后——持发言权时出现**人工代答**表单（设定阶段无代答环节）；
 - **凭证恢复 · 更换 agent（任何阶段可用，含闭桌后）**：「复制参会配置（恢复）」签发新凭证并复制完整粘贴文本（服务器地址/圆桌 ID/席位 token/.roundtable 配置写法），粘到新 agent 会话即可以原席位身份继续参会（原凭证保留）；「替代 agent」在恢复之上**吊销本席位全部旧凭证**（原 agent 即使仍在轮询，下次请求即 401 失效），可选填新 agent 标识并全桌广播；systemadmin 在席位表可为**任意席位**执行同样操作（复制配置 / 替代）；
 - **邀请码**：建桌人视角可直接复制（非建桌人 403）；
-- **人工指令**：选择目标（全员或定向某席位）输入文本，以你在本桌的席位身份发送 HUMAN_INPUT——桌上的 agent 下一轮 poll 即可见并遵照处理（仍受安全纪律约束）。
+- **人工指令**：选择目标（全员或定向某席位）输入文本，以你在本桌的席位身份发送 HUMAN_INPUT——桌上的 agent 下一轮 poll 即可见并遵照处理（仍受安全纪律约束）；
+- **会议暂停**：会议中建桌人/主持人席位出现「会议控制」卡（暂停会议 / 就绪名单 + 继续会议），普通席位可「申请暂停」；控制人与系统管理员可见待同意申请列表并一键同意。暂停期详情页顶部横幅说明暂停人与原因、就绪进度，我的席位面板提供暂停期立场调整表单（保存勾选「重新就绪」），agent 侧收到 MEETING_PAUSED/MEETING_RESUMED 系统消息并停止/恢复回合推进。
 
 ## 系统观察员（systemadmin · 全局观察模式）
 

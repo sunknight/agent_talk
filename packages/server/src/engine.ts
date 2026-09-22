@@ -12,13 +12,14 @@ import {
   INJECTION_FLAG, makeEnvelope, newId, resolveCaps, scanInjection, sha256, tableTypeOf, validateEnvelope,
   type ArtifactPublishedPayload, type ArtifactVersion, type AuditEvent, type AuditRecord,
   type ConsensusResultPayload, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
-  type HumanInputPayload, type HumanRulingPayload, type MsgType, type Phase, type PhaseChangePayload,
+  type HumanInputPayload, type HumanRulingPayload, type MeetingPausedPayload, type MeetingResumedPayload,
+  type MsgType, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type Phase, type PhaseChangePayload,
   type PrecheckState, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
   type ReviewCommentPayload, type Role, type SeatDocumentMeta, type SeatInfo, type SupplementPayload,
   type TableChange, type TableChangesPayload, type TableDocumentMeta, type TableType, type TableTypeDef,
   type TableInfoPayload, type TurnGrantPayload,
 } from "@rt/shared";
-import type { DirectiveRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import type { DirectiveRecord, PauseRequestRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 import { Store } from "./store";
 import { unifiedDiff } from "./diff";
 import { deepseekPrecheck, type PrecheckFn, type PrecheckInput, type PrecheckOutcome } from "./precheck";
@@ -56,10 +57,12 @@ const PHASE_ALLOWS: Partial<Record<Phase, MsgType[]>> = {
 const COMMON_TYPES: MsgType[] = ["QUESTION", "REPLY", "HUMAN_INPUT", "ESCALATE"];
 /** 人工介入阶段额外放行的人工裁决（仍要求 human_proxied 通道标记） */
 const HUMAN_ONLY_TYPES: MsgType[] = ["HUMAN_RULING"];
-/** 服务器专属系统消息：席位直发一律拒绝（防伪造预审结论操纵调度） */
-const SERVER_ONLY_TYPES: MsgType[] = ["HOST_PREREVIEW"];
+/** 服务器专属系统消息：席位直发一律拒绝（防伪造预审结论/暂停通知操纵调度） */
+const SERVER_ONLY_TYPES: MsgType[] = ["HOST_PREREVIEW", "MEETING_PAUSED", "MEETING_RESUMED", "PAUSE_REQUESTED"];
 /** hosted 桌预审点名链上限：同一根提交上最多连续点名次数（防 ping-pong），超出强制放行 */
 const DIRECTIVE_CHAIN_MAX = 3;
+/** 可暂停的会议阶段：open 未开始、human_intervention 已是人工态、closed 已结束，均不可暂停 */
+const PAUSABLE_PHASES: Phase[] = ["statements", "review", "response", "execution", "convergence"];
 
 /** 字段长度/范围校验：超限即 422（防巨字段撑库、撑大 poll/changes 全量响应） */
 function checkField(value: string, field: string, max: number, min = 1): string {
@@ -288,27 +291,30 @@ export class Hub {
     return { seatId, token, seat };
   }
 
-  /** 入桌设定：立场（预设+补充）、讨论范围、数据范围、就绪标记（open 阶段可反复修改） */
+  /** 入桌设定：立场（预设+补充）、讨论范围、数据范围、就绪标记（open 阶段与会议暂停期可反复修改）。
+   *  暂停期就绪语义（动设定才重置）：保存时未显式带 ready:true 则置为未就绪——
+   *  调整主张中的席位不会被视为「已补充完成」；无需补充的席位不保存即保持就绪。 */
   updateSeatConfig(tableId: string, seat: ServerSeat, p: {
     stancePreset?: string; stance: string; scope?: string; dataScope?: string[]; ready?: boolean;
   }): SeatInfo {
     const meta = this.requireTable(tableId);
-    if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，席位设定锁定");
+    if (meta.phase !== "open" && !meta.pause) throw new ApiError(409, "already_started", "会议已开始，席位设定锁定（暂停期可调整）");
     if (seat.role === "host") throw new ApiError(403, "role", "主持人不参与就绪设定（hosted 桌由各方设定立场后由主持人点开始）");
     const stance = checkField(p.stance, "stance", 8_000);
     const scope = p.scope !== undefined ? checkField(p.scope, "scope", 4_000, 0) : "";
     const stancePreset = p.stancePreset !== undefined ? checkField(p.stancePreset, "stancePreset", 64, 0) : undefined;
     const dataScope = (p.dataScope ?? []).slice(0, 50).map((x) => checkField(x, "dataScope 条目", 500));
+    const ready = meta.pause ? (p.ready ?? false) : (p.ready ?? seat.config.ready);
     seat.config = {
       stancePreset,
       stance,
       scope,
       dataScope,
-      ready: p.ready ?? seat.config.ready,
+      ready,
     };
     this.store.saveSeat(tableId, seat);
     this.sysMsg(tableId, "SEAT_JOINED", { seat, configUpdate: true });
-    this.audit(tableId, seat.seatId, "seat_config", { ready: seat.config.ready, stancePreset: p.stancePreset });
+    this.audit(tableId, seat.seatId, "seat_config", { ready, stancePreset: p.stancePreset, ...(meta.pause ? { paused: true } : {}) });
     return seat;
   }
 
@@ -406,6 +412,7 @@ export class Hub {
       roundNo: meta.roundNo, deadlockCount: meta.deadlockCount, seats, artifacts,
       activeTurn: this.computeTurn(tableId),
       precheck: this.precheckState(tableId, meta),
+      pause: (meta.pause ?? null) as PauseInfo | null,
     };
   }
 
@@ -495,14 +502,35 @@ export class Hub {
         const p = m.payload as HumanInputPayload;
         return { kind: "human", ...base, ...(p.toSeat ? { toSeat: p.toSeat } : {}), ...(p.byHuman ? { byHuman: p.byHuman } : {}) };
       }
+      case "MEETING_PAUSED": {
+        const p = m.payload as MeetingPausedPayload;
+        return { kind: "pause", ...base, what: "pause", bySeat: p.bySeat, byName: p.byName, byRole: p.byRole, reason: p.reason };
+      }
+      case "MEETING_RESUMED": {
+        const p = m.payload as MeetingResumedPayload;
+        return { kind: "pause", ...base, what: "resume", bySeat: p.bySeat, byName: p.byName, byRole: p.byRole, reason: "" };
+      }
+      case "PAUSE_REQUESTED": {
+        const p = m.payload as PauseRequestedPayload;
+        return { kind: "pause", ...base, what: "request", bySeat: p.bySeat, byName: p.byName, byRole: p.byRole, reason: p.reason, requestId: p.requestId };
+      }
       default:
         return { kind: "message", ...base, type: m.type };
     }
   }
 
-  /** 本席待办提示：open 阶段按就绪状态给出设定/等待/开始指引，其余阶段沿用发言权的 taskHint */
+  /** 本席待办提示：open 阶段按就绪状态给出设定/等待/开始指引，暂停期给出补充/就绪指引，其余阶段沿用发言权的 taskHint */
   private myTaskOf(table: TableInfoPayload, seat: ServerSeat, yourTurn: TurnGrantPayload | null): string | null {
     if (table.phase === "closed") return "会议已结束：纪要在 MINUTES 消息里，无需继续跟进";
+    if (table.pause) {
+      const viaReq = table.pause.via === "request" ? `（经 ${table.pause.requestedByName} 申请）` : "";
+      const ctl = seat.role === "host" || table.ownerSeat === seat.seatId;
+      if (ctl) {
+        const notReady = table.seats.filter((s) => s.status !== "left" && !s.config.ready && s.role !== "host");
+        return `会议已暂停${viaReq}（by ${table.pause.byName}）：等待各方补充信息并重新就绪${notReady.length ? `（未就绪：${notReady.map((s) => s.name).join("、")}）` : "（全员已就绪）"}；继续会议由持有人在观察端网页操作（POST /api/tables/:id/my/resume）`;
+      }
+      return `会议已暂停${viaReq}（by ${table.pause.byName}）：请持有人按需补充/调整本席立场（POST /api/tables/:id/seat-config，保存后须带 ready:true 重新就绪）并以 HUMAN_INPUT 下达补充信息；回合型消息在恢复前会被 409 meeting_paused 拒绝，等待 MEETING_RESUMED 后继续`;
+    }
     if (table.phase === "open") {
       const def = tableTypeOf(table.tableType);
       const seats = table.seats.filter((s) => s.status !== "left");
@@ -792,6 +820,11 @@ export class Hub {
   private checkPhaseRules(meta: TableMeta, seat: ServerSeat, type: MsgType, payload: unknown, extraFlags?: string[]) {
     const p = meta.phase;
     if (p === "closed") throw new ApiError(409, "table_closed", "会议已结束，只读");
+    // 暂停叠加态：仅放行讨论类通用消息（QUESTION/REPLY/HUMAN_INPUT/ESCALATE）——
+    // 回合型提交、REQUEST、HUMAN_RULING 一律压住，等「继续会议」后按原阶段恢复
+    if (meta.pause && !COMMON_TYPES.includes(type)) {
+      throw new ApiError(409, "meeting_paused", "会议已暂停：仅接受 QUESTION / REPLY / HUMAN_INPUT / ESCALATE；补充信息或调整立场后重新就绪，等待继续会议");
+    }
     const role = seat.role, caps = seat.caps;
 
     // 人工裁决通道闸门（先于阶段判定，保证 agent 直发任何阶段都得到明确的 403）：
@@ -918,6 +951,8 @@ export class Hub {
 
   computeTurn(tableId: string): TurnGrantPayload | null {
     const meta = this.requireTable(tableId);
+    // 暂停叠加态：不授予任何发言权（含 hosted 预审层），恢复后事件溯源自然重推导
+    if (meta.pause) return null;
     const seats = this.activeSeats(tableId);
     const proposer = seats.find((s) => s.role === "proposer");
     const reviewers = seats.filter((s) => s.role === "reviewer");
@@ -1093,6 +1128,8 @@ export class Hub {
 
   maybeAdvance(tableId: string) {
     const meta = this.requireTable(tableId);
+    // 暂停叠加态：冻结一切阶段推进（兜底 hosted 预审异步回调晚于暂停落地的竞态）
+    if (meta.pause) return;
     const seats = this.activeSeats(tableId);
     const msgs = this.store.getMessages(tableId);
     const proposer = seats.find((s) => s.role === "proposer");
@@ -1281,6 +1318,7 @@ export class Hub {
   }): ArtifactPublishedPayload {
     const meta = this.requireTable(tableId);
     if (meta.phase === "closed") throw new ApiError(409, "table_closed", "会议已结束");
+    if (meta.pause) throw new ApiError(409, "meeting_paused", "会议已暂停，不能发布产物（继续会议后再发）");
     this.touchSeat(seat, tableId);
     this.checkRate(tableId, seat);
     if (!seat.caps.canPublish) {
@@ -1565,6 +1603,181 @@ export class Hub {
   }
 
 
+  // ================= 会议暂停（叠加态：冻结推进，恢复后回原阶段继续） =================
+
+  /** 控制人判定：主持人席位 / 建桌人席位（systemadmin 走 admin 入口，不占席位） */
+  private isPauseController(meta: TableMeta, seat: ServerSeat): boolean {
+    return seat.role === "host" || seat.seatId === meta.ownerSeat;
+  }
+
+  /** 暂停前置：会议进行中且当前未暂停 */
+  private requirePauseable(meta: TableMeta) {
+    if (meta.phase === "open") throw new ApiError(409, "not_meeting", "会议尚未开始（设定阶段无需暂停）");
+    if (meta.phase === "human_intervention") throw new ApiError(409, "not_meeting", "已在人工介入模式（本身即等待人工的暂停态），无需再暂停");
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "会议已结束");
+    if (meta.pause) throw new ApiError(409, "already_paused", "会议已暂停，请先继续会议");
+  }
+
+  /** 网页持有人通道入口的公共骨架：user token → 本桌席位，不满足控制人即 403 */
+  private controllerSeatOf(userToken: string, tableId: string): { meta: TableMeta; seat: ServerSeat } {
+    const user = this.requireUser(userToken);
+    const seatId = this.store.seatOfUser(tableId, user.userId);
+    if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位（暂停/继续会议由主持人、建桌人、系统管理员执行）");
+    const seat = this.requireSeat(tableId, seatId) as ServerSeat;
+    const meta = this.requireTable(tableId);
+    if (!this.isPauseController(meta, seat)) {
+      throw new ApiError(403, "not_controller", "仅主持人/建桌人/系统管理员可执行本操作；参与方请申请暂停（POST /api/tables/:id/my/pause-request）");
+    }
+    return { meta, seat };
+  }
+
+  /**
+   * 暂停核心：置叠加态（phase 不动）→ 广播 MEETING_PAUSED → 审计。
+   * via=request 时记申请方（requestedBy*，审计与广播均留痕「哪方申请暂停」）；
+   * 触发暂停后，剩余 pending 申请全部置 superseded（同一时刻只挂一个暂停态）。
+   */
+  private doPause(tableId: string, by: { seatId: string; name: string; role: string }, reason: string, via: "direct" | "request", req?: PauseRequestRecord) {
+    const meta = this.requireTable(tableId);
+    if (!PAUSABLE_PHASES.includes(meta.phase)) {
+      throw new ApiError(409, meta.phase === "closed" ? "table_closed" : "not_meeting",
+        meta.phase === "closed" ? "会议已结束" : meta.phase === "open" ? "会议尚未开始（设定阶段无需暂停）" : "人工介入模式无需暂停");
+    }
+    if (meta.pause) throw new ApiError(409, "already_paused", "会议已暂停，请先继续会议");
+    const reasonClean = checkField(reason ?? "", "reason", 1_000, 0);
+    meta.pause = {
+      pausedAt: Date.now(),
+      bySeat: by.seatId, byName: by.name, byRole: by.role,
+      via, reason: reasonClean,
+      ...(req ? { requestedBySeat: req.bySeat, requestedByName: req.byName, requestedByRole: req.byRole } : {}),
+    };
+    this.store.saveTable(meta);
+    if (req) {
+      req.status = "approved";
+      req.approvedBy = by.seatId;
+      req.approvedAt = Date.now();
+      this.store.savePauseRequest(req);
+    }
+    for (const other of this.store.getPauseRequests(tableId)) {
+      if (other.status === "pending" && other.requestId !== req?.requestId) {
+        other.status = "superseded";
+        this.store.savePauseRequest(other);
+      }
+    }
+    this.sysMsg(tableId, "MEETING_PAUSED", {
+      bySeat: by.seatId, byName: by.name, byRole: by.role, via, reason: reasonClean,
+      ...(req ? { requestedBySeat: req.bySeat, requestedByName: req.byName, requestedByRole: req.byRole } : {}),
+      note: "会议已暂停：各席持有人请按需人工补充或调整立场（seat-config）、给本席 agent 补充信息（HUMAN_INPUT / 资料文档）；完成后重新就绪（无需补充的席位保持就绪），全员就绪后由主持人/建桌人/系统管理员在网页继续会议。",
+    } satisfies MeetingPausedPayload);
+    this.audit(tableId, by.seatId, "table_pause", {
+      by: by.name, role: by.role, via, reason: reasonClean,
+      ...(req ? { requestedBy: { seatId: req.bySeat, name: req.byName, role: req.byRole } } : {}),
+    });
+    return { paused: true };
+  }
+
+  /** 网页持有人通道：主持人/建桌人直接暂停 */
+  pauseByUser(userToken: string, tableId: string, reason: string) {
+    const { seat } = this.controllerSeatOf(userToken, tableId);
+    return this.doPause(tableId, { seatId: seat.seatId, name: seat.name, role: seat.role }, reason, "direct");
+  }
+
+  /** 管理台：systemadmin 直接暂停（任意桌） */
+  pauseByAdmin(adminToken: string, tableId: string, reason: string) {
+    const admin = this.requireAdmin(adminToken);
+    return this.doPause(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, reason, "direct");
+  }
+
+  /** 网页持有人通道：任意本桌席位（含 observer）申请暂停；控制人收到后在 web 同意 */
+  requestPauseByUser(userToken: string, tableId: string, reason: string) {
+    const user = this.requireUser(userToken);
+    const seatId = this.store.seatOfUser(tableId, user.userId);
+    if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位，无法申请暂停");
+    const seat = this.requireSeat(tableId, seatId) as ServerSeat;
+    const meta = this.requireTable(tableId);
+    this.requirePauseable(meta);
+    const reasonClean = checkField(reason ?? "", "reason", 1_000, 0);
+    if (this.store.getPauseRequests(tableId).some((r) => r.status === "pending" && r.bySeat === seat.seatId)) {
+      throw new ApiError(409, "dup_pause_request", "你已有一条待同意的暂停申请，请等待处理");
+    }
+    const rec: PauseRequestRecord = {
+      requestId: newId("prq"), tableId,
+      bySeat: seat.seatId, byName: seat.name, byRole: seat.role,
+      reason: reasonClean, createdAt: Date.now(), status: "pending",
+    };
+    this.store.savePauseRequest(rec);
+    this.sysMsg(tableId, "PAUSE_REQUESTED", {
+      requestId: rec.requestId, bySeat: rec.bySeat, byName: rec.byName, byRole: rec.byRole, reason: reasonClean,
+    } satisfies PauseRequestedPayload);
+    this.audit(tableId, seat.seatId, "pause_request", { requestId: rec.requestId, by: seat.name, role: seat.role, reason: reasonClean });
+    return { requestId: rec.requestId };
+  }
+
+  /** 同意暂停申请核心（控制人身份已在外层校验） */
+  private doApprovePause(tableId: string, requestId: string, by: { seatId: string; name: string; role: string }) {
+    const rec = this.store.getPauseRequests(tableId).find((r) => r.requestId === requestId);
+    if (!rec) throw new ApiError(404, "no_request", "暂停申请不存在");
+    if (rec.status !== "pending") throw new ApiError(409, "no_pending_request", `该申请已处置（${rec.status}）`);
+    const requestedBy = { seatId: rec.bySeat, name: rec.byName, role: rec.byRole };
+    this.doPause(tableId, by, "", "request", rec);
+    this.audit(tableId, by.seatId, "pause_request_approved", { requestId, by: by.name, requestedBy });
+    return { paused: true, requestId };
+  }
+
+  /** 网页持有人通道：主持人/建桌人同意某条暂停申请 */
+  approvePauseByUser(userToken: string, tableId: string, requestId: string) {
+    const { seat } = this.controllerSeatOf(userToken, tableId);
+    return this.doApprovePause(tableId, requestId, { seatId: seat.seatId, name: seat.name, role: seat.role });
+  }
+
+  /** 管理台：systemadmin 同意暂停申请（任意桌） */
+  approvePauseByAdmin(adminToken: string, tableId: string, requestId: string) {
+    const admin = this.requireAdmin(adminToken);
+    return this.doApprovePause(tableId, requestId, { seatId: "-", name: admin.name, role: "systemadmin" });
+  }
+
+  /**
+   * 恢复核心：清叠加态 + 广播 + 审计。force=true 跳过就绪检查（仅 systemadmin 通道传入，记审计）。
+   * 恢复无需修复动作：phase 未动、turn 事件溯源重推导、（hosted）挂起点名指令照常生效。
+   */
+  private doResume(tableId: string, by: { seatId: string; name: string; role: string }, force: boolean) {
+    const meta = this.requireTable(tableId);
+    if (!meta.pause) throw new ApiError(409, "not_paused", "会议未处于暂停状态");
+    const seats = this.activeSeats(tableId);
+    if (!force) {
+      const notReady = seats.filter((s) => !s.config.ready && s.role !== "host");
+      if (notReady.length) {
+        throw new ApiError(409, "not_ready", `席位未就绪：${notReady.map((s) => `${s.name}(${s.role})`).join("、")}`);
+      }
+    }
+    meta.pause = null;
+    this.store.saveTable(meta);
+    this.sysMsg(tableId, "MEETING_RESUMED", {
+      bySeat: by.seatId, byName: by.name, byRole: by.role, phase: meta.phase,
+      ...(force ? { forced: true } : {}),
+    } satisfies MeetingResumedPayload);
+    this.audit(tableId, by.seatId, "table_resume", { by: by.name, role: by.role, forced: force });
+    return { resumed: true, phase: meta.phase };
+  }
+
+  /** 网页持有人通道：主持人/建桌人继续会议（要求全员就绪，host 豁免） */
+  resumeByUser(userToken: string, tableId: string) {
+    const { seat } = this.controllerSeatOf(userToken, tableId);
+    return this.doResume(tableId, { seatId: seat.seatId, name: seat.name, role: seat.role }, false);
+  }
+
+  /** 管理台：systemadmin 继续会议；force=true 跳过就绪检查（逃生门，记审计） */
+  resumeByAdmin(adminToken: string, tableId: string, force: boolean) {
+    const admin = this.requireAdmin(adminToken);
+    return this.doResume(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, force);
+  }
+
+  /** 待同意的暂停申请投影（观察端「暂停申请」卡数据源） */
+  private pendingPauseViews(tableId: string): PauseRequestView[] {
+    return this.store.getPauseRequests(tableId)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ requestId: r.requestId, bySeat: r.bySeat, byName: r.byName, byRole: r.byRole, reason: r.reason, createdAt: r.createdAt }));
+  }
+
   // ================= 观察端（Web 控制台） =================
 
   /** 参与判定：用户在本桌持有 active 席位（left 视为不再参与，与 requireSeat 拒 left 一致） */
@@ -1616,6 +1829,7 @@ export class Hub {
       recentChanges: this.changesOf(tableId, 0).slice(-50),
       meta: { createdAt: meta.createdAt, closedAt: meta.closedAt ?? null, goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, rolePlan: meta.rolePlan },
       mySeatId: userId ? this.activeSeatOfUser(tableId, userId) : null,
+      pauseRequests: this.pendingPauseViews(tableId),
     };
   }
 

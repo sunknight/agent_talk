@@ -190,6 +190,23 @@ export function createHttpServer(hub: Hub) {
             body.mode !== undefined ? String(body.mode) : "recover",
             body.agentLabel !== undefined ? String(body.agentLabel) : undefined));
         }
+        // 会议暂停（主持人/建桌人直接暂停；systemadmin 走 /api/admin 通道）
+        if (seg[4] === "pause" && !seg[5]) {
+          return ok(res, hub.pauseByUser(bearer(req), tableId, String(body.reason ?? "")));
+        }
+        // 暂停申请（任意席位）与同意（主持人/建桌人）
+        if (seg[4] === "pause-request") {
+          if (!seg[5]) {
+            return ok(res, hub.requestPauseByUser(bearer(req), tableId, String(body.reason ?? "")));
+          }
+          if (seg[6] === "approve" && !seg[7]) {
+            return ok(res, hub.approvePauseByUser(bearer(req), tableId, seg[5]));
+          }
+        }
+        // 继续会议（主持人/建桌人；需全员就绪）
+        if (seg[4] === "resume" && !seg[5]) {
+          return ok(res, hub.resumeByUser(bearer(req), tableId));
+        }
       }
       if (path === "/api/stances" && method === "GET") {
         return ok(res, { stances: STANCE_PRESETS });
@@ -237,6 +254,20 @@ export function createHttpServer(hub: Hub) {
         if (seg[2] === "tables" && seg[3] && seg[4] === "close" && method === "POST" && !seg[5]) {
           const body = await readJson(req);
           return ok(res, hub.adminCloseTable(bearer(req), seg[3], String(body.reason ?? "")));
+        }
+        // 会议暂停（systemadmin 直接暂停任意会议中的桌）
+        if (seg[2] === "tables" && seg[3] && seg[4] === "pause" && method === "POST" && !seg[5]) {
+          const body = await readJson(req);
+          return ok(res, hub.pauseByAdmin(bearer(req), seg[3], String(body.reason ?? "")));
+        }
+        // 同意暂停申请（systemadmin；同意后会议立即暂停）
+        if (seg[2] === "tables" && seg[3] && seg[4] === "pause-request" && seg[5] && seg[6] === "approve" && method === "POST" && !seg[7]) {
+          return ok(res, hub.approvePauseByAdmin(bearer(req), seg[3], seg[5]));
+        }
+        // 继续会议（systemadmin；force=true 跳过全员就绪检查——逃生门，记审计）
+        if (seg[2] === "tables" && seg[3] && seg[4] === "resume" && method === "POST" && !seg[5]) {
+          const body = await readJson(req);
+          return ok(res, hub.resumeByAdmin(bearer(req), seg[3], body.force === true));
         }
         if (seg[2] === "tables" && seg[3] && seg[4] === "human" && method === "POST" && !seg[5]) {
           const body = await readJson(req);

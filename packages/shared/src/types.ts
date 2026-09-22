@@ -230,6 +230,8 @@ export type MsgType =
   | "DOC_UPLOADED"
   // 收敛
   | "CONSENSUS_VOTE" | "CONSENSUS_RESULT" | "MINUTES"
+  // 会议暂停（服务器专属系统消息，席位不可直发）
+  | "MEETING_PAUSED" | "MEETING_RESUMED" | "PAUSE_REQUESTED"
   // 人工
   | "ESCALATE" | "HUMAN_INPUT" | "HUMAN_RULING";
 
@@ -258,6 +260,8 @@ export interface TableSummary {
   tableId: string; topic: string; template: string; phase: Phase;
   tableType: TableType;
   seatCount: number; createdAt: number;
+  /** 会议暂停叠加态标记（列表页徽章；未暂停/false） */
+  paused?: boolean;
 }
 export interface TableListPayload { tables: TableSummary[]; }
 export interface TableInfoPayload {
@@ -278,6 +282,25 @@ export interface TableInfoPayload {
   activeTurn: TurnGrantPayload | null;
   /** hosted 桌的预审调度层状态（self 桌恒为 idle） */
   precheck: PrecheckState;
+  /** 会议暂停叠加态（进行中可暂停；恢复后清空，phase 始终保留原阶段） */
+  pause: PauseInfo | null;
+}
+
+/** 会议暂停态投影：叠加在 phase 上的冻结标记（不改变阶段本身） */
+export interface PauseInfo {
+  pausedAt: number;
+  /** 暂停执行者 seatId；systemadmin 执行时为 "-" */
+  bySeat: string;
+  byName: string;
+  /** 席位角色（host/proposer/reviewer/collaborator/observer）或 "systemadmin" */
+  byRole: string;
+  /** direct = 控制人直接暂停；request = 经参与方申请后同意 */
+  via: "direct" | "request";
+  reason: string;
+  /** via=request 时：申请方（日志与广播均留痕「哪方申请暂停」） */
+  requestedBySeat?: string;
+  requestedByName?: string;
+  requestedByRole?: string;
 }
 
 /** 预审调度层状态：预审进行中 / 点名补充指令挂起 / 空闲 */
@@ -500,6 +523,7 @@ export type TableChange =
   | { kind: "phase"; ts: number; msgId: string; fromSeat: string; from: Phase; to: Phase; reason: string }
   | { kind: "seat"; ts: number; msgId: string; fromSeat: string; seatName: string; role?: Role; what: "join" | "config" | "left" }
   | { kind: "human"; ts: number; msgId: string; fromSeat: string; toSeat?: string; byHuman?: string }
+  | { kind: "pause"; ts: number; msgId: string; fromSeat: string; what: "pause" | "resume" | "request"; bySeat: string; byName: string; byRole: string; reason: string; requestId?: string }
   | { kind: "message"; ts: number; msgId: string; fromSeat: string; type: MsgType };
 
 /** GET /api/tables/:id/changes 返回形状：最新桌况 + 最新资料列表（本席视角）+ since 之后的变动（按 seq 升序） */
@@ -530,6 +554,39 @@ export interface HumanRulingPayload {
   forceConvergence?: boolean; // 直接判定达成共识收会
 }
 
+// ---------- 会议暂停（服务器专属系统消息，席位直发一律 403） ----------
+
+/** MEETING_PAUSED 载荷：会议进入暂停叠加态（广播全员；agent 停止回合推进） */
+export interface MeetingPausedPayload {
+  bySeat: string; byName: string; byRole: string;
+  via: "direct" | "request";
+  reason: string;
+  requestedBySeat?: string; requestedByName?: string; requestedByRole?: string;
+  /** 给各方的行动指引（补充信息/调整立场/重新就绪） */
+  note?: string;
+}
+
+/** MEETING_RESUMED 载荷：暂停解除，回到 phase 所指阶段继续 */
+export interface MeetingResumedPayload {
+  bySeat: string; byName: string; byRole: string;
+  phase: Phase;
+  /** true = systemadmin 跳过全员就绪强制继续（记审计） */
+  forced?: boolean;
+}
+
+/** PAUSE_REQUESTED 载荷：参与方申请暂停（广播；主持人/建桌人/系统管理员在网页同意） */
+export interface PauseRequestedPayload {
+  requestId: string; bySeat: string; byName: string; byRole: string; reason: string;
+}
+
+/** 待同意的暂停申请（观察端桌详情投影） */
+export interface PauseRequestView {
+  requestId: string;
+  bySeat: string; byName: string; byRole: string;
+  reason: string;
+  createdAt: number;
+}
+
 export interface HistoryPayload { messages: Envelope[]; note: string; }
 
 // ---------- 领域事件（审计） ----------
@@ -545,6 +602,8 @@ export type AuditEvent =
   | "table_close" | "policy_reject" | "server_error"
   /** 主持人模式（hosted）：预审与点名补充 */
   | "precheck_result" | "directive_open" | "supplement_done" | "table_update"
+  /** 会议暂停/恢复（叠加态）与暂停申请：pause_request/table_pause(via=request) 的 detail 均记录申请方 */
+  | "table_pause" | "table_resume" | "pause_request" | "pause_request_approved"
   /** 管理台（systemadmin）事件 */
   | "admin_set_role" | "admin_set_disabled" | "admin_reissue_user_token" | "admin_close" | "admin_human" | "admin_delete_table";
 

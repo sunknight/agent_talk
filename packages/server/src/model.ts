@@ -1,5 +1,5 @@
 /** 服务器内部领域模型（持久化部分） */
-import type { ArtifactFormat, Envelope, Phase, PrecheckIssue, RequestPayload, RequestResponsePayload, ResponseItem, ReviewItem, TableDocumentMeta, TableType } from "@rt/shared";
+import type { ArtifactFormat, Envelope, PauseInfo, Phase, PrecheckIssue, RequestPayload, RequestResponsePayload, ResponseItem, ReviewItem, TableDocumentMeta, TableType } from "@rt/shared";
 
 export interface TableMeta {
   tableId: string;
@@ -20,6 +20,8 @@ export interface TableMeta {
   /** 建桌席位（点开始的权利属于它） */
   ownerSeat: string;
   phase: Phase;
+  /** 会议暂停叠加态：进行中冻结推进，恢复后清空（phase 保留原阶段不动）；null/缺省 = 未暂停 */
+  pause?: PauseInfo | null;
   roundNo: number; // review 轮次（1 起）
   deadlockCount: number;
   createdAt: number;
@@ -27,6 +29,20 @@ export interface TableMeta {
   seatCount: number;
   maxReviewRounds: number;
   turnTimeoutMs: number;
+}
+
+/** 暂停申请记录：参与方在 web 申请 → 控制人（host/owner/systemadmin）同意后触发暂停 */
+export interface PauseRequestRecord {
+  requestId: string;
+  tableId: string;
+  bySeat: string;
+  byName: string;
+  byRole: string;
+  reason: string;
+  createdAt: number;
+  status: "pending" | "approved" | "superseded";
+  approvedBy?: string;
+  approvedAt?: number;
 }
 
 /** 预审点名补充指令：HOST_PREREVIEW redirect 落成的调度指令（同一时刻一桌至多一条 pending） */

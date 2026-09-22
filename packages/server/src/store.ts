@@ -9,8 +9,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import { sha256, tableTypeOf, type AuditRecord, type Envelope, type SeatInfo, type TableSummary } from "@rt/shared";
-import type { ArtifactRecord, DirectiveRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import { sha256, tableTypeOf, type AuditRecord, type Envelope, type PauseInfo, type SeatInfo, type TableSummary } from "@rt/shared";
+import type { ArtifactRecord, DirectiveRecord, PauseRequestRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 
 const SCHEMA_VERSION = 1;
 
@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE TABLE IF NOT EXISTS directives (
   table_id TEXT NOT NULL, directive_id TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (table_id, directive_id));
+CREATE TABLE IF NOT EXISTS pause_requests (
+  table_id TEXT NOT NULL, request_id TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (table_id, request_id));
 `;
 
 /** node:sqlite 行类型（.get/.all 返回的原样记录） */
@@ -118,7 +121,7 @@ export class Store extends EventEmitter {
       userSetRole: this.db.prepare("UPDATE users SET role = ? WHERE user_id = ?"),
       userSetDisabled: this.db.prepare("UPDATE users SET disabled = ? WHERE user_id = ?"),
 
-      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
       tableAll: this.db.prepare("SELECT * FROM tables ORDER BY rowid"),
 
@@ -165,6 +168,9 @@ export class Store extends EventEmitter {
       dirUpsert: this.db.prepare("INSERT OR REPLACE INTO directives (table_id, directive_id, data) VALUES (?, ?, ?)"),
       dirsOfTable: this.db.prepare("SELECT * FROM directives WHERE table_id = ? ORDER BY rowid"),
 
+      pauseReqUpsert: this.db.prepare("INSERT OR REPLACE INTO pause_requests (table_id, request_id, data) VALUES (?, ?, ?)"),
+      pauseReqsOfTable: this.db.prepare("SELECT * FROM pause_requests WHERE table_id = ? ORDER BY rowid"),
+
       counts: this.db.prepare("SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM tables) + (SELECT COUNT(*) FROM messages) + (SELECT COUNT(*) FROM documents) AS n"),
     };
     const cur = (this.st.metaGet.get("schema_version") as Row | undefined)?.value;
@@ -193,6 +199,9 @@ export class Store extends EventEmitter {
     } catch { /* duplicate column：已是新 schema */ }
     try {
       this.db.exec("ALTER TABLE tables ADD COLUMN table_type TEXT NOT NULL DEFAULT 'review'");
+    } catch { /* duplicate column：已是新 schema */ }
+    try {
+      this.db.exec("ALTER TABLE tables ADD COLUMN paused TEXT");
     } catch { /* duplicate column：已是新 schema */ }
   }
 
@@ -348,6 +357,7 @@ export class Store extends EventEmitter {
       this.db.prepare("DELETE FROM artifacts WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM documents WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM directives WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM pause_requests WHERE table_id = ?").run(tableId);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -362,7 +372,18 @@ export class Store extends EventEmitter {
       t.phase, t.roundNo, t.deadlockCount, t.createdAt, nullable(t.closedAt), t.seatCount, t.maxReviewRounds, t.turnTimeoutMs,
       t.mode ?? "self",
       t.tableType ?? "review",
+      t.pause ? J(t.pause) : null,
     );
+  }
+  /** paused 列（PauseInfo JSON）→ 结构化；坏数据（手改库）按未暂停处理，不让单行脏数据拖垮启动 */
+  private static rowPause(v: string | number | bigint | null | undefined): PauseInfo | null {
+    if (v === null || v === undefined || String(v) === "") return null;
+    try {
+      const p = JSON.parse(String(v)) as PauseInfo;
+      return typeof p === "object" && p !== null && typeof p.pausedAt === "number" && (p.via === "direct" || p.via === "request")
+        ? p
+        : null;
+    } catch { return null; }
   }
   private rowTable(r: Row): TableMeta {
     return {
@@ -374,6 +395,7 @@ export class Store extends EventEmitter {
       ...(r.closed_at === null ? {} : { closedAt: Number(r.closed_at) }),
       seatCount: Number(r.seat_count), maxReviewRounds: Number(r.max_review_rounds), turnTimeoutMs: Number(r.turn_timeout_ms),
       mode: r.mode === "hosted" ? "hosted" : "self",
+      pause: Store.rowPause(r.paused),
     };
   }
   saveTable(meta: TableMeta) { this.upsertTableRow(meta); }
@@ -387,7 +409,7 @@ export class Store extends EventEmitter {
       .sort((a, b) => Number(b.created_at) - Number(a.created_at))
       .map((r) => {
         const t = this.rowTable(r);
-        return { tableId: t.tableId, topic: t.topic, template: t.template, phase: t.phase, tableType: t.tableType, seatCount: t.seatCount, createdAt: t.createdAt };
+        return { tableId: t.tableId, topic: t.topic, template: t.template, phase: t.phase, tableType: t.tableType, seatCount: t.seatCount, createdAt: t.createdAt, paused: !!t.pause };
       });
   }
 
@@ -455,6 +477,14 @@ export class Store extends EventEmitter {
   pendingDirective(tableId: string): DirectiveRecord | null {
     const pend = this.getDirectives(tableId).filter((d) => d.status === "pending");
     return pend.length ? pend[pend.length - 1] : null;
+  }
+
+  // ---------- pause_requests（会议暂停申请） ----------
+  savePauseRequest(rec: PauseRequestRecord) {
+    this.st.pauseReqUpsert.run(rec.tableId, rec.requestId, J(rec));
+  }
+  getPauseRequests(tableId: string): PauseRequestRecord[] {
+    return (this.st.pauseReqsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as PauseRequestRecord);
   }
 
   // ---------- messages ----------
