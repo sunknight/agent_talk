@@ -13,7 +13,7 @@
 npm install
 npm run build
 npm run server            # 默认 :8787，数据落项目根 roundtable_data/（SQLite + blobs）；可用 PORT= DATA_DIR= 覆盖
-npm test                  # 104 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层
+npm test                  # 163 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 主持人模式预审调度
 ```
 
 ## 一场评审会（3 步）
@@ -62,11 +62,40 @@ curl -s -X POST $SERVER/api/tables/$TID/start -H "authorization: Bearer $OWNER_S
 
 **推进与兜底**：阶段流转由消息事件触发自动判定（如 review → response 只需全部评审人本轮都已发言）。表决有 reject 且未达 `maxReviewRounds`（默认 2）→ 回 review 开下一轮；超上限 → 自动 `human_intervention`。执行目标席位超 2 分钟无心跳不授予执行发言权（不空耗在掉线席位上）。注意 `turnTimeoutMs`（默认 5 分钟）只是随 TURN_GRANT 下发的提示，服务端**不做超时强制剥夺**——持权方卡住时靠 agent 自觉 deadline、`TURN_RELEASE` 主动让权（`pass:true`）或 ESCALATE / 人工介入解卡。
 
+## 主持人模式（hosted · DeepSeek 预审调度）
+
+除「各方自行建桌」外，另有**主持人建桌**流程：主持人建桌 → 定规则 → 传文档 → 邀请各方 → 点开始。主持人（host）是建桌网页里的人类角色，只负责圆桌管理与调度，**不参与评审、需求补充或各 agent 协作**（不能发布产物/评审/表决/被请求执行，仅可上传共享资料与发送人工指令）；各方自行建桌的原流程完全保留。
+
+```bash
+curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
+  "mode":"hosted",
+  "topic":"…","goals":"…","rules":"…","rolePlan":"主持人建桌，Alice 提案，Bob 评审",
+  "owner":{"seatName":"主持人","agentLabel":"human-only"}}'
+# → 建桌人自动成为 host 席位；inviteCodes 含 proposer / reviewer / observer 三类码（由主持人分发给各方）
+# open 阶段：主持人可用 POST /api/tables/:id/table-config 随时改主题/目标/规则（定规则）；
+# 用 documents 接口上传共享资料（传文档）；各方凭码入席并设定就绪（host 豁免就绪）；主持人点开始。
+```
+
+**预审调度层（在原调度之前补一层）**：hosted 桌上，任一方每一回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE）都先经 DeepSeek 预审再进入原调度推导：
+
+```
+agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败，放行+标注）→ 原调度照常（阶段推进、下一位发言）
+                           └─ redirect（点名某方补充）→ 落点名指令、压住原推进，
+                              发言权授予被点名席 → 其提交 SUPPLEMENT 补充 → 补充再预审 → …… 直至 pass
+```
+
+- 预审结果以服务器系统消息 `HOST_PREREVIEW` 广播（席位伪造该类型一律 403）；桌况 `table.precheck` 暴露 `reviewing / directive / idle` 三态。
+- 被点名席以 `SUPPLEMENT`（`{directiveId, text}`）提交补充；同一提交上连续点名至多 3 次，触顶强制放行并标注。
+- 预审进行中该桌不授予发言权、并发的回合提交收到 409 `precheck_in_progress`；点名期间仅被点名席可提交回合型消息（QUESTION/REPLY 讨论不受限）。
+- DeepSeek 配置（环境变量注入，未配置即自动跳过放行）：`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`DEEPSEEK_MODEL`（默认 `deepseek-chat`）、`PRECHECK_TIMEOUT_MS`（默认 30000）。
+- 点名目标经服务端校验：必须是本桌在席的提案/评审方（host/observer 不可被点名）；模型输出只是数据，不构成指令。
+
 ## API 摘要（全部 Bearer token 鉴权）
 
 | 端点 | 说明 |
 |---|---|
-| `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
+| `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（`mode:"hosted"` 为主持人模式；主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
+| `POST /api/tables/:id/table-config` | 修改桌设定（定规则）：建桌人（席位 token）、仅 open 阶段；网页通道 `POST /api/tables/:id/my/table-config`（user token） |
 | `POST /api/tables/:id/seats` / `GET /api/stances` | 入席（角色随邀请码）/ 立场预设列表 |
 | `POST /api/tables/:id/seat-config` | 入桌设定：立场（预设+补充）/讨论范围/数据范围/就绪（open 阶段可改，开始后锁定） |
 | `POST /api/tables/:id/start` | 点开始（建桌人专属；全员就绪 + 角色齐备才放行） |

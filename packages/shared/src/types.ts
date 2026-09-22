@@ -2,7 +2,7 @@
 
 // ---------- 席位与能力 ----------
 
-export type Role = "proposer" | "reviewer" | "observer";
+export type Role = "proposer" | "reviewer" | "observer" | "host";
 
 /** 能力声明：双端强制（请求方网关拒发越权请求，执行方网关拒绝越权执行） */
 export interface Caps {
@@ -24,6 +24,8 @@ export const ROLE_PRESETS: Record<Role, Caps> = {
   proposer: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
   reviewer: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
   observer: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: false },
+  /** 主持人：只负责初始化圆桌（建桌/定规则/传文档/邀请）与调度管理，不参与评审与协作 */
+  host: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: true },
 };
 
 export interface SeatInfo {
@@ -102,6 +104,8 @@ export type MsgType =
   | "SEAT_JOIN" | "SEAT_JOINED" | "SEAT_CONFIG" | "SEAT_LEAVE" | "SEAT_LEFT"
   // 调度
   | "TURN_GRANT" | "TURN_RELEASE" | "PHASE_CHANGE"
+  // 主持人预审（服务器专属系统消息，席位不可直发）
+  | "HOST_PREREVIEW" | "SUPPLEMENT"
   // 讨论
   | "STATEMENT" | "QUESTION" | "REPLY"
   // 评审
@@ -146,6 +150,8 @@ export interface TableSummary {
 export interface TableListPayload { tables: TableSummary[]; }
 export interface TableInfoPayload {
   tableId: string; topic: string; template: string; phase: Phase;
+  /** 建桌模式：self 各方自行建桌 / hosted 主持人建桌（预审调度层启用） */
+  mode: "self" | "hosted";
   /** 本次讨论要达成的共识 */
   goals: string;
   /** 期望交付物 */
@@ -157,12 +163,26 @@ export interface TableInfoPayload {
   seats: SeatInfo[];
   artifacts: { artifactId: string; name: string; ownerSeat: string; latestVersion: number; lockedBy: string | null }[];
   activeTurn: TurnGrantPayload | null;
+  /** hosted 桌的预审调度层状态（self 桌恒为 idle） */
+  precheck: PrecheckState;
+}
+
+/** 预审调度层状态：预审进行中 / 点名补充指令挂起 / 空闲 */
+export interface PrecheckState {
+  /** "reviewing" 预审中（暂不授出发言权） | "directive" 点名补充挂起 | "idle" 空闲 */
+  state: "idle" | "reviewing" | "directive";
+  /** 预审/指令针对的消息或指令 */
+  refId?: string;
+  /** 指令目标席位（state=directive 时） */
+  toSeat?: string;
 }
 
 /** 建桌请求：任何已认证连接方可发。录入主题、目标、交付物、规则与参与方身份安排。 */
 export interface TableCreatePayload {
   topic: string;
   template: "review-collab";
+  /** self（默认）= 建桌人自动成为提案方，原流程；hosted = 建桌人成为主持人（只管桌与调度，预审层启用） */
+  mode?: "self" | "hosted";
   /** 本次讨论需要达成的共识 */
   goals?: string;
   /** 期望交付物 */
@@ -171,7 +191,7 @@ export interface TableCreatePayload {
   rules?: string;
   /** 参与方身份安排说明（建桌人对各角色职责的补充描述） */
   rolePlan?: string;
-  /** 建桌人自己的席位（自动成为首个席位，角色固定 proposer） */
+  /** 建桌人自己的席位（self 模式自动成为首个席位，角色固定 proposer；hosted 模式角色固定 host） */
   owner: { seatName: string; agentLabel: string };
   maxReviewRounds?: number;
   turnTimeoutMs?: number;
@@ -209,6 +229,40 @@ export interface TurnGrantPayload {
 }
 export interface TurnReleasePayload { reason?: string; pass?: boolean; }
 export interface PhaseChangePayload { from: Phase; to: Phase; reason: string; }
+
+// ---------- 主持人预审（hosted 桌专用） ----------
+
+/** 预审结论：pass 放行走原调度 / redirect 点名指定席位补充 / skipped 预审跳过（未配置或失败，放行+标注） */
+export type PrecheckVerdict = "pass" | "redirect" | "skipped";
+export interface PrecheckIssue { severity: Severity; comment: string; }
+
+/** HOST_PREREVIEW 载荷（服务器专属系统消息）：对某条回合提交的 DeepSeek 预审结果 */
+export interface HostPrereviewPayload {
+  verdict: PrecheckVerdict;
+  /** 被预审的席位与消息 */
+  reviewedSeatId: string;
+  reviewedMsgId: string;
+  /** redirect 时：被点名补充的席位（须为 active 的 proposer/reviewer） */
+  targetSeatId?: string;
+  /** redirect 时：问题清单（为何需要补充） */
+  issues: PrecheckIssue[];
+  /** 预审说明（含 skipped 原因等） */
+  note?: string;
+  /** 预审执行方标注（如 "deepseek" / "skipped:no_key"） */
+  by?: string;
+}
+
+/** SUPPLEMENT 载荷：被点名席位对预审指令的补充提交（turn-bound，指令持有者专属） */
+export interface SupplementPayload {
+  /** 回应的指令 ID（HOST_PREREVIEW 对应 directive） */
+  directiveId: string;
+  /** 补充内容全文 */
+  text: string;
+  /** 可选：补充涉及的新产物版本 */
+  artifactId?: string;
+  /** 可选：补充涉及的资料文档 */
+  docId?: string;
+}
 
 export interface StatementPayload { text: string; }
 export interface QuestionPayload { text: string; toSeat?: string; }
@@ -372,6 +426,8 @@ export type AuditEvent =
   | "request_sent" | "request_responded"
   | "vote_cast" | "consensus_result" | "escalate" | "human_input" | "human_ruling"
   | "table_close" | "policy_reject" | "server_error"
+  /** 主持人模式（hosted）：预审与点名补充 */
+  | "precheck_result" | "directive_open" | "supplement_done" | "table_update"
   /** 管理台（systemadmin）事件 */
   | "admin_set_role" | "admin_set_disabled" | "admin_reissue_user_token" | "admin_close" | "admin_human" | "admin_delete_table";
 

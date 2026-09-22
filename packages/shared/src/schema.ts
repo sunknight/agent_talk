@@ -6,7 +6,7 @@ import type {
   ReviewCommentPayload, ResponsePayload, RequestPayload, RequestResponsePayload,
   ArtifactPublishPayload, ArtifactFetchPayload, ArtifactLockPayload,
   ConsensusVotePayload, EscalatePayload, HumanInputPayload, HumanRulingPayload,
-  TurnReleasePayload, HistoryPayload,
+  TurnReleasePayload, HostPrereviewPayload, SupplementPayload, HistoryPayload,
 } from "./types";
 
 const ajv = new Ajv({ allErrors: true });
@@ -170,11 +170,39 @@ const turnReleaseSchema = s({
   additionalProperties: false,
 });
 
+const hostPrereviewSchema = s({
+  type: "object", required: ["verdict", "reviewedSeatId", "reviewedMsgId", "issues"],
+  properties: {
+    verdict: { type: "string", enum: ["pass", "redirect", "skipped"] },
+    reviewedSeatId: str(1, 64), reviewedMsgId: str(1, 64), targetSeatId: str(1, 64),
+    issues: {
+      type: "array", maxItems: 20,
+      items: {
+        type: "object", required: ["severity", "comment"],
+        properties: { severity: { type: "string", enum: ["must", "should", "nice"] }, comment: str(1, 2_000) },
+        additionalProperties: false,
+      },
+    },
+    note: str(0, 4_000), by: str(0, 64),
+  },
+  additionalProperties: false,
+});
+
+const supplementSchema = s({
+  type: "object", required: ["directiveId", "text"],
+  properties: {
+    directiveId: str(1, 64), text: str(1, 20_000),
+    artifactId: str(1, 64), docId: str(1, 64),
+  },
+  additionalProperties: false,
+});
+
 const tableCreateSchema = s({
   type: "object", required: ["topic", "template", "owner"],
   properties: {
     topic: str(1, 300),
     template: { type: "string", enum: ["review-collab"] },
+    mode: { type: "string", enum: ["self", "hosted"] },
     goals: str(0, 4_000), deliverables: str(0, 4_000), rules: str(0, 4_000), rolePlan: str(0, 4_000),
     owner: {
       type: "object", required: ["seatName", "agentLabel"],
@@ -223,6 +251,8 @@ export const payloadValidators: Partial<Record<string, (p: unknown) => boolean>>
   HUMAN_INPUT: humanInputSchema,
   HUMAN_RULING: humanRulingSchema,
   TURN_RELEASE: turnReleaseSchema,
+  HOST_PREREVIEW: hostPrereviewSchema,
+  SUPPLEMENT: supplementSchema,
 };
 
 const envelopeValidator = ajv.compile(envelopeSchema);
@@ -266,6 +296,8 @@ export const is = {
   humanInput: (p: unknown): p is HumanInputPayload => !!payloadValidators.HUMAN_INPUT!(p),
   humanRuling: (p: unknown): p is HumanRulingPayload => !!payloadValidators.HUMAN_RULING!(p),
   turnRelease: (p: unknown): p is TurnReleasePayload => !!payloadValidators.TURN_RELEASE!(p),
+  hostPrereview: (p: unknown): p is HostPrereviewPayload => !!payloadValidators.HOST_PREREVIEW!(p),
+  supplement: (p: unknown): p is SupplementPayload => !!payloadValidators.SUPPLEMENT!(p),
 };
 
 // 防止 tree-shaking 误判（HistoryPayload 仅作类型导出使用）

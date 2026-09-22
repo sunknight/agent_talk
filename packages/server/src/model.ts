@@ -1,10 +1,12 @@
 /** 服务器内部领域模型（持久化部分） */
-import type { ArtifactFormat, Envelope, Phase, RequestPayload, RequestResponsePayload, ResponseItem, ReviewItem, TableDocumentMeta } from "@rt/shared";
+import type { ArtifactFormat, Envelope, Phase, PrecheckIssue, RequestPayload, RequestResponsePayload, ResponseItem, ReviewItem, TableDocumentMeta } from "@rt/shared";
 
 export interface TableMeta {
   tableId: string;
   topic: string;
   template: "review-collab";
+  /** 建桌模式：self 各方自行建桌（原流程）/ hosted 主持人建桌（预审调度层启用） */
+  mode: "self" | "hosted";
   /** 本次讨论需要达成的共识 */
   goals: string;
   /** 期望交付物 */
@@ -23,6 +25,24 @@ export interface TableMeta {
   seatCount: number;
   maxReviewRounds: number;
   turnTimeoutMs: number;
+}
+
+/** 预审点名补充指令：HOST_PREREVIEW redirect 落成的调度指令（同一时刻一桌至多一条 pending） */
+export interface DirectiveRecord {
+  directiveId: string;
+  tableId: string;
+  /** 被点名补充的席位 */
+  toSeat: string;
+  /** 触发预审的提交消息 */
+  regardingMsgId: string;
+  /** 指令链根（同一根提交上的连续点名，用于链深上限） */
+  rootDirectiveId: string;
+  /** 预审问题清单（为何需要补充） */
+  issues: PrecheckIssue[];
+  note?: string;
+  createdAt: number;
+  status: "pending" | "closed";
+  closedAt?: number;
 }
 
 /** 入库消息：信封 + 桌内单调递增 seq（长轮询增量拉取的游标） */

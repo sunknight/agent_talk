@@ -3,21 +3,24 @@ import { join, resolve } from "node:path";
 import { Hub } from "./engine";
 import { Store } from "./store";
 import { createHttpServer } from "./api";
+import type { PrecheckFn } from "./precheck";
 
 export { Hub, ApiError } from "./engine";
 export { Store } from "./store";
 export { createHttpServer } from "./api";
+export { deepseekPrecheck } from "./precheck";
+export type { PrecheckFn, PrecheckInput, PrecheckOutcome } from "./precheck";
 
 /** 默认数据目录：项目根 roundtable_data/（src 与 dist 同在 packages/server 下，三层上溯即项目根） */
 function defaultDataDir(): string {
   return resolve(__dirname, "..", "..", "..", "roundtable_data");
 }
 
-export async function start(opts: { port: number; dataDir?: string; host?: string }) {
+export async function start(opts: { port: number; dataDir?: string; host?: string; precheck?: PrecheckFn }) {
   const dataDir = opts.dataDir ?? defaultDataDir();
   const store = new Store(dataDir);
   bootstrapAdmin(store);
-  const hub = new Hub(store);
+  const hub = new Hub(store, opts.precheck ? { precheck: opts.precheck } : undefined);
   const http = createHttpServer(hub);
   await new Promise<void>((resolve) => http.listen(opts.port, opts.host ?? "0.0.0.0", resolve));
   process.stdout.write(`[roundtable-server] listening on ${(http.address() as { port: number }).port} (data: ${join(dataDir, "roundtable.db")})\n`);

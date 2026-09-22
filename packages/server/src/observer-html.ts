@@ -67,6 +67,7 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .rb.proposer { color:var(--acc); border:1px solid var(--acc); }
   .rb.reviewer { color:var(--ok); border:1px solid var(--ok); }
   .rb.observer { color:var(--dim); border:1px solid var(--line); }
+  .rb.host { color:#c9a227; border:1px solid #c9a227; }
   /* chips 输入器（数据范围） */
   .chips { display:flex; flex-wrap:wrap; gap:6px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--panel); min-height:38px; align-items:center; }
   .chips input { border:none; background:transparent; padding:2px 4px; flex:1; min-width:130px; }
@@ -175,11 +176,13 @@ var view = { mode:'intro', tableId:null, timer:null, lastDetailJson:'', lastDeta
 /* ---------- 常量映射 ---------- */
 var PHASE_LABEL = { open:'设定中', statements:'提案陈述', review:'评审', response:'回应评审', execution:'执行修改', convergence:'共识表决', human_intervention:'人工介入', closed:'已结束' };
 var PHASE_CLS = { open:'', statements:'phase', review:'phase', response:'phase', execution:'phase', convergence:'phase', human_intervention:'err', closed:'ok' };
-var ROLE_LABEL = { proposer:'提案方', reviewer:'评审方', observer:'观察方' };
+var ROLE_LABEL = { proposer:'提案方', reviewer:'评审方', observer:'观察方', host:'主持人' };
 var STEP_DEFS = [['open','设定'],['statements','陈述'],['review','评审'],['response','回应'],['execution','执行'],['convergence','表决'],['closed','结束']];
-var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知' };
-var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human' };
-var MSG_KEY = { PHASE_CHANGE:1, ARTIFACT_PUBLISHED:1, DOC_UPLOADED:1, CONSENSUS_RESULT:1, MINUTES:1, REQUEST:1, RESPOND_REQUEST:1 };
+var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交' };
+var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st' };
+var MSG_KEY = { PHASE_CHANGE:1, ARTIFACT_PUBLISHED:1, DOC_UPLOADED:1, CONSENSUS_RESULT:1, MINUTES:1, REQUEST:1, RESPOND_REQUEST:1, HOST_PREREVIEW:1 };
+var PRV_LABEL = { pass:'通过', redirect:'点名补充', skipped:'跳过（放行）' };
+var SEV_LABEL = { must:'必须', should:'建议', nice:'可选' };
 var MSG_HUMAN = { HUMAN_INPUT:1, HUMAN_RULING:1, ESCALATE:1, QUESTION:1, REPLY:1 };
 /* 变动记录（recentChanges，与 agent 回合刷新的 changes 同源） */
 var CHG_LABEL = { doc:'资料', artifact:'产物', phase:'阶段', seat:'席位', human:'人工', message:'消息' };
@@ -466,6 +469,7 @@ function lastDelivInfo(m){
   if(m.type==='REPLY') return {label:'答：'+clipStr(p.text,8), full:'回答：'+(p.text||'')};
   if(m.type==='REQUEST') return {label:'请求：'+clipStr(p.title,8), full:'执行请求 '+(p.title||'')+'：'+(p.detail||'')};
   if(m.type==='HUMAN_INPUT') return {label:'人工指令', full:'人工指令：'+(p.text||'')};
+  if(m.type==='SUPPLEMENT') return {label:'补充：'+clipStr(p.text,8), full:'预审点名补充：'+(p.text||'')};
   return {label:MT_LABEL[m.type]||m.type, full:MT_LABEL[m.type]||m.type};
 }
 function roundDiagramHtml(d,seats,turn){
@@ -782,16 +786,20 @@ function openAdminUserTables(uid,name){
 /* ---------- 视图：创建圆桌 ---------- */
 function renderCreateForm(){
   var app=document.getElementById('app');
-  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="ctBackList">← 返回列表</span><span class="sp"></span><b>创建圆桌</b><span class="dim">你将自动成为提案方（proposer）席位</span></div>';
+  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="ctBackList">← 返回列表</span><span class="sp"></span><b>创建圆桌</b><span class="dim" id="ctModeHint">你将自动成为提案方（proposer）席位</span></div>';
   h+='<div class="card frm">'
     +'<h4>基本信息</h4>'
+    +'<div class="frow"><label class="t">建桌模式</label><div class="row">'
+    +'<label style="font-size:13px"><input type="radio" name="ctMode" value="self" checked> 各方自行建桌 — 我自动成为提案方，直接参会</label>'
+    +'<label style="font-size:13px"><input type="radio" name="ctMode" value="hosted"> 主持人建桌 — 我只负责建桌/定规则/传文档/邀请与调度，不参与评审协作；各方提交过 DeepSeek 预审</label></div>'
+    +'<div class="hint" id="ctModeTip">主持人模式需服务器配置 DEEPSEEK_API_KEY（未配置时预审自动跳过放行）</div></div>'
     +'<div class="frow"><label class="t" for="ctTopic">主题 <b>*</b></label><input id="ctTopic" placeholder="如「v2 接口文档评审」"><div class="hint">一句话说清这桌评什么/协作什么</div></div>'
     +'<div class="frow"><label class="t" for="ctGoals">目标共识</label><input id="ctGoals" placeholder="本次要达成什么（可选）"><div class="hint">会议结束时希望各方同意的结论</div></div>'
     +'<div class="frow"><label class="t" for="ctDeliverables">期望交付物</label><input id="ctDeliverables" placeholder="如「修订后的 api.md」（可选）"></div>'
     +'<h4>桌规则与角色安排</h4>'
     +'<div class="frow"><label class="t" for="ctRules">桌规则</label><textarea id="ctRules" placeholder="供各方 agent 阅读遵守，如「逐条审阅」「意见须给出理由」（可选）"></textarea></div>'
     +'<div class="frow"><label class="t" for="ctRolePlan">角色安排说明</label><textarea id="ctRolePlan" placeholder="对各参与方职责的补充描述，随邀请码发给各方（可选）"></textarea></div>'
-    +'<h4>我的席位（自动成为提案方）</h4>'
+    +'<h4 id="ctSeatTitle">我的席位（自动成为提案方）</h4>'
     +'<div class="frow"><label class="t" for="ctSeatName">席位名 <b>*</b></label><input id="ctSeatName"'+(view.userName?' value="'+esc(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
     +'<div class="frow"><label class="t" for="ctAgent">agent 标识（选填）</label><input id="ctAgent" placeholder="如 zcode / claude；留空 = human-only（先由人工参与，agent 后续接入）"></div>'
     +'<h4>高级参数（留空用默认）</h4>'
@@ -801,6 +809,15 @@ function renderCreateForm(){
     +'<div class="row" style="margin-top:10px"><button id="ctCancel">取消</button><span class="sp"></span><button id="ctSubmit" class="primary">创建</button></div>'
     +'</div>';
   app.innerHTML=h;
+  function ctMode(){ var r=document.querySelector('input[name="ctMode"]:checked'); return r?r.value:'self'; }
+  function syncMode(){
+    var hosted=ctMode()==='hosted';
+    document.getElementById('ctModeHint').textContent=hosted?'你将成为主持人（host）：只管建桌/规则/资料/邀请与调度，不参与评审协作':'你将自动成为提案方（proposer）席位';
+    document.getElementById('ctSeatTitle').textContent=hosted?'我的席位（自动成为主持人）':'我的席位（自动成为提案方）';
+    document.getElementById('ctModeTip').style.display=hosted?'':'none';
+  }
+  document.querySelectorAll('input[name="ctMode"]').forEach(function(r){ r.onchange=syncMode; });
+  syncMode();
   document.getElementById('ctBackList').onclick=loadList;
   document.getElementById('ctCancel').onclick=loadList;
   document.getElementById('ctSubmit').onclick=function(){
@@ -810,6 +827,7 @@ function renderCreateForm(){
     if(!topic){ err.textContent='主题必填'; return; }
     if(!seatName0){ err.textContent='席位名必填'; return; }
     var body={ topic:topic, owner:{ seatName:seatName0, agentLabel:document.getElementById('ctAgent').value.trim()||'human-only' } };
+    if(ctMode()==='hosted') body.mode='hosted';
     var goals=document.getElementById('ctGoals').value.trim(); if(goals) body.goals=goals;
     var del=document.getElementById('ctDeliverables').value.trim(); if(del) body.deliverables=del;
     var rules=document.getElementById('ctRules').value.trim(); if(rules) body.rules=rules;
@@ -817,25 +835,30 @@ function renderCreateForm(){
     var rounds=parseInt(document.getElementById('ctRounds').value,10); if(rounds>=1&&rounds<=10) body.maxReviewRounds=rounds;
     var turnSec=parseInt(document.getElementById('ctTurnSec').value,10); if(turnSec>=30) body.turnTimeoutMs=turnSec*1000;
     var btn=document.getElementById('ctSubmit'); btn.disabled=true; btn.textContent='创建中…';
-    api('POST','/api/tables',body).then(function(r){ renderCreateResult(r,topic); })
+    api('POST','/api/tables',body).then(function(r){ renderCreateResult(r,topic,ctMode()==='hosted'); })
       .catch(function(e){ btn.disabled=false; btn.textContent='创建'; err.textContent='创建失败：'+e.message; });
   };
 }
 
-function renderCreateResult(d,topic){
+function renderCreateResult(d,topic,hosted){
   var app=document.getElementById('app');
-  var h='<div class="row" style="margin-bottom:12px"><b>圆桌已创建</b><span class="badge phase">设定中 · 等待入席与设定</span></div>';
+  var h='<div class="row" style="margin-bottom:12px"><b>圆桌已创建</b><span class="badge phase">设定中 · 等待入席与设定</span>'+(hosted?'<span class="rb host">主持人模式</span>':'')+'</div>';
   h+='<div class="card"><b>'+esc(d.tableId)+'</b>'
     +'<h3>席位 token（只显示这一次，请立即复制）</h3>'
     +'<div class="row"><span class="invite" style="word-break:break-all;font-size:15px">'+esc(d.ownerSeatToken)+'</span><span class="sp"></span><button id="credTokCopy">复制凭证（含入桌信息）</button></div>'
-    +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法），整体发给你的 agent 即可参会。关闭本页后无法再查看。</div>'
+    +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法）'+(hosted?'。主持人一般在网页端操作，无需把凭证交给 agent':'，整体发给你的 agent 即可参会')+'。关闭本页后无法再查看。</div>'
     +'<h3>邀请码（发给各参与方，角色由码定死）</h3>';
+  var RL={proposer:'提案方',reviewer:'评审方',observer:'观察方'};
   d.inviteCodes.forEach(function(c){
-    h+='<div class="row" style="margin:4px 0"><span class="rb '+(c.role==='reviewer'?'reviewer':'observer')+'">'+esc(c.role==='reviewer'?'评审方':'观察方')+'</span>'
+    h+='<div class="row" style="margin:4px 0"><span class="rb '+esc(c.role)+'">'+esc(RL[c.role]||c.role)+'</span>'
       +'<span class="invite">'+esc(c.code)+'</span><button class="cpInv" data-code="'+esc(c.code)+'" data-role="'+esc(c.role)+'">复制完整邀请</button>'
       +(c.role==='observer'?'<span class="dim">观察方：只读旁听无表决权</span>':'<span class="dim">复制内容含服务器/圆桌 ID/邀请码，整体转发即可参会</span>')+'</div>';
   });
-  h+='<h3>下一步</h3><div class="dim">进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。</div>'
+  h+='<h3>下一步</h3><div class="dim">'
+    +(hosted
+      ?'主持人流程：定规则（详情页「桌设定」可随时改）→ 传资料（详情页上传共享文档，全桌可见）→ 把邀请码发给提案方/评审方/观察方 → 各方完成入桌设定 → 你在详情页点「开始会议」。开始后各方每回合提交由 DeepSeek 预审，需要补充时会被点名。'
+      :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。')
+    +'</div>'
     +'<div class="row" style="margin-top:8px"><button id="ctBack">返回列表</button><span class="sp"></span><button id="ctEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
   app.innerHTML=h;
@@ -958,6 +981,7 @@ function renderDetail(d){
 
   h+='<div class="card"><div class="row"><b style="font-size:16px">'+esc(t.topic)+'</b>'
     +phaseBadge(t.phase,t.roundNo)
+    +(t.mode==='hosted'?'<span class="rb host">主持人模式 · 预审调度</span>':'')
     +(t.deadlockCount>0?'<span class="badge err">僵局 '+t.deadlockCount+'</span>':'')
     +'</div>';
   if(d.meta.goals) h+='<div class="dim" style="margin-top:4px">目标：'+esc(d.meta.goals)+'</div>';
@@ -982,6 +1006,10 @@ function renderDetail(d){
   }
 
   h+='<div class="card"><div class="section turn" style="margin-top:0"><b>下一步动作</b><div>';
+  if(t.mode==='hosted'&&t.precheck){
+    if(t.precheck.state==='reviewing') h+='<div class="badge warn">🔍 预审中</div> <span class="dim">DeepSeek 正在预审刚提交的回合结果，预审落地前不授出发言权</span>';
+    else if(t.precheck.state==='directive') h+='<div class="badge warn">🎯 预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交</span><br>';
+  }
   if(turn){
     h+='发言权：<b>'+esc(seatName(seats,turn.seatId))+'</b> —— '+esc(turn.taskHint||'');
     if(turn.pendingRequest) h+='<div class="dim">待处理请求：'+esc(turn.pendingRequest.title)+'</div>';
@@ -994,18 +1022,29 @@ function renderDetail(d){
   if(mySeat){
     var cfg=mySeat.config||{};
     var isOwner=t.ownerSeat===mySeat.seatId;
+    var isHost=mySeat.role==='host';
     h+='<div class="card mine"><div class="row"><b>我的席位</b><b>'+esc(mySeat.name)+'</b>'
       +roleBadge(mySeat.role)
       +(isOwner?'<span class="badge">建桌人</span>':'')
-      +'<span class="badge '+(cfg.ready?'ok':'warn')+'">'+(cfg.ready?'已就绪':'未就绪')+'</span>'
+      +(isHost?'':'<span class="badge '+(cfg.ready?'ok':'warn')+'">'+(cfg.ready?'已就绪':'未就绪')+'</span>')
       +'<span class="dim">agent: '+esc(mySeat.agentLabel)+'</span></div>';
 
     if(t.phase==='open'){
       /* 设定阶段：设定表单 / 摘要 + 建桌人开始按钮（无代答环节——代答自会议开始起才有） */
-      var allReady=seats.every(function(s){ return s.config&&s.config.ready; });
+      var allReady=seats.filter(function(s){ return s.role!=='host'; }).every(function(s){ return s.config&&s.config.ready; });
       var rolesOk=seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; });
 
-      if(!cfg.ready||view.cfgEditing){
+      if(isHost){
+        /* 主持人：不做入桌设定，管桌设定（定规则）+ 就绪名单 + 开始 */
+        h+='<div class="section"><h3>桌设定（主持人 · 定规则）</h3>'
+          +'<div class="frow"><label class="t">主题</label><input id="tcTopic" value="'+escAttr(t.topic||'')+'"></div>'
+          +'<div class="frow"><label class="t">目标共识</label><input id="tcGoals" value="'+escAttr(t.goals||'')+'"></div>'
+          +'<div class="frow"><label class="t">期望交付物</label><input id="tcDeliverables" value="'+escAttr(t.deliverables||'')+'"></div>'
+          +'<div class="frow"><label class="t">桌规则</label><textarea id="tcRules" placeholder="供各方 agent 阅读遵守，如「逐条审阅」「意见须给出理由」">'+esc(t.rules||'')+'</textarea></div>'
+          +'<div class="frow"><label class="t">角色安排说明</label><textarea id="tcRolePlan">'+esc((d.meta&&d.meta.rolePlan)||'')+'</textarea></div>'
+          +'<div class="ferr" id="tcErr"></div>'
+          +'<div class="row"><button id="tcSave" class="primary">保存桌设定</button><span class="dim">仅设定阶段可改；资料文档在下方「资料文档」区上传（选共享，全桌可见）</span></div></div>';
+      } else if(!cfg.ready||view.cfgEditing){
         h+='<div class="section"><h3>'+(cfg.ready?'修改入桌设定':'入桌设定')+'</h3>'
           +'<div class="frow"><label class="t">立场</label>'
           +'<div class="row"><select id="cfgPreset"><option value="">（选择立场预设…）</option></select>'
@@ -1034,12 +1073,13 @@ function renderDetail(d){
       if(isOwner){
         h+='<div class="section sumcard"><h3 style="margin-top:0">开局状态（建桌人）</h3>';
         seats.forEach(function(s){
-          h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
+          if(s.role==='host'){ h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge">主持人 · 豁免就绪</span></div>'; }
+          else h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
         });
-        if(!rolesOk) h+='<div class="ferr">角色不齐备：还需评审方席位凭邀请码入席。</div>';
-        else if(!allReady) h+='<div class="ferr">尚有席位未就绪，全员就绪后才能开始。</div>';
+        if(!rolesOk) h+='<div class="ferr">角色不齐备：还需提案方/评审方席位凭邀请码入席。</div>';
+        else if(!allReady) h+='<div class="ferr">尚有席位未就绪，各方就绪后才能开始。</div>';
         h+='<div class="row" style="margin-top:8px"><button id="stStart" class="primary"'+((allReady&&rolesOk)?'':' disabled')+'>▶ 开始会议</button>'
-          +'<span class="dim">开始后进入提案陈述阶段，席位设定锁定</span></div><div class="ferr" id="stErr"></div></div>';
+          +'<span class="dim">开始后进入提案陈述阶段'+(t.mode==='hosted'?'，各方每回合提交将由 DeepSeek 预审':'')+'，席位设定锁定</span></div><div class="ferr" id="stErr"></div></div>';
       } else if(cfg.ready){
         h+='<div class="section dim">已就绪，等待建桌人开始会议。</div>';
       }
@@ -1193,6 +1233,12 @@ function renderDetail(d){
     else if(m.type==='ARTIFACT_PUBLISHED') body=(p.name||'')+' v'+((p.version&&p.version.v)||'?')+' — '+(p.version&&p.version.changeNote||'');
     else if(m.type==='DOC_UPLOADED') body=(p.doc&&p.doc.name||'')+' — '+(p.doc&&p.doc.purpose||'')+'（'+(p.doc&&p.doc.visibility==='private'?'私有·仅本席':'共享·全桌可读')+'，'+fmtSize(p.doc&&p.doc.size||0)+'）';
     else if(m.type==='CONSENSUS_RESULT') body='pass='+(p.pass?'是':'否');
+    else if(m.type==='HOST_PREREVIEW'){
+      body='【'+(PRV_LABEL[p.verdict]||p.verdict)+'】'+(p.note||'');
+      if(p.issues&&p.issues.length) body+='　问题：'+p.issues.map(function(x){ return '['+(SEV_LABEL[x.severity]||x.severity)+'] '+(x.comment||''); }).join('；');
+      if(p.targetSeatId) body+='　→ 点名 '+(seatName(seats,p.targetSeatId));
+    }
+    else if(m.type==='SUPPLEMENT') body=(p.text||'');
     else { try{ body=JSON.stringify(p).slice(0,200); }catch(e){} }
     h+='<div class="msg'+(inject?' inject':'')+(toMe?' mine':'')+'">'
       +'<span class="mt '+(MT_CLS[m.type]||'')+'">'+esc(MT_LABEL[m.type]||m.type)+'</span>'
@@ -1350,6 +1396,20 @@ function renderDetail(d){
         toast('会议已开始，进入提案陈述阶段'); view.dirtyPanel=false; loadDetail();
       }).catch(function(e){ document.getElementById('stErr').textContent='开始失败：'+e.message; });
     };
+
+    /* 主持人桌设定保存（定规则，网页 user token 通道） */
+    var tcSave=document.getElementById('tcSave');
+    if(tcSave) tcSave.onclick=function(){
+      var body={};
+      var tp=document.getElementById('tcTopic').value.trim(); if(tp) body.topic=tp;
+      body.goals=document.getElementById('tcGoals').value.trim();
+      body.deliverables=document.getElementById('tcDeliverables').value.trim();
+      body.rules=document.getElementById('tcRules').value.trim();
+      body.rolePlan=document.getElementById('tcRolePlan').value.trim();
+      api('POST','/api/tables/'+view.tableId+'/my/table-config',body)
+        .then(function(){ toast('桌设定已保存'); view.dirtyPanel=false; loadDetail(); })
+        .catch(function(e){ document.getElementById('tcErr').textContent='保存失败：'+e.message; });
+    };
   }
 
   /* ---- 绑定：代答（会议中持发言权） ---- */
@@ -1357,6 +1417,8 @@ function renderDetail(d){
   if(pxType){
     var PHASE_TYPES={statements:['STATEMENT'],'review':['REVIEW_COMMENT'],'response':['RESPONSE'],'execution':['RESPOND_REQUEST'],'convergence':['CONSENSUS_VOTE']};
     var types=(PHASE_TYPES[t.phase]||[]).concat(['QUESTION']);
+    /* hosted 点名期：被点名席（含本人代答）可提交 SUPPLEMENT */
+    if(t.mode==='hosted'&&t.precheck&&t.precheck.state==='directive'&&turn&&turn.seatId===d.mySeatId) types=types.concat(['SUPPLEMENT']);
     pxType.innerHTML=types.map(function(x){return '<option>'+esc(x)+'</option>';}).join('');
     var PX_DECISIONS={'CONSENSUS_VOTE':['pass','conditional_pass','reject'],'RESPOND_REQUEST':['reject','counter','escalate_human']};
     var pxSync=function(){
@@ -1391,6 +1453,7 @@ function renderDetail(d){
         var text=document.getElementById('pxText').value.trim();
         if(!text){ errEl.textContent='请输入内容'; return; }
         if(type==='STATEMENT'||type==='QUESTION'){ payload={text:text}; }
+        else if(type==='SUPPLEMENT'){ payload={directiveId:(t.precheck&&t.precheck.refId)||'',text:text}; }
         else if(type==='REVIEW_COMMENT'){
           payload={items:[{id:'web-'+Date.now(),target:document.getElementById('pxTarget').value.trim()||'（未指明位置）',severity:document.getElementById('pxSeverity').value,comment:text}],summary:'观察页人工代答',done:true};
         }

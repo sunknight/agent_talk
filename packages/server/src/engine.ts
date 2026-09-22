@@ -11,15 +11,17 @@ import { randomBytes } from "node:crypto";
 import {
   INJECTION_FLAG, makeEnvelope, newId, resolveCaps, scanInjection, sha256, validateEnvelope,
   type ArtifactPublishedPayload, type ArtifactVersion, type AuditEvent, type AuditRecord,
-  type ConsensusResultPayload, type DocUploadedPayload, type DocVisibility, type HumanInputPayload,
-  type HumanRulingPayload, type MsgType, type Phase, type PhaseChangePayload, type RequestPayload,
-  type RequestResponsePayload, type ResponsePayload, type ReviewCommentPayload, type SeatDocumentMeta,
-  type SeatInfo, type TableChange, type TableChangesPayload, type TableDocumentMeta,
+  type ConsensusResultPayload, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
+  type HumanInputPayload, type HumanRulingPayload, type MsgType, type Phase, type PhaseChangePayload,
+  type PrecheckState, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
+  type ReviewCommentPayload, type SeatDocumentMeta, type SeatInfo, type SupplementPayload,
+  type TableChange, type TableChangesPayload, type TableDocumentMeta,
   type TableInfoPayload, type TurnGrantPayload,
 } from "@rt/shared";
-import type { RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import type { DirectiveRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 import { Store } from "./store";
 import { unifiedDiff } from "./diff";
+import { deepseekPrecheck, type PrecheckFn, type PrecheckInput, type PrecheckOutcome } from "./precheck";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -35,24 +37,29 @@ const RATE_MAX = 8;
 const DOC_MAX_BYTES = 5 * 1024 * 1024;
 const DOCS_PER_SEAT = 20;
 const DOCS_PER_TABLE = 100;
-/** turn 消费型消息：必须持有当前发言权才能发 */
+/** turn 消费型消息：必须持有当前发言权才能发（hosted 桌上发出后过预审层） */
 const TURN_BOUND: Partial<Record<MsgType, boolean>> = {
   STATEMENT: true, REVIEW_COMMENT: true, RESPONSE: true, RESPOND_REQUEST: true, CONSENSUS_VOTE: true,
+  SUPPLEMENT: true,
 };
 /** 各阶段接受的会议消息（通用类型另见 COMMON_TYPES） */
 const PHASE_ALLOWS: Partial<Record<Phase, MsgType[]>> = {
   open: [],
-  statements: ["STATEMENT"],
-  review: ["REVIEW_COMMENT", "REQUEST"],
-  response: ["RESPONSE", "REQUEST"],
-  execution: ["RESPOND_REQUEST", "REQUEST"],
-  convergence: ["CONSENSUS_VOTE"],
+  statements: ["STATEMENT", "SUPPLEMENT"],
+  review: ["REVIEW_COMMENT", "REQUEST", "SUPPLEMENT"],
+  response: ["RESPONSE", "REQUEST", "SUPPLEMENT"],
+  execution: ["RESPOND_REQUEST", "REQUEST", "SUPPLEMENT"],
+  convergence: ["CONSENSUS_VOTE", "SUPPLEMENT"],
   human_intervention: [],
 };
 /** 任何活跃阶段都允许的通用类型（HUMAN_RULING 不在其中：仅人工介入阶段 + 人工通道可发，见 postMessage） */
 const COMMON_TYPES: MsgType[] = ["QUESTION", "REPLY", "HUMAN_INPUT", "ESCALATE"];
 /** 人工介入阶段额外放行的人工裁决（仍要求 human_proxied 通道标记） */
 const HUMAN_ONLY_TYPES: MsgType[] = ["HUMAN_RULING"];
+/** 服务器专属系统消息：席位直发一律拒绝（防伪造预审结论操纵调度） */
+const SERVER_ONLY_TYPES: MsgType[] = ["HOST_PREREVIEW"];
+/** hosted 桌预审点名链上限：同一根提交上最多连续点名次数（防 ping-pong），超出强制放行 */
+const DIRECTIVE_CHAIN_MAX = 3;
 
 /** 字段长度/范围校验：超限即 422（防巨字段撑库、撑大 poll/changes 全量响应） */
 function checkField(value: string, field: string, max: number, min = 1): string {
@@ -89,9 +96,14 @@ export class Hub {
   private rateWindow = new Map<string, number[]>();
   /** 限频审计去重：tableId:seatId → 上次写 rate_limit 审计的时间 */
   private rateAuditTs = new Map<string, number>();
+  /** hosted 桌预审进行中的桌（临界区：预审结论落地前不授出发言权） */
+  private precheckInFlight = new Set<string>();
+  /** 预审器（默认 DeepSeek；测试可注入） */
+  private readonly precheck: PrecheckFn;
 
-  constructor(public readonly store: Store) {
+  constructor(public readonly store: Store, opts?: { precheck?: PrecheckFn }) {
     this.store.on("message", (tableId: string) => this.notify(tableId));
+    this.precheck = opts?.precheck ?? deepseekPrecheck;
   }
 
   // ================= 用户与桌 =================
@@ -120,18 +132,22 @@ export class Hub {
 
   /**
    * 建桌（任何已认证方）：录入主题/目标/交付物/规则/参与方安排；
-   * 建桌人自动成为首个席位（proposer），并签发角色固定的邀请码
-   * （reviewer / observer —— 席位不能自封角色，身份安排权在建桌人）。
+   * 建桌人自动成为首个席位，并签发角色固定的邀请码（席位不能自封角色，身份安排权在建桌人）。
+   * mode=self（默认）：建桌人为提案方（proposer），发 reviewer/observer 码 —— 各方自行建桌的原流程；
+   * mode=hosted：建桌人为主持人（host，只管桌与调度，不参与评审协作），发 proposer/reviewer/observer
+   * 三类码邀请各方，且每条消费发言权的回合提交过 DeepSeek 预审调度层（见 runPrecheck）。
    */
   createTable(userToken: string, p: {
     topic: string; goals?: string; deliverables?: string; rules?: string; rolePlan?: string;
+    mode?: "self" | "hosted";
     owner: { seatName: string; agentLabel: string };
     maxReviewRounds?: number; turnTimeoutMs?: number;
   }): {
     tableId: string; ownerSeatId: string; ownerSeatToken: string;
-    inviteCodes: { code: string; role: "reviewer" | "observer" }[];
+    inviteCodes: { code: string; role: "proposer" | "reviewer" | "observer" }[];
   } {
     const user = this.requireUser(userToken);
+    const mode: "self" | "hosted" = p.mode === "hosted" ? "hosted" : "self";
     const topic = checkField(p.topic, "topic", 300);
     const ownerSeatName = checkField(p.owner?.seatName ?? "", "owner.seatName", 64);
     const ownerAgentLabel = checkField(p.owner?.agentLabel || "unknown", "owner.agentLabel", 64, 0);
@@ -143,17 +159,18 @@ export class Hub {
     const turnTimeoutMs = checkIntField(p.turnTimeoutMs, "turnTimeoutMs", 30_000, 3_600_000, 300_000);
     const tableId = newId("tbl");
     const meta: TableMeta = {
-      tableId, topic, template: "review-collab", phase: "open",
+      tableId, topic, template: "review-collab", phase: "open", mode,
       goals, deliverables, rules, rolePlan, ownerSeat: "",
       roundNo: 1, deadlockCount: 0, createdAt: Date.now(), seatCount: 0,
       maxReviewRounds, turnTimeoutMs,
     };
 
-    // 建桌人席位（proposer，绑定用户身份）
+    // 建桌人席位（self：proposer；hosted：host），绑定用户身份
+    const ownerRole: "proposer" | "host" = mode === "hosted" ? "host" : "proposer";
     const ownerSeatId = newId("seat");
     const ownerSeat: ServerSeat = {
-      seatId: ownerSeatId, name: ownerSeatName, role: "proposer",
-      caps: resolveCaps("proposer", undefined), agentLabel: ownerAgentLabel,
+      seatId: ownerSeatId, name: ownerSeatName, role: ownerRole,
+      caps: resolveCaps(ownerRole, undefined), agentLabel: ownerAgentLabel,
       joinedAt: Date.now(), status: "active", lastSeenAt: Date.now(),
       config: { stance: "", scope: "", dataScope: [], ready: false },
     };
@@ -165,15 +182,17 @@ export class Hub {
     const ownerSeatToken = `rts_${randomBytes(24).toString("base64url")}`;
     this.store.saveSeatToken(ownerSeatToken, tableId, ownerSeatId);
 
-    const inviteCodes = [
-      { code: randomBytes(5).toString("hex").toUpperCase(), role: "reviewer" as const },
-      { code: randomBytes(5).toString("hex").toUpperCase(), role: "observer" as const },
-    ];
+    // 邀请码：self 发 reviewer/observer；hosted 由主持人邀请各方（含提案方），发全部三类
+    const inviteRoles: ("proposer" | "reviewer" | "observer")[] =
+      mode === "hosted" ? ["proposer", "reviewer", "observer"] : ["reviewer", "observer"];
+    const inviteCodes = inviteRoles.map((role) => ({
+      code: randomBytes(5).toString("hex").toUpperCase(), role,
+    }));
     for (const inv of inviteCodes) this.store.addInvite(inv.code, tableId, inv.role);
 
     this.sysMsg(tableId, "SEAT_JOINED", { seat: ownerSeat });
-    this.audit(tableId, ownerSeatId, "table_open", { topic, by: user.name });
-    this.audit(tableId, ownerSeatId, "seat_join", { name: ownerSeatName, role: "proposer", owner: true });
+    this.audit(tableId, ownerSeatId, "table_open", { topic, by: user.name, mode });
+    this.audit(tableId, ownerSeatId, "seat_join", { name: ownerSeatName, role: ownerRole, owner: true });
     return { tableId, ownerSeatId, ownerSeatToken, inviteCodes };
   }
 
@@ -259,6 +278,7 @@ export class Hub {
   }): SeatInfo {
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，席位设定锁定");
+    if (seat.role === "host") throw new ApiError(403, "role", "主持人不参与就绪设定（hosted 桌由各方设定立场后由主持人点开始）");
     const stance = checkField(p.stance, "stance", 8_000);
     const scope = p.scope !== undefined ? checkField(p.scope, "scope", 4_000, 0) : "";
     const stancePreset = p.stancePreset !== undefined ? checkField(p.stancePreset, "stancePreset", 64, 0) : undefined;
@@ -276,13 +296,13 @@ export class Hub {
     return seat;
   }
 
-  /** 点开始：建桌人专属。全员就绪 + 角色齐备 → 进入陈述阶段 */
+  /** 点开始：建桌人专属。各方就绪 + 角色齐备 → 进入陈述阶段（主持人不参与就绪设定，豁免） */
   startTable(tableId: string, seat: ServerSeat): { started: boolean } {
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已在进行中");
     if (meta.ownerSeat !== seat.seatId) throw new ApiError(403, "not_owner", "只有建桌人可以点开始");
     const seats = this.activeSeats(tableId);
-    const notReady = seats.filter((s) => !s.config.ready);
+    const notReady = seats.filter((s) => !s.config.ready && s.role !== "host");
     if (notReady.length) {
       throw new ApiError(409, "not_ready", `席位未就绪：${notReady.map((s) => `${s.name}(${s.role})`).join("、")}`);
     }
@@ -290,6 +310,38 @@ export class Hub {
     if (!seats.some((s) => s.role === "reviewer")) throw new ApiError(409, "no_reviewer", "缺少评审方");
     this.setPhase(tableId, "statements", `全员就绪，建桌人 ${seat.name} 开始会议`);
     return { started: true };
+  }
+
+  /** 建桌人修改桌设定（定规则）：仅 open 阶段、建桌人专属；hosted 主持人与 self 建桌人均可用 */
+  updateTableConfig(tableId: string, seat: ServerSeat, p: {
+    topic?: string; goals?: string; deliverables?: string; rules?: string; rolePlan?: string;
+  }): TableInfoPayload {
+    const meta = this.requireTable(tableId);
+    if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，桌设定锁定");
+    if (meta.ownerSeat !== seat.seatId) throw new ApiError(403, "not_owner", "只有建桌人可以修改桌设定");
+    const upd: Partial<Pick<TableMeta, "topic" | "goals" | "deliverables" | "rules" | "rolePlan">> = {};
+    if (p.topic !== undefined) upd.topic = checkField(p.topic, "topic", 300);
+    if (p.goals !== undefined) upd.goals = checkField(p.goals, "goals", 4_000, 0);
+    if (p.deliverables !== undefined) upd.deliverables = checkField(p.deliverables, "deliverables", 4_000, 0);
+    if (p.rules !== undefined) upd.rules = checkField(p.rules, "rules", 4_000, 0);
+    if (p.rolePlan !== undefined) upd.rolePlan = checkField(p.rolePlan, "rolePlan", 4_000, 0);
+    if (Object.keys(upd).length === 0) throw new ApiError(422, "bad_payload", "没有可更新的字段");
+    Object.assign(meta, upd);
+    this.store.saveTable(meta);
+    this.sysMsg(tableId, "INFO", { text: `建桌人更新了桌设定：${Object.keys(upd).join("、")}`, level: "info" });
+    this.audit(tableId, seat.seatId, "table_update", { fields: Object.keys(upd) });
+    return this.tableInfo(tableId);
+  }
+
+  /** 网页持有人通道：修改桌设定（user token → 建桌人席位身份） */
+  updateTableConfigByUser(userToken: string, tableId: string, p: {
+    topic?: string; goals?: string; deliverables?: string; rules?: string; rolePlan?: string;
+  }): TableInfoPayload {
+    const user = this.requireUser(userToken);
+    const seatId = this.store.seatOfUser(tableId, user.userId);
+    if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位，无法修改桌设定");
+    const seat = this.requireSeat(tableId, seatId) as ServerSeat;
+    return this.updateTableConfig(tableId, seat, p);
   }
 
   leaveTable(tableId: string, seat: ServerSeat) {
@@ -325,11 +377,20 @@ export class Hub {
       latestVersion: a.versions.length, lockedBy: a.lockedBy,
     }));
     return {
-      tableId, topic: meta.topic, template: meta.template, phase: meta.phase,
+      tableId, topic: meta.topic, template: meta.template, phase: meta.phase, mode: meta.mode,
       goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, ownerSeat: meta.ownerSeat,
       roundNo: meta.roundNo, deadlockCount: meta.deadlockCount, seats, artifacts,
       activeTurn: this.computeTurn(tableId),
+      precheck: this.precheckState(tableId, meta),
     };
+  }
+
+  /** hosted 桌预审调度层状态投影（self 桌恒为 idle） */
+  private precheckState(tableId: string, meta: TableMeta): PrecheckState {
+    if (meta.mode !== "hosted") return { state: "idle" };
+    if (this.precheckInFlight.has(tableId)) return { state: "reviewing" };
+    const d = this.store.pendingDirective(tableId);
+    return d ? { state: "directive", refId: d.directiveId, toSeat: d.toSeat } : { state: "idle" };
   }
 
   touchSeat(seat: ServerSeat, tableId: string) {
@@ -419,11 +480,17 @@ export class Hub {
   private myTaskOf(table: TableInfoPayload, seat: ServerSeat, yourTurn: TurnGrantPayload | null): string | null {
     if (table.phase === "closed") return "会议已结束：纪要在 MINUTES 消息里，无需继续跟进";
     if (table.phase === "open") {
+      const seats = table.seats.filter((s) => s.status !== "left");
+      const notReady = seats.filter((s) => !s.config.ready && s.role !== "host");
+      if (seat.role === "host") {
+        // 主持人不参与就绪设定：只看各方就绪与角色齐备，然后点开始
+        const rolesOk = seats.some((s) => s.role === "proposer") && seats.some((s) => s.role === "reviewer");
+        if (notReady.length) return `等待各方完成设定：${notReady.map((s) => s.name).join("、")}`;
+        return rolesOk ? "各方已就绪：POST /api/tables/:id/start 开始会议" : "角色不齐备：还需提案方/评审方席位凭邀请码入席";
+      }
       if (!seat.config.ready) {
         return "入桌设定：向持有人确认立场（GET /api/stances 选预设并补充）、讨论范围、数据范围，然后 POST /api/tables/:id/seat-config 带 ready:true（向导见 skill §1.5）";
       }
-      const seats = table.seats.filter((s) => s.status !== "left");
-      const notReady = seats.filter((s) => !s.config.ready);
       if (table.ownerSeat === seat.seatId) {
         const rolesOk = seats.some((s) => s.role === "proposer") && seats.some((s) => s.role === "reviewer");
         if (notReady.length) return `等待席位完成设定：${notReady.map((s) => s.name).join("、")}`;
@@ -456,10 +523,18 @@ export class Hub {
 
   // ================= 消息处理 =================
 
-  postMessage(tableId: string, seat: ServerSeat, type: MsgType, payload: unknown, extraFlags?: string[]): StoredMsg {
+  async postMessage(tableId: string, seat: ServerSeat, type: MsgType, payload: unknown, extraFlags?: string[]): Promise<StoredMsg> {
     const meta = this.requireTable(tableId);
     this.touchSeat(seat, tableId);
     this.checkRate(tableId, seat);
+
+    if (SERVER_ONLY_TYPES.includes(type)) {
+      throw new ApiError(403, "server_only", `消息类型 ${type} 为服务器专属系统消息，席位不可直发`);
+    }
+    // hosted 预审临界区：上一条提交的预审尚未落地时，不接受新的回合提交（防抢跑）
+    if (this.precheckInFlight.has(tableId) && TURN_BOUND[type]) {
+      throw new ApiError(409, "precheck_in_progress", "上一条回合提交的预审仍在进行，稍候再试");
+    }
 
     const env = makeEnvelope({ tableId, from: seat.seatId, to: "all", type, payload });
     const v = validateEnvelope(env);
@@ -472,11 +547,16 @@ export class Hub {
         throw new ApiError(409, "not_your_turn", `当前发言权：${turn ? turn.seatId : "无（阶段未就绪）"}；消息类型 ${type} 需持有发言权`);
       }
     }
+    // hosted 点名期：发言权在被点名席，且回合型消息只接受其 SUPPLEMENT 提交（讨论类消息不受限）
+    if (meta.mode === "hosted" && TURN_BOUND[type] && type !== "SUPPLEMENT" && this.store.pendingDirective(tableId)) {
+      throw new ApiError(409, "directive_pending", "预审点名补充进行中，当前仅接受被点名席的 SUPPLEMENT 提交");
+    }
     // 批量处置：requestIds 展开为逐请求的单一处置（全或无——先全部 precheck，消息入库后再逐个 apply）
     const respondPlan = type === "RESPOND_REQUEST"
       ? this.respondTargetIds(payload as RequestResponsePayload).map((rid) => ({ ...(payload as RequestResponsePayload), requestId: rid, requestIds: undefined }))
       : null;
     if (respondPlan) for (const sp of respondPlan) this.precheckRequestResponse(tableId, seat, sp);
+    if (type === "SUPPLEMENT") this.precheckSupplement(tableId, seat, payload as SupplementPayload);
 
     // 注入扫描：命中不拦截，但打警示标记供端侧（skill/人）处置；extraFlags（如网页人工代答）一并合入
     const injectionHits = scanInjection(payload);
@@ -492,12 +572,180 @@ export class Hub {
     if (type === "REQUEST") this.registerRequest(tableId, seat, payload as RequestPayload);
     if (type === "RESPONSE") this.deriveRequests(tableId, seat, payload as ResponsePayload);
     if (respondPlan) for (const sp of respondPlan) this.applyRequestResponse(tableId, sp);
+    if (type === "SUPPLEMENT") this.closeDirective(tableId, payload as SupplementPayload);
     if (type === "ESCALATE") this.enterHumanMode(tableId, `席位 ${seat.name} 申请人工介入：${String((payload as { reason?: string }).reason ?? "")}`);
     if (type === "HUMAN_INPUT") this.audit(tableId, seat.seatId, "human_input", { toSeat: (payload as { toSeat?: string }).toSeat ?? "all" });
     if (type === "HUMAN_RULING") this.applyRuling(tableId, payload as HumanRulingPayload);
     if (type === "CONSENSUS_VOTE") this.audit(tableId, seat.seatId, "vote_cast", {});
+
+    // 主持人预审调度层（仅 hosted 桌）：消费发言权的回合提交，在原调度推导/阶段推进之前过一道预审；
+    // pass/skipped → 照常 maybeAdvance；redirect → 落点名指令并压住推进，等被点名席 SUPPLEMENT。
+    if (meta.mode === "hosted" && TURN_BOUND[type]) {
+      await this.runPrecheck(tableId, seat, msg);
+      return msg;
+    }
     this.maybeAdvance(tableId);
     return msg;
+  }
+
+  /** 入站前置校验（消息入库前把关）：必须存在指向本席的挂起点名指令 */
+  private precheckSupplement(tableId: string, seat: ServerSeat, p: SupplementPayload) {
+    const d = this.store.pendingDirective(tableId);
+    if (!d || d.directiveId !== p.directiveId) {
+      throw new ApiError(422, "bad_directive", "没有待处理的预审点名指令，或 directiveId 不匹配");
+    }
+    if (d.toSeat !== seat.seatId) throw new ApiError(403, "not_target", "该点名指令的目标席位不是你");
+  }
+
+  /** SUPPLEMENT 入库后的指令闭合（校验已在 precheckSupplement 完成） */
+  private closeDirective(tableId: string, p: SupplementPayload) {
+    const d = this.store.pendingDirective(tableId);
+    if (!d || d.directiveId !== p.directiveId) return;
+    d.status = "closed";
+    d.closedAt = Date.now();
+    this.store.saveDirective(d);
+    this.audit(tableId, d.toSeat, "supplement_done", { directiveId: d.directiveId });
+  }
+
+  // ================= 主持人预审调度层（hosted 桌） =================
+
+  /**
+   * 对一条回合提交执行预审并落地调度后果：
+   * - pass/skipped → 广播 HOST_PREREVIEW 后照常 maybeAdvance（原调度逻辑不变）；
+   * - redirect → 校验点名目标（active 的提案/评审席）与链深后落 pending 指令、广播 HOST_PREREVIEW，
+   *   并**压住** maybeAdvance —— 发言权改由 computeTurn 的指令层授予被点名席；
+   * - 任何失败（未配 key/超时/异常）→ skipped 放行 + 标注（fail-open，不阻塞会议）。
+   */
+  private async runPrecheck(tableId: string, seat: ServerSeat, msg: StoredMsg) {
+    const input = this.buildPrecheckInput(tableId, seat, msg);
+    this.precheckInFlight.add(tableId);
+    let outcome: PrecheckOutcome;
+    try {
+      outcome = await this.precheck(input);
+    } catch (e) {
+      outcome = { verdict: "skipped", issues: [], note: `预审器异常：${e instanceof Error ? e.message : String(e)}，放行`, by: "skipped" };
+    } finally {
+      this.precheckInFlight.delete(tableId);
+    }
+
+    if (outcome.verdict === "redirect") {
+      const demoted = this.demoteRedirect(tableId, msg, outcome);
+      if (demoted) outcome = demoted;
+    }
+
+    if (outcome.verdict === "redirect") {
+      const target = this.store.getSeat(tableId, outcome.targetSeatId!)!;
+      const root = this.rootDirectiveOf(tableId, msg);
+      const directive: DirectiveRecord = {
+        directiveId: newId("dir"),
+        tableId,
+        toSeat: target.seatId,
+        regardingMsgId: msg.msgId,
+        rootDirectiveId: root,
+        issues: outcome.issues,
+        ...(outcome.note ? { note: outcome.note } : {}),
+        createdAt: Date.now(),
+        status: "pending",
+      };
+      this.store.saveDirective(directive);
+      const seatName = (s: string) => this.store.getSeat(tableId, s)?.name ?? s;
+      this.sysMsg(tableId, "HOST_PREREVIEW", {
+        verdict: "redirect",
+        reviewedSeatId: seat.seatId,
+        reviewedMsgId: msg.msgId,
+        targetSeatId: target.seatId,
+        issues: outcome.issues,
+        ...(outcome.note ? { note: outcome.note } : {}),
+        by: outcome.by ?? "deepseek",
+      } satisfies HostPrereviewPayload);
+      this.sysMsg(tableId, "INFO", {
+        text: `主持人预审：${seatName(seat.seatId)} 的提交需要补充 —— 点名 ${seatName(target.seatId)} 处理（directiveId=${directive.directiveId}）。补充后以 SUPPLEMENT 提交。`,
+        level: "warn",
+      });
+      this.audit(tableId, seat.seatId, "directive_open", { directiveId: directive.directiveId, toSeat: target.seatId, regardingMsgId: msg.msgId });
+      return;
+    }
+
+    // pass / skipped：广播结果，原调度照常推进
+    this.sysMsg(tableId, "HOST_PREREVIEW", {
+      verdict: outcome.verdict,
+      reviewedSeatId: seat.seatId,
+      reviewedMsgId: msg.msgId,
+      issues: outcome.issues,
+      ...(outcome.note ? { note: outcome.note } : {}),
+      by: outcome.by ?? "deepseek",
+    } satisfies HostPrereviewPayload);
+    this.audit(tableId, seat.seatId, "precheck_result", { verdict: outcome.verdict, by: outcome.by ?? "deepseek" });
+    this.maybeAdvance(tableId);
+  }
+
+  /** redirect 降级校验：目标席位非法或链深超限 → 改判 pass（附原因）；返回 null 表示维持 redirect */
+  private demoteRedirect(tableId: string, msg: StoredMsg, outcome: PrecheckOutcome): PrecheckOutcome | null {
+    const target = outcome.targetSeatId ? this.store.getSeat(tableId, outcome.targetSeatId) : null;
+    if (!target || target.status === "left" || (target.role !== "proposer" && target.role !== "reviewer")) {
+      return {
+        verdict: "pass", issues: [],
+        note: `预审点名对象无效（${outcome.targetSeatId ?? "未给出"}，须为本桌在席的提案/评审方），本次放行：${outcome.note ?? ""}`,
+        by: outcome.by,
+      };
+    }
+    const root = this.rootDirectiveOf(tableId, msg);
+    const depth = this.store.getDirectives(tableId).filter((d) => d.rootDirectiveId === root).length;
+    if (depth >= DIRECTIVE_CHAIN_MAX) {
+      return {
+        verdict: "pass", issues: [],
+        note: `同一提交上的预审点名已达 ${DIRECTIVE_CHAIN_MAX} 次上限，本次放行（主持人可用人工指令继续点名）`,
+        by: outcome.by,
+      };
+    }
+    return null;
+  }
+
+  /** 指令链根：提交本身是 SUPPLEMENT 时沿用其所闭合指令的根，否则以即将新建的指令自身为根 */
+  private rootDirectiveOf(tableId: string, msg: StoredMsg): string {
+    if (msg.type !== "SUPPLEMENT") return `root_${msg.msgId}`;
+    const d = this.store.getDirectives(tableId).find((x) => x.directiveId === (msg.payload as SupplementPayload).directiveId);
+    return d?.rootDirectiveId ?? `root_${msg.msgId}`;
+  }
+
+  /** 组装预审输入（只读快照：桌上下文/共享资料/提交席立场/提交内容/最近历史/可点名席位） */
+  private buildPrecheckInput(tableId: string, seat: ServerSeat, msg: StoredMsg): PrecheckInput {
+    const meta = this.requireTable(tableId);
+    const seats = this.activeSeats(tableId);
+    const nameOf = new Map(seats.map((s) => [s.seatId, s.name]));
+    let attachmentExcerpt: string | undefined;
+    const pl = (msg.payload ?? {}) as { artifactId?: string; docId?: string };
+    if (msg.type === "STATEMENT") {
+      // 提交席名下最新产物版本的文本摘录
+      const mine = this.store.getArtifacts(tableId)
+        .filter((a) => a.ownerSeat === seat.seatId)
+        .flatMap((a) => a.versions.map((v) => ({ a, v })))
+        .sort((x, y) => y.v.ts - x.v.ts)[0];
+      if (mine && mine.a.format !== "png") {
+        try { attachmentExcerpt = this.store.readBlob(mine.v.sha256).toString("utf8").slice(0, 8_000); } catch { /* blob 丢失则不带摘录 */ }
+      }
+    } else if (msg.type === "REVIEW_COMMENT" && pl.docId) {
+      const doc = this.store.getDocument(tableId, pl.docId);
+      if (doc) attachmentExcerpt = `评审对象资料：${doc.name}（作用：${doc.purpose}）`;
+    }
+    const history = this.store.getMessages(tableId)
+      .filter((m) => m.seq < msg.seq)
+      .slice(-8)
+      .map((m) => ({ from: m.fromSeat === "server" ? "server" : nameOf.get(m.fromSeat) ?? m.fromSeat, type: m.type, text: JSON.stringify(m.payload) }));
+    return {
+      table: {
+        topic: meta.topic, goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, rolePlan: meta.rolePlan,
+        sharedDocs: this.store.getDocuments(tableId)
+          .filter((d) => d.visibility === "shared")
+          .map((d) => ({ name: d.name, purpose: d.purpose })),
+      },
+      seat: { name: seat.name, role: seat.role, stance: seat.config.stance, scope: seat.config.scope },
+      submission: { msgId: msg.msgId, type: msg.type, payload: msg.payload, ...(attachmentExcerpt ? { attachmentExcerpt } : {}) },
+      history,
+      participants: seats
+        .filter((s) => s.role === "proposer" || s.role === "reviewer")
+        .map((s) => ({ seatId: s.seatId, name: s.name, role: s.role })),
+    };
   }
 
   /** 席位直接发送的 REQUEST 入库（deriveRequests 派生的走同一条 store 通道） */
@@ -643,11 +891,25 @@ export class Hub {
       deadline: Date.now() + meta.turnTimeoutMs, taskHint, pendingRequest,
     });
 
+    // 预审调度层（仅 hosted，在原调度之前）：预审进行中不授出发言权；点名指令挂起时发言权归被点名席
+    if (meta.mode === "hosted") {
+      if (this.precheckInFlight.has(tableId)) return null;
+      const directive = this.store.pendingDirective(tableId);
+      if (directive) {
+        const issueBrief = directive.issues.slice(0, 3).map((i) => `[${i.severity}] ${i.comment}`).join("；");
+        return grant(
+          directive.toSeat,
+          `主持人预审点名补充：${issueBrief || directive.note || "上一轮提交需要补充"}。按要求补充/修正后 POST /api/tables/:id/messages，type=SUPPLEMENT，payload={"directiveId":"${directive.directiveId}","text":"补充说明（如涉及产物请先发布新版本并在 text 中说明）"}`,
+        );
+      }
+    }
+
     switch (meta.phase) {
       case "open": {
         const owner = seats.find((s) => s.seatId === meta.ownerSeat);
         if (!owner) return null;
-        const allReady = seats.every((s) => s.config.ready);
+        // 主持人不参与就绪设定（hosted 桌）：就绪判定只看各方
+        const allReady = seats.filter((s) => s.role !== "host").every((s) => s.config.ready);
         const rolesOk = seats.some((s) => s.role === "proposer") && seats.some((s) => s.role === "reviewer");
         return grant(
           owner.seatId,
@@ -1249,7 +1511,7 @@ export class Hub {
   }
 
   /** 观察端人工指令：user token → 其在本桌的席位身份发 HUMAN_INPUT（支持定向标注） */
-  humanInputByUser(userToken: string, tableId: string, p: { text: string; toSeat?: string; byHuman: string }) {
+  async humanInputByUser(userToken: string, tableId: string, p: { text: string; toSeat?: string; byHuman: string }) {
     const user = this.requireUser(userToken);
     const seatId = this.store.seatOfUser(tableId, user.userId);
     if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位，人工指令需以席位身份发出（先入席）");
@@ -1274,7 +1536,7 @@ export class Hub {
 
   /** 网页持有人替本席发言（人工代答）：以本席身份走全部 phase/turn/caps 校验，消息 flags 标 human_proxied。
    * 代答发送成功后 turn 被自然消费（事件溯源），agent 下次 poll 读到代答消息作为本轮答案上下文。 */
-  postByUser(userToken: string, tableId: string, p: { type: MsgType; payload: unknown }): StoredMsg {
+  async postByUser(userToken: string, tableId: string, p: { type: MsgType; payload: unknown }): Promise<StoredMsg> {
     const user = this.requireUser(userToken);
     const seatId = this.store.seatOfUser(tableId, user.userId);
     if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有席位，无法以席位身份发言（先凭邀请码入席）");

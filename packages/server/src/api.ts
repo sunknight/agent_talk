@@ -134,7 +134,7 @@ export function createHttpServer(hub: Hub) {
       }
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "human-input" && method === "POST" && !seg[4]) {
         const body = await readJson(req);
-        return ok(res, { sent: hub.humanInputByUser(bearer(req), seg[2], {
+        return ok(res, { sent: await hub.humanInputByUser(bearer(req), seg[2], {
           text: String(body.text ?? ""),
           toSeat: body.toSeat ? String(body.toSeat) : undefined,
           byHuman: String(body.byHuman ?? ""),
@@ -159,11 +159,21 @@ export function createHttpServer(hub: Hub) {
         if (seg[4] === "message" && !seg[5]) {
           const type = String(body.type ?? "");
           if (!type) throw new ApiError(422, "bad_payload", "type 必填");
-          return ok(res, { message: hub.postByUser(bearer(req), tableId, { type: type as MsgType, payload: body.payload }) });
+          return ok(res, { message: await hub.postByUser(bearer(req), tableId, { type: type as MsgType, payload: body.payload }) });
         }
         // 开始会议（建桌人专属，网页 user token 通道）
         if (seg[4] === "start" && !seg[5]) {
           return ok(res, hub.startByUser(bearer(req), tableId));
+        }
+        // 修改桌设定（建桌人专属，open 阶段；主持人「定规则」网页通道）
+        if (seg[4] === "table-config" && !seg[5]) {
+          return ok(res, hub.updateTableConfigByUser(bearer(req), tableId, {
+            topic: body.topic !== undefined ? String(body.topic) : undefined,
+            goals: body.goals !== undefined ? String(body.goals) : undefined,
+            deliverables: body.deliverables !== undefined ? String(body.deliverables) : undefined,
+            rules: body.rules !== undefined ? String(body.rules) : undefined,
+            rolePlan: body.rolePlan !== undefined ? String(body.rolePlan) : undefined,
+          }));
         }
         // 上传资料文档（网页持有人以本桌席位身份）
         if (seg[4] === "documents" && !seg[5]) {
@@ -257,9 +267,10 @@ export function createHttpServer(hub: Hub) {
         const topic = String(body.topic ?? "");
         if (!topic) throw new ApiError(422, "bad_payload", "topic 必填");
         const owner = body.owner as { seatName?: string; agentLabel?: string } | undefined;
-        if (!owner?.seatName) throw new ApiError(422, "bad_payload", "owner.seatName 必填（建桌人自动成为提案方席位）");
+        if (!owner?.seatName) throw new ApiError(422, "bad_payload", "owner.seatName 必填（self 模式建桌人自动成为提案方；hosted 模式为主持人）");
         return ok(res, hub.createTable(bearer(req), {
           topic,
+          mode: body.mode === "hosted" ? "hosted" : "self",
           goals: body.goals ? String(body.goals) : undefined,
           deliverables: body.deliverables ? String(body.deliverables) : undefined,
           rules: body.rules ? String(body.rules) : undefined,
@@ -309,6 +320,17 @@ export function createHttpServer(hub: Hub) {
         if (sub === "start" && method === "POST" && !seg[4]) {
           return ok(res, hub.startTable(tableId, seatAuth));
         }
+        // 桌设定修改（建桌人专属，open 阶段；主持人「定规则」步骤）
+        if (sub === "table-config" && method === "POST" && !seg[4]) {
+          const body = await readJson(req);
+          return ok(res, hub.updateTableConfig(tableId, seatAuth, {
+            topic: body.topic !== undefined ? String(body.topic) : undefined,
+            goals: body.goals !== undefined ? String(body.goals) : undefined,
+            deliverables: body.deliverables !== undefined ? String(body.deliverables) : undefined,
+            rules: body.rules !== undefined ? String(body.rules) : undefined,
+            rolePlan: body.rolePlan !== undefined ? String(body.rolePlan) : undefined,
+          }));
+        }
 
         if (sub === undefined && method === "GET") {
           return ok(res, hub.tableInfo(tableId));
@@ -329,7 +351,7 @@ export function createHttpServer(hub: Hub) {
           const body = await readJson(req);
           const type = String(body.type ?? "");
           if (!type) throw new ApiError(422, "bad_payload", "type 必填");
-          return ok(res, hub.postMessage(tableId, seatAuth, type as MsgType, body.payload));
+          return ok(res, await hub.postMessage(tableId, seatAuth, type as MsgType, body.payload));
         }
         if (sub === "leave" && method === "POST" && !seg[4]) {
           hub.leaveTable(tableId, seatAuth);

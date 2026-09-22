@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { sha256, type AuditRecord, type Envelope, type SeatInfo, type TableSummary } from "@rt/shared";
-import type { ArtifactRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import type { ArtifactRecord, DirectiveRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 
 const SCHEMA_VERSION = 1;
 
@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS tables (
   deliverables TEXT NOT NULL, rules TEXT NOT NULL, role_plan TEXT NOT NULL, owner_seat TEXT NOT NULL,
   phase TEXT NOT NULL, round_no INTEGER NOT NULL, deadlock_count INTEGER NOT NULL,
   created_at INTEGER NOT NULL, closed_at INTEGER, seat_count INTEGER NOT NULL,
-  max_review_rounds INTEGER NOT NULL, turn_timeout_ms INTEGER NOT NULL);
+  max_review_rounds INTEGER NOT NULL, turn_timeout_ms INTEGER NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'self');
 CREATE TABLE IF NOT EXISTS seats (
   table_id TEXT NOT NULL, seat_id TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (table_id, seat_id));
@@ -60,6 +61,9 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS audit (
   id TEXT PRIMARY KEY, ts INTEGER NOT NULL, table_id TEXT NOT NULL, seat_id TEXT NOT NULL,
   event TEXT NOT NULL, detail TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS directives (
+  table_id TEXT NOT NULL, directive_id TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (table_id, directive_id));
 `;
 
 /** node:sqlite 行类型（.get/.all 返回的原样记录） */
@@ -113,7 +117,7 @@ export class Store extends EventEmitter {
       userSetRole: this.db.prepare("UPDATE users SET role = ? WHERE user_id = ?"),
       userSetDisabled: this.db.prepare("UPDATE users SET disabled = ? WHERE user_id = ?"),
 
-      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
       tableAll: this.db.prepare("SELECT * FROM tables ORDER BY rowid"),
 
@@ -157,6 +161,9 @@ export class Store extends EventEmitter {
       auditInsert: this.db.prepare("INSERT INTO audit (id, ts, table_id, seat_id, event, detail) VALUES (?, ?, ?, ?, ?, ?)"),
       auditRecent: this.db.prepare("SELECT * FROM audit ORDER BY ts DESC, rowid DESC LIMIT ?"),
 
+      dirUpsert: this.db.prepare("INSERT OR REPLACE INTO directives (table_id, directive_id, data) VALUES (?, ?, ?)"),
+      dirsOfTable: this.db.prepare("SELECT * FROM directives WHERE table_id = ? ORDER BY rowid"),
+
       counts: this.db.prepare("SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM tables) + (SELECT COUNT(*) FROM messages) + (SELECT COUNT(*) FROM documents) AS n"),
     };
     const cur = (this.st.metaGet.get("schema_version") as Row | undefined)?.value;
@@ -179,6 +186,9 @@ export class Store extends EventEmitter {
   private migrateSchema() {
     try {
       this.db.exec("ALTER TABLE artifact_versions ADD COLUMN request_ids TEXT");
+    } catch { /* duplicate column：已是新 schema */ }
+    try {
+      this.db.exec("ALTER TABLE tables ADD COLUMN mode TEXT NOT NULL DEFAULT 'self'");
     } catch { /* duplicate column：已是新 schema */ }
   }
 
@@ -333,6 +343,7 @@ export class Store extends EventEmitter {
       this.db.prepare("DELETE FROM artifact_versions WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM artifacts WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM documents WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM directives WHERE table_id = ?").run(tableId);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -345,6 +356,7 @@ export class Store extends EventEmitter {
     this.st.tableUpsert.run(
       t.tableId, t.topic, t.template, t.goals, t.deliverables, t.rules, t.rolePlan, t.ownerSeat,
       t.phase, t.roundNo, t.deadlockCount, t.createdAt, nullable(t.closedAt), t.seatCount, t.maxReviewRounds, t.turnTimeoutMs,
+      t.mode ?? "self",
     );
   }
   private rowTable(r: Row): TableMeta {
@@ -355,6 +367,7 @@ export class Store extends EventEmitter {
       deadlockCount: Number(r.deadlock_count), createdAt: Number(r.created_at),
       ...(r.closed_at === null ? {} : { closedAt: Number(r.closed_at) }),
       seatCount: Number(r.seat_count), maxReviewRounds: Number(r.max_review_rounds), turnTimeoutMs: Number(r.turn_timeout_ms),
+      mode: r.mode === "hosted" ? "hosted" : "self",
     };
   }
   saveTable(meta: TableMeta) { this.upsertTableRow(meta); }
@@ -423,6 +436,19 @@ export class Store extends EventEmitter {
       code: String(r.code), tableId: String(r.table_id), role: String(r.role),
       expiresAt: Number(r.expires_at), usesLeft: Number(r.uses_left),
     }));
+  }
+
+  // ---------- directives（预审点名补充指令） ----------
+  saveDirective(rec: DirectiveRecord) {
+    this.st.dirUpsert.run(rec.tableId, rec.directiveId, J(rec));
+  }
+  getDirectives(tableId: string): DirectiveRecord[] {
+    return (this.st.dirsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as DirectiveRecord);
+  }
+  /** 当前挂起的点名指令（同一时刻至多一条） */
+  pendingDirective(tableId: string): DirectiveRecord | null {
+    const pend = this.getDirectives(tableId).filter((d) => d.status === "pending");
+    return pend.length ? pend[pend.length - 1] : null;
   }
 
   // ---------- messages ----------
