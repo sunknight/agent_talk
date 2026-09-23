@@ -65,6 +65,8 @@ curl -s -X POST $SERVER/api/tables/$TID/start -H "authorization: Bearer $OWNER_S
 #   然后说 "跟进圆桌" 即开始自动参会循环
 ```
 
+**账号互通（web ↔ agent 同一用户）**：用户 token（`rtu_`）就是共享身份——网页登录后右上角「复制账号凭证」交给自己的 agent，它保存为 `.roundtable/user.json`（同服务器全桌共用，不再重复注册）；此后 agent 建桌/入席的席位都归属该用户，网页端私有指令、代答、席位管理全部生效。agent 端先注册的，向导会把 token 原文交还给持有人，粘贴到网页右上角即同账号登录。席位凭证与邀请码不含账号 token，转发不致账号外流。
+
 会议流（服务器状态机自动推进）：`open（建桌/入席/设定立场，建桌人点开始）→ statements（提案人发布产物+陈述）→ review（评审人逐条 must/should/nice 意见）→ response（提案人四态回应：accept 接纳[可委派 self 或评审席修改] / defer 记录后续跟进 / reject 拒绝 / human 交人工）→ execution（被请求方发布带 requestId 的新版本后 accept；或 reject/counter/escalate_human）→ convergence（全员表决）→ closed（自动纪要：立场/处置/跟进清单/表决/人工记录）`。表决连续未通过 → `human_intervention`（人工裁决可 `forceConvergence` 收会或恢复指定阶段）。
 
 **会议暂停（叠加态，阶段保留）**：会议进行中（statements~convergence），主持人 / 建桌人 / 系统管理员可在网页暂停会议，参与方（含观察方）可在网页申请暂停、经上述控制人同意后生效（申请方记入会议记录与审计）。暂停期发言权与阶段推进冻结（仅 QUESTION/REPLY/HUMAN_INPUT/ESCALATE 与资料上传、席位设定可动），各方持有人人工补充或调整立场、给本席 agent 补充信息后重新就绪（无需补充的席位保持就绪）；全员就绪后控制人在网页继续会议，恢复到原阶段原发言权。systemadmin 可跳过就绪强制继续（记审计）。

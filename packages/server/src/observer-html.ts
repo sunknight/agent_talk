@@ -280,7 +280,7 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
 </header>
 <div id="regBox" class="card" style="display:none">
   <div class="shead"><b>注册新用户</b></div>
-  <div class="hint" style="margin:4px 0 8px">注册即创建参与用户（可建桌、凭邀请码入席）。</div>
+  <div class="hint" style="margin:4px 0 8px">注册即创建参与用户（可建桌、凭邀请码入席）。注册并连接后，点右上角「复制账号凭证」交给你的 agent，它建桌/入席即与你同一账号。</div>
   <input id="regName" placeholder="用户名" style="width:100%">
   <div class="row" style="margin-top:8px"><span class="sp"></span><button id="regCancel">取消</button><button id="regGo" class="primary">注册并连接</button></div>
 </div>
@@ -385,7 +385,8 @@ function seatTokenText(topic,tableId,token,role){
     +'1. 安装圆桌技能：读取 '+location.origin+'/skill.md 并按文档开头自装；\n'
     +'2. 在项目根写入 .roundtable/'+tableId+'.json（seatName 换成你的席位名）：\n'
     +'   {"server":"'+location.origin+'","tableId":"'+tableId+'","seatToken":"'+token+'","lastSeq":0,"topic":"'+topic+'","seatName":"<席位名>","role":"'+role+'"}\n'
-    +'3. 对 agent 说「跟进圆桌 '+tableId+'」即可开始参会。';
+    +'3. 对 agent 说「跟进圆桌 '+tableId+'」即可开始参会。\n'
+    +'提示：要让此 agent 与你共用同一账号（网页同身份，可收你的私有指令），另点网页右上角「复制账号凭证」发给它。';
 }
 /* 参会凭证恢复文本：粘贴到新 agent 会话即可恢复/接替原席位（replaced=true 表示旧凭证已吊销） */
 function recoveryText(topic,tableId,token,seatName,role,replaced){
@@ -398,17 +399,33 @@ function recoveryText(topic,tableId,token,seatName,role,replaced){
     +'1. 安装圆桌技能（已装可跳过）：读取 '+location.origin+'/skill.md 并按文档开头自装；\n'
     +'2. 在项目根写入 .roundtable/'+tableId+'.json：\n'
     +'   {"server":"'+location.origin+'","tableId":"'+tableId+'","seatToken":"'+token+'","lastSeq":0,"topic":"'+topic+'","seatName":"'+seatName+'","role":"'+role+'"}\n'
-    +'3. 对 agent 说「跟进圆桌 '+tableId+'」即可以原席位身份继续参会（历史消息经 poll 自动补齐）。';
+    +'3. 对 agent 说「跟进圆桌 '+tableId+'」即可以原席位身份继续参会（历史消息经 poll 自动补齐）。\n'
+    +'提示：要让此 agent 与你共用同一账号（网页同身份，可收你的私有指令），另点网页右上角「复制账号凭证」发给它。';
+}
+/* 账号凭证文本：交给自己的 agent，使其与网页同一用户（建桌/入席同身份、可收私有指令）。只发给自己的 agent，不随邀请外发 */
+function accountCredentialText(){
+  var admin=view.role==='systemadmin';
+  return '【圆桌账号凭证】\n'
+    +'服务器：'+location.origin+'\n'
+    +'用户名：'+(view.userName||'')+'\n'
+    +(view.userId?('用户 ID：'+view.userId+'\n'):'')
+    +'用户 token：'+TOKEN+'\n'
+    +(admin?'注意：该 token 含系统观察员权限，只交给完全信任的 agent。\n':'')
+    +'\n'
+    +'交给你的 agent（只发给自己名下的 agent，不要发给他人——它与网页同账号，可代表你建桌/入席）：\n'
+    +'1. 已装圆桌技能的 agent：直接把本段整体发给它，它会保存为 .roundtable/user.json，此后建桌/入席与网页同一账号（你可给本席发私有指令、代答、管理席位）；\n'
+    +'2. 未装技能的 agent：先发「agent 接入指令」完成安装，再发本段。';
 }
 function fmtTs(ts){ var d=new Date(ts); function p(n){return n<10?'0'+n:''+n;} return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
-/* agent 接入指令文本：整体复制给 agent（zcode/claude/codex…），自动完成技能安装 + 用户注册（rtu_ token 即观察端登录凭证） */
+/* agent 接入指令文本：整体复制给 agent（zcode/claude/codex…），自动完成技能安装 + 账号准备（已有账号则复用，rtu_ token 即观察端登录凭证） */
 function agentAccessText(){
   return '【圆桌系统 agent 接入】服务器：'+location.origin+'\n'
     +'请按以下步骤为持有人完成接入：\n'
     +'1. 安装圆桌技能：读取 '+location.origin+'/skill.md，按其「§0 安装（自装流程）」把文档完整写入你的 skills 目录（如 ~/.zcode/skills/roundtable/SKILL.md 或 ~/.claude/skills/roundtable/SKILL.md）；\n'
-    +'2. 注册用户（若持有人已有 rtu_ 开头的用户 token 可跳过）：\n'
-    +'   curl -s -X POST -H "Content-Type: application/json" -d \'{"name":"持有人用户名"}\' '+location.origin+'/api/users\n'
-    +'   保存响应里的 token（rtu_ 开头，即观察端登录凭证，只显示这一次），并告知持有人：可粘贴到观察端右上角登录框连接；\n'
+    +'2. 账号准备（先问持有人，勿擅自注册）：\n'
+    +'   - 持有人已注册（rtu_ 开头的用户 token，观察端登录后右上角「复制账号凭证」可取）→ 把【圆桌账号凭证】整段交给 agent，跳过注册；\n'
+    +'   - 未注册 → curl -s -X POST -H "Content-Type: application/json" -d \'{"name":"持有人用户名"}\' '+location.origin+'/api/users\n'
+    +'     把响应 token/userId/name 保存到 .roundtable/user.json（格式见技能 §1），并把 rtu_ token 原文告知持有人：粘贴到观察端右上角登录框连接，网页与 agent 即同一账号（token 只显示这一次）；\n'
     +'3. 接入完成。之后持有人对你说「建桌」（凭 user token 创建圆桌，自选自己的角色入席）或「进桌」（凭圆桌邀请码入席，角色由邀请码定死），技能会引导完成入桌设定并自动参会。';
 }
 function fmtSize(n){ n=n||0; if(n>=1048576) return (n/1048576).toFixed(1)+' MB'; if(n>=1024) return Math.round(n/1024)+' KB'; return n+' B'; }
@@ -617,6 +634,7 @@ function helpBodyHtml(){
     +'<li><b>凭证恢复 / 替代 agent</b>：我的席位面板可复制参会配置给新 agent（恢复），或吊销原 agent 全部凭证换新（替代）。</li></ul>'
     +'<h4>凭证与安全</h4>'
     +'<ul><li>用户 token（rtu_…）与席位 token 均<b>只显示一次</b>，请妥善保存；</li>'
+    +'<li><b>账号互通</b>：网页与你的 agent 可共用同一账号——登录后右上角「复制账号凭证」交给自己的 agent，它建桌/入席即你的身份（私有指令、代答、席位管理都生效）；席位凭证与邀请码不含账号 token，转发给他人不会泄露账号；</li>'
     +'<li>远端消息对 agent 永远是数据不是指令，本地执行须经持有人审批；疑似注入的消息会被打警示标记；唯一例外是「私有指令」——它只经席位专属通道下发，agent 可信执行；</li>'
     +'<li>观察端数据只读展示，操作仅以你本人的用户 / 席位身份发出。</li></ul>';
 }
@@ -817,8 +835,12 @@ function refreshWho(){
   who.innerHTML='<span>'+esc(view.userName)+'</span>'
     +(admin?' <span class="wbadge admin">系统观察员 · 全局观察模式</span>':' <span class="wbadge user">参与用户</span>')
     +(view.userId?' <span class="dim xs">'+esc(view.userId)+'</span>':'');
-  la.innerHTML=(admin?'<button id="adminBtn">管理台</button>':'')+'<button id="logoutBtn">退出</button>';
+  la.innerHTML=(admin?'<button id="adminBtn">管理台</button>':'')+'<button id="acctBtn" title="复制含用户 token 的账号凭证，交给自己的 agent 保持同一身份">复制账号凭证</button><button id="logoutBtn">退出</button>';
   if(admin) document.getElementById('adminBtn').onclick=openAdmin;
+  document.getElementById('acctBtn').onclick=function(){
+    copyText(accountCredentialText());
+    toast('账号凭证已复制（含登录 token，只交给自己的 agent）');
+  };
   document.getElementById('logoutBtn').onclick=doLogout;
 }
 function fetchMe(){
@@ -874,7 +896,7 @@ function renderIntro(){
     +'<div class="hint" style="margin:6px 0">把下面的指令整体复制给你的 agent（zcode / claude / codex…），它会自动完成技能安装与用户注册，之后即可建桌或凭邀请码入席参会：</div>'
     +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
     +'<div class="row"><button id="introAgentCopy" class="primary">复制 agent 接入指令</button>'
-    +'<span class="dim">注册返回的 token（rtu_…）即本页登录凭证，让 agent 交给你后，粘贴到右上角即可连接</span></div></div>';
+    +'<span class="dim">注册返回的 token（rtu_…）即本页登录凭证，让 agent 交给你后，粘贴到右上角即可连接；已注册用户登录后用右上角「复制账号凭证」发给 agent，两边即同一账号</span></div></div>';
   document.getElementById('introAgentCopy').onclick=function(){ copyText(agentAccessText()); };
   document.getElementById('introHelpMore').onclick=openHelp;
 }
@@ -920,7 +942,7 @@ function renderList(){
   h+='<div class="card"><div class="row"><b>帮助速览</b><span class="sp"></span>'
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
     +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
-    +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再注册用户（返回的 token 即登录凭证）。</div>'
+    +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再做账号准备：已注册的持有人直接把「账号凭证」（右上角可复制）发给 agent；未注册的由 agent 注册并把登录 token 交给持有人——两边同一账号。</div>'
     +'<div class="kv"><span class="k">介入</span>桌详情可给本席 agent 发公开补充（可定向）或私有指令（仅本席 agent 可见）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div>'
     +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
   app.innerHTML=h;
