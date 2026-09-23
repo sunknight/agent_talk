@@ -42,7 +42,7 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     expect(html).toContain("开始会议");
     expect(html).toContain("my/start"); // 网页开始会议通道
     expect(html).toContain("dsIn"); // 数据范围 chips 输入器
-    expect(html).toContain("msgFilter"); // 消息筛选
+    expect(html).toContain("chatFilter"); // 会话筛选（chatbox 全部/发言/指令/系统）
     expect(html).toContain("class=\"steps\""); // 阶段进度条
     expect(html).toContain("注册并连接"); // 注册内联表单
     expect(html).toContain("替我回答本轮"); // 代答（仅会议开始后出现）

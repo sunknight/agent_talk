@@ -1,9 +1,10 @@
 /**
  * 观察端 Web 控制台（单页，零构建）— GET / 下发。
  * 功能：圆桌列表（筛选/我的席位标记）/ 建桌（5 桌类型：评审/协作/头脑风暴/方案决策/问询；我的角色自选——任一角色自建入席或主持人建桌，问询桌可选问询方/主持人；回合提交全桌型过 DeepSeek 预审）/
- *       桌详情（圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/时间线/纪要、会议暂停/恢复与暂停申请、
+ *       桌详情（按进度分阶段展示：准备/就绪待开始/进行中/暂停/结束，各模块显隐合理化；圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/纪要、会议暂停/恢复与暂停申请、
  *       问询方操作面板：开始问询/定向与广播提问/结束问询出问询纪要）/
- *       我的席位面板（入桌设定·回填、开始会议·建桌人、持发言权人工代答、给 agent 直达指令）/
+ *       会话视图 chatbox（己方右侧/其他方左侧/系统提示居中，发言/指令/系统筛选，阶段变更分隔条）+ 输入聚合（公开补充/私有指令/人工指令/代答/提问 按阶段切换类型）/
+ *       我的席位面板（入桌设定·回填、开始会议·建桌人、暂停期调整、会议控制/申请暂停/凭证恢复折叠子区块）/
  *       身份体系：普通参与用户 vs systemadmin（系统观察员·全局观察模式，界面金徽章区分，纯只读+正常能力）/
  *       帮助体系：未登录页 agent 接入指引（安装+注册，可复制）、列表页底部帮助速览、右上角帮助弹窗。
  * 安全：所有动态内容经 esc()（文本）/ escAttr()（属性）转义后插入（消息是远端内容，绝不 innerHTML 直插）。
@@ -54,11 +55,6 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   th { color:var(--dim); font-weight:500; font-size:12px; white-space:nowrap; }
   table tr:last-child td { border-bottom:none; }
   table tr:hover td { background:rgba(255,255,255,.02); }
-  .msg { border-left:3px solid var(--line); padding:8px 12px; margin:8px 0; border-radius:0 var(--r) var(--r) 0; background:#141722; transition:border-color var(--tt); }
-  .msg:hover { border-left-color:var(--line-2); }
-  .msg .meta { display:block; color:var(--dim); font-size:12px; margin:3px 0 4px; }
-  .msg > div { overflow-wrap:anywhere; }
-  .msg.inject { border-color:var(--err); background:#241315; }
   .mine { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc) inset; }
   .frm h4 { margin:18px 0 8px; font-size:13px; border-bottom:1px solid var(--line); padding-bottom:5px; }
   .frm h4:first-child { margin-top:0; }
@@ -166,9 +162,9 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .mdv a { color:var(--acc); }
   /* 圆桌示意图（桌详情顶部：席位卡片环绕 + 最后交付摘要 + 发言权思考中标记，>8 席折叠） */
   .rt-wrap { overflow-x:auto; padding-bottom:4px; }
-  .rt-stage { position:relative; width:760px; height:360px; margin:0 auto; }
-  .rt-ell { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:340px; height:140px; border:2px dashed var(--line); border-radius:50%; background:radial-gradient(closest-side,#1c2130,#141722); }
-  .rt-center { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:320px; text-align:center; }
+  .rt-stage { position:relative; width:560px; height:360px; margin:0 auto; }
+  .rt-ell { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:280px; height:140px; border:2px dashed var(--line); border-radius:50%; background:radial-gradient(closest-side,#1c2130,#141722); }
+  .rt-center { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:260px; text-align:center; }
   .rt-topic { font-weight:600; font-size:14px; }
   .rt-turn { color:var(--acc); font-weight:600; margin-top:2px; }
   .rt-node { position:absolute; width:128px; transform:translate(-50%,-50%); z-index:1; }
@@ -229,8 +225,8 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .lgd .collaborator { color:var(--vote); }
   .lgd .host { color:#c9a227; }
   .lgd .observer { color:var(--dim); }
-  /* 详情页左右分栏：左≈40%（观点与过程），右≈60%（我的操作与交付）；窄屏退单列 */
-  .dcols { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,3fr); gap:0 14px; align-items:start; }
+  /* 详情页左右分栏：左右等宽 1:1（左=会话与席位档案，右=示意图+我的操作与交付）；窄屏退单列 */
+  .dcols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 14px; align-items:start; }
   .dcol { min-width:0; }
   @media (max-width:980px) { .dcols { grid-template-columns:1fr; } }
   /* 合并流类型筛选条（平铺胶囊多选 + 全选） */
@@ -255,6 +251,36 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   /* 问答卡（问询桌详情页通栏）：点击弹完整问答，交互样式与请求卡一致 */
   .qa-item { cursor:pointer; }
   .qa-item:hover { border-color:var(--acc); background:#20263a; }
+  /* chatbox 会话视图：己方右侧蓝气泡 / 其他方左侧（角色色左边条）/ 系统提示居中灰胶囊 */
+  .cb-list { max-height:460px; overflow:auto; display:flex; flex-direction:column; gap:8px; padding:2px 2px 4px; }
+  .cb-row { display:flex; gap:8px; align-items:flex-start; }
+  /* 行容器不继承全局 .mine（旧历史面板"给我的指令"高亮）的 inset 蓝描边——我方样式只落在气泡上 */
+  .cb-row.mine { flex-direction:row-reverse; border:none; box-shadow:none; }
+  .cb-bubble { max-width:80%; border:1px solid var(--line); border-radius:10px; padding:7px 11px; background:var(--panel-2); overflow-wrap:anywhere; }
+  .cb-row.other .cb-bubble { border-left:3px solid var(--line); border-top-left-radius:3px; }
+  .cb-bubble.role-proposer { border-left-color:var(--acc); }
+  .cb-bubble.role-reviewer { border-left-color:var(--ok); }
+  .cb-bubble.role-collaborator { border-left-color:var(--vote); }
+  .cb-bubble.role-host { border-left-color:#c9a227; }
+  .cb-bubble.role-answerer { border-left-color:var(--ok); }
+  .cb-bubble.role-asker { border-left-color:var(--acc); }
+  .cb-row.mine .cb-bubble { background:#1d2b49; border-top-right-radius:3px; }
+  .cb-who { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--dim); margin-bottom:3px; flex-wrap:wrap; }
+  .cb-who .rb { font-size:11px; padding:0 6px; }
+  .cb-meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--dim); margin-top:4px; }
+  .cb-sys { align-self:center; max-width:94%; text-align:center; font-size:12px; color:var(--dim); background:var(--panel); border:none; border-radius:99px; padding:3px 14px; overflow-wrap:anywhere; }
+  .cb-empty { align-self:center; color:var(--dim); font-size:12px; padding:18px 0; }
+  /* 折叠子区块（我的席位：会议控制/申请暂停/凭证恢复；状态抗轮询重渲染由 view.seatOpen 承载） */
+  details.sec { border:1px solid var(--line); border-radius:var(--r); background:var(--panel-2); margin:10px 0 0; }
+  details.sec summary { cursor:pointer; padding:8px 12px; font-size:13px; font-weight:600; display:flex; gap:8px; align-items:center; list-style:none; user-select:none; }
+  details.sec summary::-webkit-details-marker { display:none; }
+  details.sec summary::before { content:'▸'; color:var(--dim); font-size:11px; transition:transform var(--tt); }
+  details.sec[open] summary::before { transform:rotate(90deg); }
+  details.sec summary .dim { font-weight:400; }
+  details.sec .sec-body { padding:2px 12px 12px; }
+  /* composer 输入聚合：类型芯片 + 互斥类型组（切换只改 display，草稿不丢） */
+  .cmp-grp { margin-top:10px; }
+  .cmp-grp h3 { margin:0 0 6px; }
   /* 时间线阶段分隔条（回合过程轴：阶段变更不再是普通消息条） */
   .phasediv { display:flex; align-items:center; gap:10px; margin:12px 0 8px; font-size:12px; }
   .phasediv::before,.phasediv::after { content:''; flex:1; height:1px; background:var(--line); }
@@ -292,7 +318,10 @@ var TOKEN = localStorage.getItem('rt_token') || '';
 var view = { mode:'intro', tableId:null, timer:null, lastDetailJson:'', lastDetailData:null,
   userName: localStorage.getItem('rt_user_name') || '', userId: localStorage.getItem('rt_user_id') || '',
   role: localStorage.getItem('rt_role') || 'user',
-  listFilter:'all', listTables:[], dirtyPanel:false, cfgEditing:false, dsDraft:[], msgFilter:'all', rtExpanded:false, qaPairs:[] };
+  listFilter:'all', listTables:[], dirtyPanel:false, cfgEditing:false, dsDraft:[], rtExpanded:false, qaPairs:[],
+  /* 会话视图与输入聚合：chatFilter 气泡筛选 / cmpType 当前输入类型 / seatOpen 折叠子区块开合（抗轮询重渲染）/
+     chatAtBottom+cbPrevTop 会话滚动贴底与回位 */
+  chatFilter:'all', cmpType:'', seatOpen:{}, chatAtBottom:true, cbPrevTop:0 };
 
 /* ---------- 常量映射 ---------- */
 var PHASE_LABEL = { open:'设定中', qa:'问答', statements:'提案陈述', review:'评审', response:'回应评审', execution:'执行修改', convergence:'共识表决', human_intervention:'人工介入', closed:'已结束' };
@@ -307,37 +336,60 @@ function phaseLabel(tt, ph){ var d = ttOf(tt); return (d.phaseLabels && d.phaseL
 var STEP_DEFS = [['open','设定'],['statements','陈述'],['review','评审'],['response','回应'],['execution','执行'],['convergence','表决'],['closed','结束']];
 var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交', MEETING_PAUSED:'会议暂停', MEETING_RESUMED:'继续会议', PAUSE_REQUESTED:'暂停申请' };
 var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st', MEETING_PAUSED:'mt-req', MEETING_RESUMED:'mt-phase', PAUSE_REQUESTED:'mt-human' };
-var MSG_KEY = { PHASE_CHANGE:1, ARTIFACT_PUBLISHED:1, DOC_UPLOADED:1, CONSENSUS_RESULT:1, MINUTES:1, REQUEST:1, RESPOND_REQUEST:1, HOST_PREREVIEW:1, MEETING_PAUSED:1, MEETING_RESUMED:1, PAUSE_REQUESTED:1 };
+var CHAT_SPEECH={STATEMENT:1,REVIEW_COMMENT:1,RESPONSE:1,SUPPLEMENT:1,CONSENSUS_VOTE:1,ARTIFACT_PUBLISHED:1,REQUEST:1,RESPOND_REQUEST:1,QUESTION:1,REPLY:1};
+var CHAT_HUMAN_MSG={HUMAN_INPUT:1,HUMAN_RULING:1,ESCALATE:1};
+var CHAT_VIEWS=[['all','全部'],['speech','发言'],['human','指令'],['sys','系统']];
+function chatShow(m){
+  var v=view.chatFilter||'all';
+  if(v==='all') return true;
+  if(v==='speech') return !!CHAT_SPEECH[m.type];
+  if(v==='human') return !!CHAT_HUMAN_MSG[m.type];
+  return !CHAT_SPEECH[m.type]&&!CHAT_HUMAN_MSG[m.type];
+}
+/* 详情页阶段（prep 准备 / ready 就绪待开始 / running 进行中 / paused 暂停 / ended 结束）：
+   派生自 phase + 就绪度，驱动模块显隐与主题卡阶段徽章 */
+var STAGE_LABEL={prep:'准备中',ready:'全员就绪 · 待开始',running:'进行中',paused:'已暂停',ended:'已结束'};
+function stageOf(t,seats){
+  if(t.phase==='closed') return 'ended';
+  if(t.phase==='open'){
+    var need,rolesOk;
+    if(ttOf(t.tableType).flow==='inquiry'){
+      need=seats.filter(function(s){ return s.role==='answerer'; });
+      rolesOk=need.length>0;
+    }else{
+      need=seats.filter(function(s){ return s.role!=='host'; });
+      rolesOk=seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; });
+    }
+    return (rolesOk&&need.length>0&&need.every(function(s){ return s.config&&s.config.ready; }))?'ready':'prep';
+  }
+  if(t.pause) return 'paused';
+  return 'running';
+}
 var PRV_LABEL = { pass:'通过', redirect:'点名补充', skipped:'跳过（放行）' };
 var SEV_LABEL = { must:'必须', should:'建议', nice:'可选' };
-var MSG_HUMAN = { HUMAN_INPUT:1, HUMAN_RULING:1, ESCALATE:1, QUESTION:1, REPLY:1 };
-/* 合并流视图预设（view.msgFilter）：all 全选 / msg 会议历史 / chg 变动记录 / key 关键节点 / human 人工相关 */
-var MF_VIEWS=[['all','全选'],['msg','会议历史'],['chg','变动记录'],['key','关键节点'],['human','人工相关']];
-function mfShow(it){
-  var v=view.msgFilter||'all';
-  if(v==='all') return true;
-  if(v==='msg') return it.isMsg;
-  if(v==='chg') return !it.isMsg;
-  if(v==='key') return it.isMsg?!!MSG_KEY[it.ref.type]:(it.ref.kind==='phase'||it.ref.kind==='artifact'||it.ref.kind==='doc');
-  return it.isMsg?!!MSG_HUMAN[it.ref.type]:(it.ref.kind==='human');
-}
-/* 变动记录（recentChanges，与 agent 回合刷新的 changes 同源） */
-var CHG_LABEL = { doc:'资料', artifact:'产物', phase:'阶段', seat:'席位', human:'人工', pause:'暂停', message:'消息' };
-var CHG_CLS = { doc:'mt-sys', artifact:'mt-sys', phase:'mt-phase', seat:'mt-sys', human:'mt-human', pause:'mt-req', message:'mt-q' };
-function chgSummary(c,seats){
-  var k=c.kind;
-  if(k==='doc') return (c.doc?esc(c.doc.name):'')+' — '+(c.doc?esc(c.doc.purpose):'')+'（'+(c.doc&&c.doc.visibility==='private'?'私有·仅本席':'共享·全桌可读')+'，'+fmtSize(c.doc&&c.doc.size||0)+'）';
-  if(k==='artifact') return esc(c.name||'')+' v'+(c.version||'?')+' — '+esc(c.changeNote||'');
-  if(k==='phase') return (PHASE_LABEL[c.from]||c.from||'')+' → '+(PHASE_LABEL[c.to]||c.to||'')+'（'+esc(c.reason||'')+'）';
-  if(k==='seat') return esc(c.seatName||'')+(c.role?'（'+(ROLE_LABEL[c.role]||c.role)+'）':'')+(c.what==='join'?' 入席':(c.what==='config'?' 更新入桌设定':' 退席'));
-  if(k==='human') return '人工指令'+(c.toSeat?' → '+esc(seatName(seats,c.toSeat)):'')+(c.byHuman?'（'+esc(c.byHuman)+'）':'');
-  if(k==='pause'){
-    var who=(c.byName?esc(c.byName):'')+(c.byRole?'（'+(ROLE_LABEL[c.byRole]||c.byRole)+'）':'');
-    if(c.what==='request') return who+' 申请暂停'+(c.reason?(' — '+esc(c.reason)):'')+'，等待主持人/建桌人/系统管理员同意';
-    if(c.what==='pause') return '会议暂停 by '+who+(c.reason?(' — '+esc(c.reason)):'')+'；各方补充信息/调整立场后重新就绪';
-    return '继续会议 by '+who;
+/** 消息 → 展示正文（chatbox 气泡渲染用；HOST_PREREVIEW 点名带席位名） */
+function msgBodyText(m,seats){
+  var p=m.payload||{}, body='';
+  if(typeof p.text==='string') body=p.text;
+  else if(p.items){ try{ body=p.items.map(function(it){ return (it.target||'')+'：'+(it.comment||it.decision||''); }).join('；'); }catch(e){} }
+  else if(m.type==='PHASE_CHANGE') body=(PHASE_LABEL[p.from]||p.from||'')+' → '+(PHASE_LABEL[p.to]||p.to||'')+'（'+(p.reason||'')+'）';
+  else if(m.type==='REQUEST') body=p.title+'：'+(p.detail||'');
+  else if(m.type==='RESPOND_REQUEST') body=(p.requestIds&&p.requestIds.length?('批量 '+p.requestIds.length+' 个请求·'):'')+p.decision+(p.reason?'：'+p.reason:'');
+  else if(m.type==='ARTIFACT_PUBLISHED') body=(p.name||'')+' v'+((p.version&&p.version.v)||'?')+' — '+((p.version&&p.version.changeNote)||'');
+  else if(m.type==='DOC_UPLOADED') body=(p.doc&&p.doc.name||'')+' — '+(p.doc&&p.doc.purpose||'')+'（'+(p.doc&&p.doc.visibility==='private'?'私有·仅本席':'共享·全桌可读')+'，'+fmtSize(p.doc&&p.doc.size||0)+'）';
+  else if(m.type==='CONSENSUS_RESULT') body='pass='+(p.pass?'是':'否');
+  else if(m.type==='HOST_PREREVIEW'){
+    body='【'+(PRV_LABEL[p.verdict]||p.verdict)+'】'+(p.note||'');
+    if(p.issues&&p.issues.length) body+='　问题：'+p.issues.map(function(x){ return '['+(SEV_LABEL[x.severity]||x.severity)+'] '+(x.comment||''); }).join('；');
+    if(p.targetSeatId) body+='　→ 点名 '+(seatName(seats,p.targetSeatId));
   }
-  return MT_LABEL[c.type]||c.type||'';
+  else if(m.type==='SUPPLEMENT') body=(p.text||'');
+  else if(m.type==='MEETING_PAUSED') body='会议暂停 by '+(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）'+(p.via==='request'&&p.requestedByName?('，经 '+p.requestedByName+' 申请'):'')+(p.reason?('：'+p.reason):'')+'；'+(p.note||'');
+  else if(m.type==='MEETING_RESUMED') body='继续会议 by '+(p.byName||'')+'，恢复到「'+(PHASE_LABEL[p.phase]||p.phase||'')+'」'+(p.forced?'［强制 · 跳过就绪检查］':'');
+  else if(m.type==='PAUSE_REQUESTED') body=(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）申请暂停'+(p.reason?('：'+p.reason):'')+' — 等待 主持人/建桌人/系统管理员 同意';
+  else if(m.type==='MINUTES') body='纪要已生成（全文见「会议纪要」区）';
+  else { try{ body=JSON.stringify(p).slice(0,200); }catch(e){} }
+  return body;
 }
 var SCOPE_PRESETS = ['全部内容均可讨论', '仅限本次产物范围内讨论'];
 var DS_PRESETS = ['docs/', 'packages/', 'README.md', '本桌全部产物'];
@@ -619,17 +671,19 @@ function helpBodyHtml(){
     +'<li><b>观察方</b>（observer）：只读旁听，无表决权。</li></ul>'
     +'<h4>暂停与继续</h4>'
     +'<ul><li>进行中的会议可暂停：主持人 / 建桌人 / 系统管理员在桌详情「会议控制」直接暂停；其他席位可「申请暂停」，待其同意后生效（问询桌由问询方控制）；</li>'
-    +'<li>暂停期发言与阶段推进冻结：各方在「我的席位」补充信息、调整立场后勾选「重新就绪」（无需补充的席位保持就绪即可）；全员就绪后控制人点「▶ 继续会议」恢复到原阶段，系统管理员可强制继续。</li></ul>'
+    +'<li>暂停期发言与阶段推进冻结：各方在「会话」输入框补充信息、在「我的席位」调整立场后勾选「重新就绪」（无需补充的席位保持就绪即可）；全员就绪后控制人点「▶ 继续会议」恢复到原阶段，系统管理员可强制继续。</li></ul>'
     +'<h4>agent 接入（安装技能 + 注册用户）</h4>'
     +'<p>把下面指令整体复制给你的 agent，它会自动完成接入：</p>'
     +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
     +'<div class="row"><button id="hpAgentCopy" class="primary">复制 agent 接入指令</button></div>'
     +'<h4>观察端常用操作</h4>'
-    +'<ul><li><b>公开补充</b>：桌详情「我的席位 · 公开补充信息」，以人工指令发给本席 agent，全桌可见（进入会议记录），可定向；</li>'
-    +'<li><b>私有指令</b>：桌详情「我的席位 · 私有指令」，异步传给本席 agent 的策略立场/调整信息——只有你的 agent 能收到，不进会议记录，观察者与系统管理员均不可见；agent 将其作为你的高可信指令执行，处理确认后不再重复下发；</li>'
-    +'<li><b>人工代答</b>：轮到你的席位时，桌详情出现「替我回答本轮」表单，替 agent 作答后本轮不会重复作答；</li>'
+    +'<ul><li><b>会话视图</b>：桌详情「会话」区按聊天窗口展示各方发言（我方右侧 / 其他方左侧 / 系统提示居中），可按 全部 / 发言 / 指令 / 系统筛选；</li>'
+    +'<li><b>会话输入框</b>：会话区下方的输入框聚合了各类型输入（公开补充 / 私有指令 / 人工指令，轮到你席位时出现「代答」，问询方在问答期出现「提问」），点类型芯片切换，各类型草稿互不影响；</li>'
+    +'<li><b>公开补充</b>：会话输入框选「公开补充」，发给本席 agent，全桌可见（进入会议记录）；</li>'
+    +'<li><b>私有指令</b>：会话输入框选「私有指令」，异步传给本席 agent 的策略立场/调整信息——只有你的 agent 能收到，不进会议记录，观察者与系统管理员均不可见；agent 将其作为你的高可信指令执行，处理确认后不再重复下发；已发记录与送达状态见「我的席位 · 私有指令记录」；</li>'
+    +'<li><b>人工代答</b>：轮到你的席位时，会话输入框出现「替我回答本轮」（代答），替 agent 作答后本轮不会重复作答；</li>'
     +'<li><b>资料投屏</b>：桌详情上传资料文档（共享 = 全桌可下载，agent 会自动下载阅读；私有 = 仅本席）；</li>'
-    +'<li><b>问询桌提问</b>：问询方在桌详情随时提问（广播全体回答方或定向某席各自作答），问完「结束问询」自动生成问询纪要；</li>'
+    +'<li><b>问询桌提问</b>：问询方在会话输入框选「提问」（广播全体回答方或定向某席各自作答），问完「结束问询」自动生成问询纪要；</li>'
     +'<li><b>分享详情页</b>：桌详情右上「复制本页链接」，他人打开直达本桌（未登录会先引导连接，登录后自动进入）；</li>'
     +'<li><b>凭证恢复 / 替代 agent</b>：我的席位面板可复制参会配置给新 agent（恢复），或吊销原 agent 全部凭证换新（替代）。</li></ul>'
     +'<h4>凭证与安全</h4>'
@@ -753,7 +807,7 @@ function roundDiagramHtml(d,seats,turn){
   var ringSeats=folded?sorted.slice(0,RING_MAX-1):sorted;
   var hidden=folded?sorted.slice(RING_MAX-1):[];
   var slots=ringSeats.length+(folded?1:0);
-  var CX=380, CY=180, RX=296, RY=110;
+  var CX=280, RX=210, RY=110;
   /* 九宫格方位（1左上 2正上 3右上 4左中 6右中 7左下 8正下 9右下；5=桌面）：
      左右列成对展开——每列 1 席=中、2 席=上下角、3 席=角+中、4 席再补正上（左）/正下（右）；正上/正下最后启用 */
   var GRID={ '1':[-0.707,-0.707], '2':[0,-1], '3':[0.707,-0.707], '4':[-1,0], '6':[1,0], '7':[-0.707,0.707], '8':[0,1], '9':[0.707,0.707] };
@@ -764,13 +818,18 @@ function roundDiagramHtml(d,seats,turn){
     return (left[L]||[]).concat(right[R]||[]);
   }
   var gslots=gridSlots(slots);
+  /* 高度按实际占用行分档（席位少时压缩上下空白）：仅中行 180 / 含上下角 290 / 含正上正下 360；CY 随档位垂直居中 */
+  var gys=gslots.map(function(k){ return GRID[k][1]; });
+  var gspan=Math.max.apply(null,gys)-Math.min.apply(null,gys);
+  var STAGE_H=gspan>=1.9?360:(gspan>=0.5?290:180);
+  var CY=STAGE_H/2;
   var h='<div class="card"><div class="shead"><b>圆桌示意图</b>'
     +'<span class="dim">'+(folded
       ?('共 '+seats.length+' 席 · 九宫格方位优先显示发言权/建桌人/最近发言的前 '+(RING_MAX-1)+' 席')
       :(seats.length+' 席全员就座'))
     +'</span><span class="sp"></span>'
     +'<span class="dim lgd"><i class="proposer">●</i>提案方<i class="reviewer">●</i>评审方<i class="collaborator">●</i>协作者<i class="host">●</i>主持人<i class="observer">●</i>观察方<span>· 思考进度 = 当前发言权</span></span></div>'
-    +'<div class="rt-wrap"><div class="rt-stage">'
+    +'<div class="rt-wrap"><div class="rt-stage" style="height:'+STAGE_H+'px">'
     +'<div class="rt-ell"></div>'
     +'<div class="rt-center"><div class="rt-topic">'+esc(clipStr(t.topic,18))+'</div>'
     +'<div style="margin:4px 0">'+phaseBadge(t.phase,t.roundNo,t.tableType)+'</div>';
@@ -945,7 +1004,7 @@ function renderList(){
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
     +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
     +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再做账号准备：已注册的持有人直接把「账号凭证」（右上角可复制）发给 agent；未注册的由 agent 注册并把登录 token 交给持有人——两边同一账号。</div>'
-    +'<div class="kv"><span class="k">介入</span>桌详情可给本席 agent 发公开补充（可定向）或私有指令（仅本席 agent 可见）、轮到本席时可人工代答、可上传投屏资料（共享=全桌可读）、可恢复 / 替代 agent 凭证。</div>'
+    +'<div class="kv"><span class="k">介入</span>桌详情「会话」区看各方发言（我方右侧/其他方左侧/系统居中），其下输入框可切换 公开补充（可定向）/ 私有指令（仅本席 agent 可见）/ 人工指令，轮到本席时可代答；另可上传投屏资料（共享=全桌可读）、恢复 / 替代 agent 凭证。</div>'
     +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
   app.innerHTML=h;
   app.querySelectorAll('.tcard').forEach(function(el){ el.onclick=function(){ openTable(el.getAttribute('data-tid')); }; });
@@ -1343,7 +1402,7 @@ function stepsHtml(phase, tt, pause){
     var viaReq=(pause.via==='request'&&pause.requestedByName)?('（经 '+esc(pause.requestedByName)+' 申请）'):'';
     h+='<div class="banner warn" style="margin:10px 0 6px"><b>⏸ 会议已暂停</b> — 由 '+esc(pause.byName)+'（'+esc(ROLE_LABEL[pause.byRole]||pause.byRole)+'）于 '+fmtTs(pause.pausedAt)+' 暂停'+viaReq
       +(pause.reason?('：'+esc(pause.reason)):'')
-      +'<div class="dim" style="margin-top:3px">各方持有人：在「我的席位」人工补充或调整立场（保存时勾选「重新就绪」）、给本席 agent 发指令补充信息；无需补充的席位保持就绪即可。全员就绪后，由 主持人 / 建桌人 / 系统管理员 在网页继续会议。</div></div>';
+      +'<div class="dim" style="margin-top:3px">各方持有人：在「我的席位」调整立场（保存时勾选「重新就绪」）、在「会话」输入框给本席 agent 发指令补充信息；无需补充的席位保持就绪即可。全员就绪后，由 主持人 / 建桌人 / 系统管理员 在网页继续会议。</div></div>';
   }
   h+='<div class="steps">';
   defs.forEach(function(s,i){
@@ -1379,12 +1438,189 @@ function seatCfgFormHtml(cfg, pausedMode){
     +'</div></div>';
 }
 
+/* ---------- 我的席位折叠子区块（会议控制 / 申请暂停 / 凭证恢复）----------
+   内容与元素 id 和旧版长面板一致（绑定不动），仅收纳为可折叠子区块；开合状态存 view.seatOpen 抗轮询重渲染 */
+function ctlBodyHtml(t,seats){
+  if(t.pause){
+    var ctlSeats=seats.filter(function(s){ return s.role!=='host'; });
+    var ctlReady=ctlSeats.filter(function(s){ return s.config&&s.config.ready; });
+    var ctlAll=ctlSeats.length>0&&ctlReady.length===ctlSeats.length;
+    var h='';
+    ctlSeats.forEach(function(s){
+      h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
+    });
+    h+='<div class="row" style="margin-top:8px"><button id="ctlResume" class="primary"'+(ctlAll?'':' disabled')+'>▶ 继续会议</button>'
+      +'<span class="dim">恢复到「'+esc(phaseLabel(t.tableType,t.phase))+'」继续；需全员就绪（系统管理员可强制继续）</span></div>'
+      +'<div class="ferr" id="ctlErr"></div>';
+    return h;
+  }
+  return '<div class="row"><input id="ctlPauseReason" placeholder="暂停原因（进入会议记录，可空）" style="flex:1;min-width:180px">'
+    +'<button id="ctlPause">⏸ 暂停会议</button></div>'
+    +'<div class="hint" style="margin-top:4px">暂停后各方可在「会话」输入框补充信息、在上方调整立场并重新就绪；全员就绪后在这里继续会议。</div>'
+    +'<div class="ferr" id="ctlErr"></div>';
+}
+function prBodyHtml(){
+  return '<div class="row"><input id="prReason" placeholder="申请原因（给主持人/建桌人/系统管理员看，可空）" style="flex:1;min-width:180px">'
+    +'<button id="prApply">申请暂停会议</button></div>'
+    +'<div class="hint" style="margin-top:4px">申请将通知 主持人/建桌人/系统管理员，其在网页同意后会议暂停；届时各席（含本席）可补充信息/调整立场后重新就绪。</div>'
+    +'<div class="ferr" id="prErr"></div>';
+}
+function credBodyHtml(){
+  return '<div class="hint" style="margin-bottom:6px">agent 被关闭或要换新 agent？「恢复」复制参会配置（原凭证保留），粘贴到新 agent 会话即以原席位身份继续；「替代」同时禁用原 agent 的全部凭证（即使它仍在运行，下次请求即失效）。</div>'
+    +'<div class="row"><button id="stRecover">复制参会配置（恢复）</button>'
+    +'<input id="stNewLabel" placeholder="新 agent 标识（替代时选填）" style="width:200px">'
+    +'<button id="stReplace" class="danger">替代 agent（禁用原凭证）</button></div>'
+    +'<div class="ferr" id="stErr"></div>';
+}
+function secDetailsHtml(id,title,sub,body,open){
+  return '<details class="sec" id="'+id+'"'+(open?' open':'')+'><summary>'+esc(title)+(sub?('<span class="dim">'+esc(sub)+'</span>'):'')+'</summary><div class="sec-body">'+body+'</div></details>';
+}
+/* 纯视图重渲染（筛选芯片/示意图折叠）前后的输入值采集回填：防止这类重渲染丢输入草稿 */
+function harvestInputs(sel){
+  var o={}, root=document.querySelector(sel);
+  if(!root) return o;
+  root.querySelectorAll('input[id],select[id],textarea[id]').forEach(function(el){ o[el.id]=(el.type==='checkbox')?el.checked:el.value; });
+  return o;
+}
+function restoreInputs(o){
+  if(!o) return;
+  Object.keys(o).forEach(function(id){
+    var el=document.getElementById(id);
+    if(!el) return;
+    if(el.type==='checkbox') el.checked=o[id]; else el.value=o[id];
+  });
+}
+function rerenderDetail(){
+  var keep=harvestInputs('#app');
+  renderDetail(view.lastDetailData);
+  restoreInputs(keep);
+}
+
+/* ---------- 会话视图（chatbox）+ 输入聚合（composer） ----------
+   气泡归属：fromSeat=本席（或 isAsker 的 asker）→ 右侧；server → 居中系统；其余 → 左侧带席位名/角色色。
+   composer：按身份与阶段提供 代答/提问/公开补充/私有指令/人工指令 类型组，芯片切换只改 display（不重渲染，草稿保留）。 */
+function chatboxCardHtml(d,seats,mySeat,isAsker){
+  var t=d.table, stage=stageOf(t,seats), turn=t.activeTurn;
+  var chips='';
+  CHAT_VIEWS.forEach(function(v){
+    chips+='<button class="fbtn'+(((view.chatFilter||'all')===v[0])?' on':'')+'" data-cf="'+v[0]+'">'+v[1]+'</button>';
+  });
+  var h='<div class="card" id="chatCard"><div class="shead"><b>会话</b><span class="dim">各方发言与系统提示 · 我方右侧 / 其他方左侧 / 系统居中</span><span class="sp"></span>'
+    +'<div class="tbar" style="margin:0">'+chips+'</div></div><div class="cb-list" id="cbList">';
+  var shown=0;
+  (d.messages||[]).forEach(function(m){
+    if(m.type==='PHASE_CHANGE'){
+      h+='<div class="phasediv"><span>'+esc(msgBodyText(m,seats)).slice(0,400)+'<span class="dim"> · '+fmtTs(m.ts)+'</span></span></div>';
+      return;
+    }
+    /* 席位变动（入席/设定更新/退席）是结构性事件：当前态见「席位与立场」，不作为系统消息混入会话流 */
+    if(m.type==='SEAT_JOINED'||m.type==='SEAT_LEFT') return;
+    if(!chatShow(m)) return;
+    shown++;
+    var p=m.payload||{}, body=msgBodyText(m,seats);
+    if(m.fromSeat==='server'){
+      h+='<div class="cb-sys" title="#'+m.seq+'">'+esc(clipStr(body,220))+'</div>';
+      return;
+    }
+    var mine=(m.fromSeat===d.mySeatId)||(isAsker&&m.fromSeat==='asker');
+    var role=mine?(mySeat?mySeat.role:'asker'):seatRoleOf(seats,m.fromSeat);
+    var toMe=(m.type==='HUMAN_INPUT'&&p.toSeat===d.mySeatId&&!mine);
+    var proxied=(m.flags&&m.flags.indexOf&&m.flags.indexOf('human_proxied')>=0);
+    var inject=(m.flags&&m.flags.indexOf&&m.flags.indexOf('injection_suspect')>=0);
+    h+='<div class="cb-row '+(mine?'mine':'other')+'">'
+      +'<div class="cb-bubble role-'+esc(role||'observer')+'">'
+      +'<div class="cb-who">'+(mine?'<b>我</b>':'<b>'+esc(seatName(seats,m.fromSeat))+'</b>')+roleBadge(role)
+      +'<span class="mt '+(MT_CLS[m.type]||'')+'">'+esc(MT_LABEL[m.type]||m.type)+'</span>'
+      +(proxied?'<span class="badge warn">人工代答</span>':'')
+      +(toMe?'<span class="badge phase">给我的指令</span>':'')
+      +(inject?'<span class="badge err">疑似注入</span>':'')
+      +'</div>'
+      +(body.length>500?('<div title="'+escAttr(body)+'">'+esc(clipStr(body,500))+'</div>'):('<div>'+esc(body)+'</div>'))
+      +'<div class="cb-meta">'+fmtTs(m.ts)+' · #'+m.seq+((p.toSeat&&p.toSeat!==m.fromSeat)?(' → '+esc(seatName(seats,p.toSeat))):'')+'</div>'
+      +'</div></div>';
+  });
+  if(!shown) h+='<div class="cb-empty">'+(t.phase==='open'?'（还没有消息：各席完成入席设定并就绪，会议开始后在这里交流）':'（该筛选下暂无消息）')+'</div>';
+  h+='</div>';
+  /* composer：按身份与阶段聚合输入类型（代答仅轮到本席、提问仅问询方问答期） */
+  var types=[];
+  if(mySeat&&t.phase!=='closed') types.push(['supp','公开补充'],['priv','私有指令'],['hi','人工指令']);
+  if(isAsker&&t.phase==='qa'&&!t.pause) types.unshift(['ask','提问']);
+  if(mySeat&&stage==='running'&&turn&&turn.seatId===d.mySeatId&&!t.pause) types.unshift(['proxy','代答']);
+  if(types.length){
+    var cur=view.cmpType, hit=false, ti;
+    for(ti=0;ti<types.length;ti++){ if(types[ti][0]===cur) hit=true; }
+    if(!hit) cur=types[0][0];
+    view.cmpType=cur;
+    var tchips='';
+    types.forEach(function(x){ tchips+='<button class="fbtn'+(x[0]===cur?' on':'')+'" data-ct="'+x[0]+'">'+x[1]+'</button>'; });
+    h+='<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px"><div class="tbar" id="cmpTabs">'+tchips+'</div>';
+    types.forEach(function(x){
+      var g=x[0];
+      h+='<div class="cmp-grp" data-grp="'+g+'"'+(g===cur?'':' style="display:none"')+'>';
+      if(g==='proxy'){
+        h+='<h3>替我回答本轮（人工代答）</h3><div class="dim">'+esc(turn.taskHint||'')+'</div>'
+          +'<div class="row" style="margin-top:6px"><select id="pxType"></select>'
+          +'<select id="pxDecision" style="display:none"></select>'
+          +'<select id="pxSeverity" style="display:none"><option>must</option><option selected>should</option><option>nice</option></select>'
+          +'<input id="pxTarget" placeholder="位置（如 第3节）" style="display:none;width:140px">'
+          +'<label class="chk"><input type="checkbox" id="pxJson"> JSON 模式</label></div>'
+          +'<textarea id="pxText" placeholder="回答内容（按所选类型自动组装 payload）"></textarea>'
+          +'<textarea id="pxJsonBox" placeholder="JSON 模式：整包提交，如 {&quot;type&quot;:&quot;RESPONSE&quot;,&quot;payload&quot;:{&quot;items&quot;:[…]}}" style="display:none;font-family:ui-monospace,Menlo,monospace;min-height:80px"></textarea>'
+          +'<div class="ferr" id="pxErr"></div>'
+          +'<div class="row"><span class="dim">发送后本轮发言权即被消费，agent 不会再重复作答</span>'
+          +'<span class="sp"></span><button id="pxSend" class="primary">代答发送</button></div>';
+      }else if(g==='supp'){
+        h+='<h3>公开补充信息（进入会议记录）</h3>'
+          +'<textarea id="myInstr" placeholder="以 HUMAN_INPUT 发给本席 agent，全桌可见（需要全桌知晓的补充说明，如：接口定义已更新，见第 3 节）"></textarea>'
+          +'<div class="row"><input id="myInstrBy" placeholder="署名（默认用户名）" style="width:160px">'
+          +'<button id="myInstrSend">发送公开补充</button></div>';
+      }else if(g==='priv'){
+        h+='<h3>私有指令（仅本席 agent 可见）</h3>'
+          +'<textarea id="podText" placeholder="高可信持有人指令：不进会议记录，观察者与系统管理员均不可见；agent 作为你的指令执行，可传策略立场或调整信息（如：本轮采取保守立场；重点核对性能章节）"></textarea>'
+          +'<div class="ferr" id="podErr"></div>'
+          +'<div class="row"><button id="podSend" class="primary">发送私有指令</button>'
+          +'<span class="dim">未确认前 agent 每次 poll 都会收到，处理确认后不再重复下发；待送达上限 20 条</span></div>';
+      }else if(g==='hi'){
+        var opts='<option value="">全员（广播）</option>';
+        seats.forEach(function(s){ opts+='<option value="'+esc(s.seatId)+'">→ '+esc(s.name)+'</option>'; });
+        h+='<h3>发送人工指令（以你在本桌的席位身份）</h3><div class="row">'
+          +'<select id="hTarget">'+opts+'</select>'
+          +'<input id="hBy" placeholder="署名（默认你的用户名）" style="width:150px">'
+          +'<span class="sp"></span><button id="hSend" class="primary">发送</button></div>'
+          +'<textarea id="hText" placeholder="人工意见 / 指令 / 裁决说明（将以 HUMAN_INPUT 进入会议记录，agent 在 poll 时可见）" style="margin-top:8px"></textarea>';
+      }else if(g==='ask'){
+        var aopts='<option value="">广播 · 全体回答方各自作答</option>';
+        seats.forEach(function(s){ if(s.role==='answerer') aopts+='<option value="'+esc(s.seatId)+'">定向 · '+esc(s.name)+'</option>'; });
+        h+='<h3>提问（问询方）</h3>'
+          +'<textarea id="askText" placeholder="向回答方提问…（回答方只在各自声明的范围内作答，超范围会明确说明并拒答）"></textarea>'
+          +'<div class="row" style="margin-top:6px"><select id="askTo">'+aopts+'</select><span class="sp"></span><button id="askSend" class="primary">提问</button></div>'
+          +'<div class="ferr" id="askErr"></div>';
+      }
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
 function renderDetail(d){
   var t=d.table, seats=(t.seats||[]).filter(function(s){ return s.status!=='left'; });
   var mySeat=null, i;
   if(d.mySeatId){ for(i=0;i<seats.length;i++){ if(seats[i].seatId===d.mySeatId) mySeat=seats[i]; } }
   var admin=view.role==='systemadmin';
   var isAsker=!!d.isAsker; /* 问询方（建桌人/凭码就位者；可与席位并存——同号用户 web 提问 + 自己的 agent 作答 */
+  var turn=t.activeTurn;
+  var inqFlow=ttOf(t.tableType).flow==='inquiry';
+  var stage=stageOf(t,seats); /* prep/ready/running/paused/ended：驱动模块显隐 */
+  /* 就绪度（open 期面板与就绪进度共用）：问询桌看回答方，其余看非主持人席 + 角色齐备 */
+  var needSeats=inqFlow?seats.filter(function(s){ return s.role==='answerer'; }):seats.filter(function(s){ return s.role!=='host'; });
+  var rolesOk=inqFlow?needSeats.length>0:(seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; }));
+  var allReady=rolesOk&&needSeats.length>0&&needSeats.every(function(s){ return s.config&&s.config.ready; });
+  /* 会话滚动状态采集（重渲染前拿旧容器位置，渲染后回位/贴底）+ composer 草稿采集（重渲染后回填，防发送/轮询丢未发送内容） */
+  var prevCb=document.getElementById('cbList');
+  if(prevCb){ view.cbPrevTop=prevCb.scrollTop; view.chatAtBottom=(prevCb.scrollTop+prevCb.clientHeight>=prevCb.scrollHeight-24); }
+  view.cmpKeep=harvestInputs('#chatCard');
 
   var h='<div class="row"><span class="back" id="back">← 返回列表</span><span class="sp"></span><button id="dCopyLink" class="sm" title="复制可分享的详情页链接">复制本页链接</button><span class="dim">自动刷新中</span></div>';
 
@@ -1400,6 +1636,7 @@ function renderDetail(d){
   h+='<div class="card"><div class="shead"><b style="font-size:16px">'+esc(t.topic)+'</b>'
     +typeBadge(t.tableType)
     +phaseBadge(t.phase,t.roundNo,t.tableType)
+    +(t.phase==='open'?'<span class="badge '+(stage==='ready'?'ok':'warn')+'">'+STAGE_LABEL[stage]+'</span>':'')
     +(t.pause?'<span class="badge warn">⏸ 已暂停</span>':'')
     +(t.mode==='hosted'?'<span class="rb host">主持人模式</span>':'')
     +(t.deadlockCount>0?'<span class="badge err">僵局 '+t.deadlockCount+'</span>':'')
@@ -1410,12 +1647,8 @@ function renderDetail(d){
   h+=stepsHtml(t.phase,t.tableType,t.pause);
   h+='</div>';
 
-  var turn=t.activeTurn;
-  /* 圆桌示意图：席位环绕 + 最后交付摘要 + 发言权思考中标记（>8 席折叠） */
-  h+=roundDiagramHtml(d,seats,turn);
-
   h+='<div class="dcols">';
-  /* ==== 左栏（约40%）：观点与过程 ==== */
+  /* ==== 左栏（与右栏等宽）：会话与席位档案 ==== */
   h+='<div class="dcol dmain">';
   h+='<div class="card"><div class="section turn" style="margin-top:0"><b>下一步动作</b><div style="margin-top:4px">';
   if(t.precheck){
@@ -1435,18 +1668,27 @@ function renderDetail(d){
     h+='发言权：<b>'+esc(seatName(seats,turn.seatId))+'</b> —— '+esc(turn.taskHint||'');
     if(turn.pendingRequest) h+='<div class="dim">待处理请求：'+esc(turn.pendingRequest.title)+'</div>';
   } else if(t.phase==='closed'){ h+='<span class="badge ok">会议已结束</span>'+(d.minutes?' <span class="dim">纪要已生成（见下方纪要区）</span>':''); }
-  else if(t.phase==='human_intervention'){ h+='<span class="dim">等待人工介入（可在下方以席位身份发送 HUMAN_INPUT / HUMAN_RULING）</span>'; }
+  else if(t.phase==='human_intervention'){ h+='<span class="dim">等待人工介入（可在「会话」输入框以席位身份发送人工指令）</span>'; }
+  else if(t.phase==='open'){
+    if(stage==='ready') h+='<span class="badge ok">全员就绪</span> <span class="dim">等待'+(inqFlow?'问询方':'建桌人')+'在右侧面板点「▶ '+(inqFlow?'开始问询':'开始会议')+'」</span>';
+    else{
+      h+='<span class="badge warn">准备中</span> <span class="dim">设定阶段：各席完成入桌设定并就绪'+(rolesOk?'':'（角色不齐备：还需提案方/评审方凭邀请码入席）')+'</span>';
+      h+='<div class="dim" style="margin-top:4px">就绪进度：'+needSeats.filter(function(s){ return s.config&&s.config.ready; }).length+' / '+needSeats.length
+        +(needSeats.length?(' — 未就绪：'+needSeats.filter(function(s){ return !(s.config&&s.config.ready); }).map(function(s){ return esc(s.name); }).join('、')):'')+'</div>';
+    }
+  }
   else { h+='<span class="dim">当前无发言权持有者（等待事件推进或人工介入）</span>'; }
   h+='</div></div></div>';
 
-  /* 各方观点（席位卡：角色色顶条 + 状态/就绪 + 立场摘要 + 最后交付） */
-  var lastOf={};
-  (d.messages||[]).forEach(function(m){ if(m.fromSeat&&m.fromSeat!=='server') lastOf[m.fromSeat]=m; });
-  h+='<div class="card"><div class="shead"><b>各方观点</b><span class="dim">每席立场与最后交付</span><span class="sp"></span>'
-    +(ttOf(t.tableType).flow==='inquiry'?'<span class="rb asker">问询方 · '+esc(view.userName||'')+'</span>':'')
+  /* 会话视图 chatbox（气泡流 + 输入聚合 composer）：置于席位与立场上方 */
+  h+=chatboxCardHtml(d,seats,mySeat,isAsker);
+
+  /* 席位与立场（原「各方观点」精简：最后交付交给会话视图与圆桌示意图，保留立场/就绪/管理员席位操作） */
+  h+='<div class="card"><div class="shead"><b>席位与立场</b><span class="dim">每席立场声明与就绪状态</span><span class="sp"></span>'
+    +(inqFlow?'<span class="rb asker">问询方 · '+esc(view.userName||'')+'</span>':'')
     +'<span class="dim">'+seats.length+' 席就座</span></div><div class="vcards">';
   seats.forEach(function(s){
-    var cfg=s.config||{}, lm=lastOf[s.seatId], di=lastDelivInfo(lm);
+    var cfg=s.config||{};
     h+='<div class="vcard '+esc(s.role)+'">'
       +'<div class="row">'+roleBadge(s.role)+'<b>'+esc(s.name)+'</b>'
       +(s.seatId===t.ownerSeat?'<span class="badge">建桌人</span>':'')
@@ -1456,21 +1698,22 @@ function renderDetail(d){
       +'</div>'
       +'<div class="dim">agent: '+esc(s.agentLabel)+'</div>'
       +'<div class="kv"><span class="k">立场</span><span title="'+escAttr(cfg.stance||'')+'">'+esc((cfg.stance||'').slice(0,60)||'（未填写）')+'</span></div>'
-      +'<div class="kv"><span class="k">交付</span>'+(lm?(esc(di.label)+' <span class="dim">· '+fmtTs(lm.ts)+'</span>'):'<span class="dim">尚未发言</span>')+'</div>'
       +(admin?'<div class="row" style="margin-top:8px"><button class="admCred sm" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">复制配置</button> '
         +'<button class="admRepl sm danger" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">替代 agent</button></div>':'')
       +'</div>';
   });
   h+='</div></div>';
 
-  /* 邀请码（建桌人 or 系统观察员） */
-  if(admin||(mySeat&&mySeat.seatId===t.ownerSeat)){
+  /* 邀请码（建桌人 or 系统观察员；结束后不再展示——闭桌无法再入席） */
+  if(stage!=='ended'&&(admin||(mySeat&&mySeat.seatId===t.ownerSeat))){
     h+='<div class="card" id="inviteBox"><div class="shead"><b>邀请码</b><span class="dim">仅建桌人与系统观察员可见 · 复制的是完整邀请（服务器/圆桌 ID/邀请码/参会步骤），整体转发即可参会</span></div><div id="invites" class="dim" style="margin-top:8px">加载中…</div></div>';
   }
 
   h+='</div>';
-  /* ==== 右栏（约60%）：我的操作与交付 ==== */
+  /* ==== 右栏（与左栏等宽）：圆桌示意图 + 我的操作与交付 ==== */
   h+='<div class="dcol dside">';
+  /* 圆桌示意图（右栏顶部）：席位环绕 + 最后交付摘要 + 发言权思考中标记（>8 席折叠） */
+  h+=roundDiagramHtml(d,seats,turn);
 
   /* ---- 我的席位面板：按阶段/状态条件渲染 ---- */
   if(mySeat){
@@ -1483,11 +1726,12 @@ function renderDetail(d){
       +(isHost?'':'<span class="badge '+(cfg.ready?'ok':'warn')+'">'+(cfg.ready?'已就绪':'未就绪')+'</span>')
       +'<span class="dim">agent: '+esc(mySeat.agentLabel)+'</span></div>';
 
-    if(t.phase==='open'){
+    if(stage==='ended'){
+      h+='<div class="section dim" style="margin-top:10px">会议已结束：纪要在下方「会议纪要」区，会话全文见上方「会话」区（只读）。</div>';
+      /* 结束阶段仅剩凭证恢复一个子块，平铺展示 */
+      h+='<div class="section"><h3>凭证恢复 · 更换 agent</h3>'+credBodyHtml()+'</div>';
+    } else if(t.phase==='open'){
       /* 设定阶段：设定表单 / 摘要 + 建桌人开始按钮（无代答环节——代答自会议开始起才有） */
-      var allReady=seats.filter(function(s){ return s.role!=='host'; }).every(function(s){ return s.config&&s.config.ready; });
-      var rolesOk=seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; });
-
       if(isHost){
         /* 主持人：不做入桌设定，管桌设定（定规则）+ 就绪名单 + 开始 */
         h+='<div class="section"><h3>桌设定（主持人 · 定规则）</h3>'
@@ -1522,90 +1766,35 @@ function renderDetail(d){
       } else if(cfg.ready){
         h+='<div class="section dim">已就绪，等待建桌人开始会议。</div>';
       }
-    } else if(t.phase==='closed'){
-      h+='<div class="section dim">会议已结束：纪要在下方「会议纪要」区。</div>';
+      h+=secDetailsHtml('seatDetPod','私有指令记录','我发出的 · 仅自己可见（发送在「会话」输入框）','<div id="podList" style="margin-top:2px"></div>',false);
+      h+=secDetailsHtml('seatDetCred','凭证恢复 · 更换 agent','复制配置给新 agent / 替代换新',credBodyHtml(),false);
     } else {
-      /* 会议进行中（含暂停态） */
+      /* 会议进行中 / 暂停 / 人工介入：状态行 + 折叠子区块（代答与指令输入在左侧「会话」输入框） */
       if(t.pause){
         /* 暂停期：人工补充或调整主张（保存时勾选「重新就绪」）；主持人无设定，只看控制区 */
         if(isHost){
-          h+='<div class="section dim">会议已暂停：主持人无需设定立场，等待各方补充并重新就绪后，在下方「会议控制」继续会议。</div>';
+          h+='<div class="section dim" style="margin-top:10px">会议已暂停：主持人无需设定立场，等待各方补充并重新就绪后，在「会议控制」继续会议。</div>';
         } else {
           h+=seatCfgFormHtml(cfg,true);
         }
       } else if(turn&&turn.seatId===d.mySeatId){
-        h+='<div class="section"><h3>替我回答本轮（人工代答）</h3><div class="dim">'+esc(turn.taskHint||'')+'</div>'
-          +'<div class="row" style="margin-top:6px"><select id="pxType"></select>'
-          +'<select id="pxDecision" style="display:none"></select>'
-          +'<select id="pxSeverity" style="display:none"><option>must</option><option selected>should</option><option>nice</option></select>'
-          +'<input id="pxTarget" placeholder="位置（如 第3节）" style="display:none;width:140px">'
-          +'<label class="chk"><input type="checkbox" id="pxJson"> JSON 模式</label></div>'
-          +'<textarea id="pxText" placeholder="回答内容（按所选类型自动组装 payload）"></textarea>'
-          +'<textarea id="pxJsonBox" placeholder="JSON 模式：整包提交，如 {&quot;type&quot;:&quot;RESPONSE&quot;,&quot;payload&quot;:{&quot;items&quot;:[…]}}" style="display:none;font-family:ui-monospace,Menlo,monospace;min-height:80px"></textarea>'
-          +'<div class="ferr" id="pxErr"></div>'
-          +'<div class="row"><span class="dim">发送后本轮发言权即被消费，agent 不会再重复作答</span>'
-          +'<span class="sp"></span><button id="pxSend" class="primary">代答发送</button></div></div>';
+        h+='<div class="section dim" style="margin-top:10px">发言权在本席 —— 可在左侧「会话」输入框选「代答」替 agent 回答本轮（'+esc(turn.taskHint||'')+'）。</div>';
       } else {
-        h+='<div class="section dim">'+(turn?('当前发言权：'+esc(seatName(seats,turn.seatId))+'。轮到本席时，这里会出现人工代答表单。'):'等待会议推进。')+'</div>';
+        h+='<div class="section dim" style="margin-top:10px">'+(turn?('当前发言权：'+esc(seatName(seats,turn.seatId))+'。轮到本席时，「会话」输入框会出现「代答」。'):'等待会议推进。')+'</div>';
       }
 
-      /* 申请暂停（未暂停时，非控制人席位；控制人直接用下方「会议控制」的暂停按钮） */
+      /* 会议控制（建桌人/主持人，会议中）：暂停 / 就绪名单 + 继续（暂停中默认展开） */
+      if(isOwner||isHost){
+        h+=secDetailsHtml('seatDetCtl',t.pause?'会议控制（暂停中）':'会议控制','暂停 / 就绪名单 + 继续',ctlBodyHtml(t,seats),!!t.pause);
+      }
+      /* 申请暂停（未暂停时，非控制人席位；控制人直接用「会议控制」的暂停按钮） */
       if(!t.pause&&!(isOwner||isHost)){
-        h+='<div class="section sumcard"><h3 style="margin-top:0">申请暂停</h3>'
-          +'<div class="row"><input id="prReason" placeholder="申请原因（给主持人/建桌人/系统管理员看，可空）" style="flex:1;min-width:180px">'
-          +'<button id="prApply">申请暂停会议</button></div>'
-          +'<div class="hint" style="margin-top:4px">申请将通知 主持人/建桌人/系统管理员，其在网页同意后会议暂停；届时各席（含本席）可补充信息/调整立场后重新就绪。</div>'
-          +'<div class="ferr" id="prErr"></div></div>';
+        h+=secDetailsHtml('seatDetPr','申请暂停','通知控制人，同意后生效',prBodyHtml(),false);
       }
+      /* 凭证恢复 · agent 替代（任何阶段可用——闭桌后也可恢复身份拉纪要） */
+      h+=secDetailsHtml('seatDetPod','私有指令记录','我发出的 · 仅自己可见（发送在「会话」输入框）','<div id="podList" style="margin-top:2px"></div>',false);
+      h+=secDetailsHtml('seatDetCred','凭证恢复 · 更换 agent','复制配置给新 agent / 替代换新',credBodyHtml(),false);
     }
-
-    /* 会议控制（建桌人/主持人，会议中）：暂停 / 就绪名单 + 继续 */
-    if((isOwner||isHost)&&t.phase!=='open'&&t.phase!=='closed'){
-      if(t.pause){
-        var ctlSeats=seats.filter(function(s){ return s.role!=='host'; });
-        var ctlReady=ctlSeats.filter(function(s){ return s.config&&s.config.ready; });
-        var ctlAll=ctlSeats.length>0&&ctlReady.length===ctlSeats.length;
-        h+='<div class="section sumcard"><h3 style="margin-top:0">会议控制（暂停中）</h3>';
-        ctlSeats.forEach(function(s){
-          h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
-        });
-        h+='<div class="row" style="margin-top:8px"><button id="ctlResume" class="primary"'+(ctlAll?'':' disabled')+'>▶ 继续会议</button>'
-          +'<span class="dim">恢复到「'+esc(phaseLabel(t.tableType,t.phase))+'」继续；需全员就绪（系统管理员可强制继续）</span></div>'
-          +'<div class="ferr" id="ctlErr"></div></div>';
-      } else {
-        h+='<div class="section sumcard"><h3 style="margin-top:0">会议控制</h3>'
-          +'<div class="row"><input id="ctlPauseReason" placeholder="暂停原因（进入会议记录，可空）" style="flex:1;min-width:180px">'
-          +'<button id="ctlPause">⏸ 暂停会议</button></div>'
-          +'<div class="hint" style="margin-top:4px">暂停后各方可在「我的席位」调整立场 / 给 agent 补充信息并重新就绪；全员就绪后在这里继续会议。</div>'
-          +'<div class="ferr" id="ctlErr"></div></div>';
-      }
-    }
-
-    /* 给己方 agent 的公开补充（HUMAN_INPUT，进会议记录、全桌可见；closed 前始终可用） */
-    if(t.phase!=='closed'){
-      h+='<div class="section"><h3>公开补充信息（进入会议记录）</h3>'
-        +'<textarea id="myInstr" placeholder="以 HUMAN_INPUT 发给本席 agent，全桌可见（需要全桌知晓的补充说明，如：接口定义已更新，见第 3 节）"></textarea>'
-        +'<div class="row"><input id="myInstrBy" placeholder="署名（默认用户名）" style="width:160px">'
-        +'<button id="myInstrSend">发送公开补充</button></div></div>';
-    }
-
-    /* 私有指令：仅本席 agent 可见（不进消息流；观察者/管理员不可见） */
-    if(t.phase!=='closed'){
-      h+='<div class="section"><h3>私有指令（仅本席 agent 可见）</h3>'
-        +'<textarea id="podText" placeholder="高可信持有人指令：不进会议记录，观察者与系统管理员均不可见；agent 作为你的指令执行，可传策略立场或调整信息（如：本轮采取保守立场；重点核对性能章节）"></textarea>'
-        +'<div class="ferr" id="podErr"></div>'
-        +'<div class="row"><button id="podSend" class="primary">发送私有指令</button>'
-        +'<span class="dim">未确认前 agent 每次 poll 都会收到，处理确认后不再重复下发；待送达上限 20 条</span></div>'
-        +'<div id="podList" style="margin-top:8px"></div></div>';
-    }
-
-    /* 凭证恢复 · agent 替代（任何阶段可用——闭桌后也可恢复身份拉纪要） */
-    h+='<div class="section"><h3>凭证恢复 · 更换 agent</h3>'
-      +'<div class="hint" style="margin-bottom:6px">agent 被关闭或要换新 agent？「恢复」复制参会配置（原凭证保留），粘贴到新 agent 会话即以原席位身份继续；「替代」同时禁用原 agent 的全部凭证（即使它仍在运行，下次请求即失效）。</div>'
-      +'<div class="row"><button id="stRecover">复制参会配置（恢复）</button>'
-      +'<input id="stNewLabel" placeholder="新 agent 标识（替代时选填）" style="width:200px">'
-      +'<button id="stReplace" class="danger">替代 agent（禁用原凭证）</button></div>'
-      +'<div class="ferr" id="stErr"></div></div>';
     h+='</div>';
   }
   /* ---- 问询方面板：open=就绪名单+开始问询；qa=提问+结束问询+会议控制。
@@ -1629,12 +1818,7 @@ function renderDetail(d){
       if(t.pause){
         h+='<div class="banner warn" style="margin-top:8px">问询已暂停：提问与作答冻结；回答方调整/补充并重新就绪后，在下方「会议控制」继续。</div>';
       } else {
-        h+='<div class="section"><h3>提问</h3>'
-          +'<textarea id="askText" placeholder="向回答方提问…（回答方只在各自声明的范围内作答，超范围会明确说明并拒答）"></textarea>'
-          +'<div class="row" style="margin-top:6px"><select id="askTo"><option value="">广播 · 全体回答方各自作答</option>'
-          +ansSeats.map(function(s){ return '<option value="'+escAttr(s.seatId)+'">定向 · '+esc(s.name)+'</option>'; }).join('')
-          +'</select><span class="sp"></span><button id="askSend" class="primary">提问</button></div>'
-          +'<div class="ferr" id="askErr"></div></div>';
+        h+='<div class="section dim" style="margin-top:10px">提问：在左侧「会话」输入框选「提问」——可广播全体回答方各自作答，或定向某席。</div>';
       }
       h+='<div class="section sumcard"><h3 style="margin-top:0">结束问询</h3>'
         +'<div class="dim">结束后自动生成问询纪要（问答对汇总 + 各回答方范围声明），本桌转为只读。</div>'
@@ -1690,14 +1874,16 @@ function renderDetail(d){
       +'<div class="hint" style="margin-top:6px">暂停/继续与参与方网页操作同源（记入会议记录与审计）；强制闭桌 = 立即生成纪要并结束（不可恢复）；删除 = 连同消息/产物/席位全部清除（轮询中的 agent 将收到 404）。</div></div>';
   }
 
-  /* 产物（交付卡） */
-  h+='<div class="card"><div class="shead"><b>产物</b><span class="dim">交付物版本</span><span class="sp"></span><span class="dim">'+(t.artifacts||[]).length+' 项</span></div><div class="cards">';
-  (t.artifacts||[]).forEach(function(a){
-    h+='<div class="acard"><div class="row"><b>'+esc(a.name)+'</b><span class="badge phase">v'+a.latestVersion+'</span><span class="sp"></span><span class="dim">'+esc(seatName(seats,a.ownerSeat))+'</span></div>'
-      +(a.lockedBy?'<div class="dim">锁：'+esc(seatName(seats,a.lockedBy))+'</div>':'')+'</div>';
-  });
-  if(!(t.artifacts||[]).length) h+='<div class="dim">暂无产物</div>';
-  h+='</div></div>';
+  /* 产物（交付卡）：设定阶段尚无产物，开始后才展示（结束后保留作记录）；问询桌流程上不产生产物，恒不渲染 */
+  if(t.phase!=='open'&&ttOf(t.tableType).flow!=='inquiry'){
+    h+='<div class="card"><div class="shead"><b>产物</b><span class="dim">交付物版本</span><span class="sp"></span><span class="dim">'+(t.artifacts||[]).length+' 项</span></div><div class="cards">';
+    (t.artifacts||[]).forEach(function(a){
+      h+='<div class="acard"><div class="row"><b>'+esc(a.name)+'</b><span class="badge phase">v'+a.latestVersion+'</span><span class="sp"></span><span class="dim">'+esc(seatName(seats,a.ownerSeat))+'</span></div>'
+        +(a.lockedBy?'<div class="dim">锁：'+esc(seatName(seats,a.lockedBy))+'</div>':'')+'</div>';
+    });
+    if(!(t.artifacts||[]).length) h+='<div class="dim">暂无产物</div>';
+    h+='</div></div>';
+  }
 
   /* 资料文档（上传阅资料 / 投屏）：共享=全桌可下载；私有=仅上传席位（他席可见存在但不可下载） */
   h+='<div class="card"><div class="shead"><b>资料文档</b><span class="dim">上传阅资料 · 共享=全桌可下载（投屏评审依据），私有=仅上传席位</span><span class="sp"></span><span class="dim">'+(d.documents||[]).length+' 份</span></div><div class="cards">';
@@ -1725,19 +1911,12 @@ function renderDetail(d){
   }
   h+='</div>';
 
-  /* 人工指令（仅本桌有席位时渲染——无席位用户点了必被拒，不再展示） */
-  if(mySeat&&t.phase!=='closed'){
-    h+='<div class="card"><div class="shead"><b>发送人工指令</b><span class="dim">以你在本桌的席位身份</span></div><div class="row">'
-      +'<select id="hTarget"><option value="">全员（广播）</option>';
-    seats.forEach(function(s){ h+='<option value="'+esc(s.seatId)+'">→ '+esc(s.name)+'</option>'; });
-    h+='</select><input id="hBy" placeholder="署名（默认你的用户名）" style="width:150px">'
-      +'<span class="sp"></span><button id="hSend" class="primary">发送</button></div>'
-      +'<textarea id="hText" placeholder="人工意见 / 指令 / 裁决说明（将以 HUMAN_INPUT 进入会议记录，agent 在 poll 时可见）" style="margin-top:8px"></textarea></div>';
-  }
+  /* 发送人工指令已并入左侧「会话」输入框（类型「人工指令」，按身份与阶段出现） */
   h+='</div></div>';
 
-  /* 问答（问询桌专属通栏）：QUESTION+REPLY 按 toMsgId 配对；列表截断显示，点击卡片弹完整问答 */
-  if(ttOf(t.tableType).flow==='inquiry'){
+  /* 问答（问询桌专属通栏）：QUESTION+REPLY 按 toMsgId 配对；列表截断显示，点击卡片弹完整问答。
+     设定阶段隐藏（尚无提问），问答阶段起展示 */
+  if(ttOf(t.tableType).flow==='inquiry'&&t.phase!=='open'){
     var qaPairs=[], qaByMsg={};
     (d.messages||[]).forEach(function(m){
       if(m.type==='QUESTION'){ qaByMsg[m.msgId]={msg:m,replies:[]}; qaPairs.push(qaByMsg[m.msgId]); }
@@ -1766,91 +1945,35 @@ function renderDetail(d){
     h+='</div>';
   }
 
-  /* 执行请求（全宽通栏，会议纪要上方；同席=认领自办，跨席=委托他席，点击弹详情） */
-  h+='<div class="card"><div class="shead"><b>执行请求</b><span class="dim">回应评审派生的修改/澄清委托：同席 = 认领自办，跨席 = 委托他席 · 点击卡片看详情</span><span class="sp"></span><span class="dim">'+(d.requests||[]).length+' 项</span></div><div class="cards">';
-  (d.requests||[]).forEach(function(r,ri){
-    var st=r.status, cls=st==='executed'?'ok':(st==='rejected'?'err':((st==='pending'||st==='human')?'warn':''));
-    var art=''; (t.artifacts||[]).forEach(function(a){ if(a.artifactId===r.req.artifactId) art=a.name; });
-    var selfExe=r.createdBy===r.req.toSeat;
-    var who=selfExe
-      ?(esc(seatName(seats,r.createdBy))+' · 认领自办（接受意见自行修改）')
-      :(esc(seatName(seats,r.createdBy))+' 委托 '+esc(seatName(seats,r.req.toSeat)));
-    h+='<div class="rcard '+cls+'" data-ri="'+ri+'" title="点击查看请求详情">'
-      +'<div class="row"><b>'+esc(clipStr(r.req.title,40))+'</b><span class="sp"></span>'+(selfExe?'<span class="badge">认领自办</span>':'')+'<span class="badge '+cls+'">'+esc(REQ_ST_LABEL[st]||st)+'</span></div>'
-      +'<div class="dim">'+who+' · '+fmtTs(r.createdAt)+'</div>'
-      +'<div class="dim">'+esc(REQ_INTENT_LABEL[r.req.intent]||r.req.intent||'')+(art?(' · 产物：'+esc(clipStr(art,20))):'')+'</div>'
-      +((r.response&&(r.response.reason||r.response.counterDetail))?'<div class="dim">'+esc(clipStr(r.response.reason||r.response.counterDetail,80))+'</div>':'')
-      +'</div>';
-  });
-  if(!(d.requests||[]).length) h+='<div class="dim">暂无请求</div>';
-  h+='</div></div>';
+  /* 执行请求（全宽通栏，会议纪要上方；同席=认领自办，跨席=委托他席，点击弹详情）。
+     设定阶段隐藏（尚无请求）；问询桌流程上不产生执行请求，恒不渲染 */
+  if(ttOf(t.tableType).flow!=='inquiry'&&t.phase!=='open'){
+    h+='<div class="card"><div class="shead"><b>执行请求</b><span class="dim">回应评审派生的修改/澄清委托：同席 = 认领自办，跨席 = 委托他席 · 点击卡片看详情</span><span class="sp"></span><span class="dim">'+(d.requests||[]).length+' 项</span></div><div class="cards">';
+    (d.requests||[]).forEach(function(r,ri){
+      var st=r.status, cls=st==='executed'?'ok':(st==='rejected'?'err':((st==='pending'||st==='human')?'warn':''));
+      var art=''; (t.artifacts||[]).forEach(function(a){ if(a.artifactId===r.req.artifactId) art=a.name; });
+      var selfExe=r.createdBy===r.req.toSeat;
+      var who=selfExe
+        ?(esc(seatName(seats,r.createdBy))+' · 认领自办（接受意见自行修改）')
+        :(esc(seatName(seats,r.createdBy))+' 委托 '+esc(seatName(seats,r.req.toSeat)));
+      h+='<div class="rcard '+cls+'" data-ri="'+ri+'" title="点击查看请求详情">'
+        +'<div class="row"><b>'+esc(clipStr(r.req.title,40))+'</b><span class="sp"></span>'+(selfExe?'<span class="badge">认领自办</span>':'')+'<span class="badge '+cls+'">'+esc(REQ_ST_LABEL[st]||st)+'</span></div>'
+        +'<div class="dim">'+who+' · '+fmtTs(r.createdAt)+'</div>'
+        +'<div class="dim">'+esc(REQ_INTENT_LABEL[r.req.intent]||r.req.intent||'')+(art?(' · 产物：'+esc(clipStr(art,20))):'')+'</div>'
+        +((r.response&&(r.response.reason||r.response.counterDetail))?'<div class="dim">'+esc(clipStr(r.response.reason||r.response.counterDetail,80))+'</div>':'')
+        +'</div>';
+    });
+    if(!(d.requests||[]).length) h+='<div class="dim">暂无请求</div>';
+    h+='</div></div>';
+  }
 
   /* 纪要（总-分栏-总的底部通栏全宽；md 格式经 miniMd 安全渲染） */
   if(d.minutes){
     h+='<div class="card"><div class="shead"><b>会议纪要</b></div><div class="mdv">'+miniMd(d.minutes.markdown||'')+'</div></div>';
   }
 
-  /* 会议历史 · 变动记录（合并大列表，纪要下方全宽；msgFilter 5 档视图预设） */
-  var items=[];
-  (d.messages||[]).forEach(function(m){ var it={ts:m.ts, isMsg:true, ref:m}; if(mfShow(it)) items.push(it); });
-  (d.recentChanges||[]).forEach(function(c){ var it={ts:c.ts, isMsg:false, ref:c}; if(mfShow(it)) items.push(it); });
-  items.sort(function(a,b){ return b.ts-a.ts; });
-  var mfBar='<div class="tbar" id="msgFilter">';
-  MF_VIEWS.forEach(function(v){
-    mfBar+='<button class="fbtn'+((view.msgFilter||'all')===v[0]?' on':'')+'" data-mf="'+v[0]+'">'+v[1]+'</button>';
-  });
-  mfBar+='</div>';
-  h+='<div class="card"><div class="shead"><b>会议历史 · 变动记录</b><span class="dim">消息与变动合并流（'+items.length+' 条）</span></div>'
-    +mfBar+'<div style="max-height:640px;overflow:auto">';
-  items.forEach(function(it){
-    if(!it.isMsg){
-      var c=it.ref;
-      h+='<div class="msg"><span class="mt '+(CHG_CLS[c.kind]||'')+'">'+esc(CHG_LABEL[c.kind]||c.kind)+'</span>'
-        +'<span class="meta">'+esc(c.fromSeat==='server'?'服务器':seatName(seats,c.fromSeat))+' · '+fmtTs(c.ts)+'</span>'
-        +'<div>'+chgSummary(c,seats)+'</div></div>';
-      return;
-    }
-    var m=it.ref;
-    var inject=(m.flags&&m.flags.indexOf&&m.flags.indexOf('injection_suspect')>=0);
-    var proxied=(m.flags&&m.flags.indexOf&&m.flags.indexOf('human_proxied')>=0);
-    var body='';
-    var p=m.payload||{};
-    var toMe=(m.type==='HUMAN_INPUT'&&p.toSeat===d.mySeatId);
-    if(typeof p.text==='string') body=p.text;
-    else if(p.items){ try{ body=p.items.map(function(it2){return (it2.target||'')+'：'+(it2.comment||it2.decision||'');}).join('；');}catch(e){} }
-    else if(m.type==='PHASE_CHANGE') body=(PHASE_LABEL[p.from]||p.from||'')+' → '+(PHASE_LABEL[p.to]||p.to||'')+'（'+(p.reason||'')+'）';
-    else if(m.type==='REQUEST') body=p.title+'：'+(p.detail||'');
-    else if(m.type==='RESPOND_REQUEST') body=(p.requestIds&&p.requestIds.length?('批量 '+p.requestIds.length+' 个请求·'):'')+p.decision+(p.reason?'：'+p.reason:'');
-    else if(m.type==='ARTIFACT_PUBLISHED') body=(p.name||'')+' v'+((p.version&&p.version.v)||'?')+' — '+(p.version&&p.version.changeNote||'');
-    else if(m.type==='DOC_UPLOADED') body=(p.doc&&p.doc.name||'')+' — '+(p.doc&&p.doc.purpose||'')+'（'+(p.doc&&p.doc.visibility==='private'?'私有·仅本席':'共享·全桌可读')+'，'+fmtSize(p.doc&&p.doc.size||0)+'）';
-    else if(m.type==='CONSENSUS_RESULT') body='pass='+(p.pass?'是':'否');
-    else if(m.type==='HOST_PREREVIEW'){
-      body='【'+(PRV_LABEL[p.verdict]||p.verdict)+'】'+(p.note||'');
-      if(p.issues&&p.issues.length) body+='　问题：'+p.issues.map(function(x){ return '['+(SEV_LABEL[x.severity]||x.severity)+'] '+(x.comment||''); }).join('；');
-      if(p.targetSeatId) body+='　→ 点名 '+(seatName(seats,p.targetSeatId));
-    }
-    else if(m.type==='SUPPLEMENT') body=(p.text||'');
-    else if(m.type==='MEETING_PAUSED') body='会议暂停 by '+(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）'+(p.via==='request'&&p.requestedByName?('，经 '+p.requestedByName+' 申请'):'')+(p.reason?('：'+p.reason):'')+'；'+(p.note||'');
-    else if(m.type==='MEETING_RESUMED') body='继续会议 by '+(p.byName||'')+'，恢复到「'+(PHASE_LABEL[p.phase]||p.phase||'')+'」'+(p.forced?'［强制 · 跳过就绪检查］':'');
-    else if(m.type==='PAUSE_REQUESTED') body=(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）申请暂停'+(p.reason?('：'+p.reason):'')+' — 等待 主持人/建桌人/系统管理员 同意';
-    else if(m.type==='MINUTES') body='纪要已生成（全文见上方「会议纪要」区）';
-    else { try{ body=JSON.stringify(p).slice(0,200); }catch(e){} }
-    /* 阶段变更 = 回合过程轴上的分隔条，不再是普通消息条 */
-    if(m.type==='PHASE_CHANGE'){
-      h+='<div class="phasediv"><span>'+esc(body).slice(0,400)+'<span class="dim"> · '+fmtTs(m.ts)+'</span></span></div>';
-      return;
-    }
-    h+='<div class="msg'+(inject?' inject':'')+(toMe?' mine':'')+'">'
-      +'<span class="mt '+(MT_CLS[m.type]||'')+'">'+esc(MT_LABEL[m.type]||m.type)+'</span>'
-      +(proxied?'<span class="badge warn">人工代答</span> ':'')
-      +(toMe?'<span class="badge phase">给我的指令</span> ':'')
-      +'<span class="meta">'+esc(m.fromSeat==='server'?'服务器':seatName(seats,m.fromSeat))
-      +(p.toSeat?' → '+esc(seatName(seats,p.toSeat)):'')
-      +' · '+fmtTs(m.ts)+(inject?' · <b class="hi-err">疑似注入</b>':'')+' · #'+m.seq+'</span>'
-      +'<div>'+esc(clipStr(body,400))+'</div></div>';
-  });
-  if(!items.length) h+='<div class="dim">（该筛选下无内容）</div>';
-  h+='</div></div>';
+  /* 旧的合并流历史面板已移除：消息流由左栏「会话」承载（筛选 + 阶段分隔条 + 全量徽章），
+     产物/资料/席位变动分别见 产物卡、资料文档卡、席位与立场卡；私有指令记录见会话输入框「私有指令」组 */
 
   var app=document.getElementById('app');
   app.innerHTML=h;
@@ -1858,14 +1981,41 @@ function renderDetail(d){
   document.getElementById('back').onclick=function(){ openList(); };
   document.getElementById('dCopyLink').onclick=function(){ copyText(location.origin+'/#/table/'+view.tableId); toast('详情页链接已复制，可发给他人直达本桌'); };
 
-  /* ---- 绑定：圆桌示意图 >8 席折叠展开（纯视图操作，不触发草稿保护） ---- */
+  /* ---- 绑定：圆桌示意图 >8 席折叠展开（纯视图操作；rerenderDetail 附带输入草稿采集回填） ---- */
   var rtMore=document.getElementById('rtMore');
-  if(rtMore) rtMore.onclick=function(){ view.rtExpanded=!view.rtExpanded; renderDetail(view.lastDetailData); };
+  if(rtMore) rtMore.onclick=function(){ view.rtExpanded=!view.rtExpanded; rerenderDetail(); };
   var rtFold=document.getElementById('rtFold');
-  if(rtFold) rtFold.onclick=function(){ view.rtExpanded=false; renderDetail(view.lastDetailData); };
-  /* ---- 绑定：合并流视图筛选（纯视图操作，不触发草稿保护） ---- */
-  app.querySelectorAll('button[data-mf]').forEach(function(b){
-    b.onclick=function(){ view.msgFilter=b.getAttribute('data-mf')||'all'; renderDetail(view.lastDetailData); };
+  if(rtFold) rtFold.onclick=function(){ view.rtExpanded=false; rerenderDetail(); };
+  /* ---- 绑定：会话视图筛选芯片（纯视图操作） ---- */
+  app.querySelectorAll('button[data-cf]').forEach(function(b){
+    b.onclick=function(){ view.chatFilter=b.getAttribute('data-cf')||'all'; rerenderDetail(); };
+  });
+  /* ---- 绑定：会话滚动位置（贴底自动跟随新消息；上翻阅读则保持原位） ---- */
+  var cbList=document.getElementById('cbList');
+  if(cbList){
+    cbList.scrollTop=(view.chatAtBottom!==false)?cbList.scrollHeight:view.cbPrevTop;
+    cbList.addEventListener('scroll',function(){
+      view.chatAtBottom=(cbList.scrollTop+cbList.clientHeight>=cbList.scrollHeight-24);
+      view.cbPrevTop=cbList.scrollTop;
+    });
+  }
+  /* ---- 绑定：我的席位折叠子区块开合（view.seatOpen 抗轮询重渲染） ---- */
+  ['seatDetCtl','seatDetPr','seatDetPod','seatDetCred'].forEach(function(id){
+    var det=document.getElementById(id);
+    if(!det) return;
+    if(view.seatOpen&&Object.prototype.hasOwnProperty.call(view.seatOpen,id)) det.open=!!view.seatOpen[id];
+    det.addEventListener('toggle',function(){
+      if(!view.seatOpen) view.seatOpen={};
+      view.seatOpen[id]=det.open;
+    });
+  });
+  /* ---- 绑定：输入类型芯片切换（只改 display，不重渲染——各类型组草稿原地保留） ---- */
+  app.querySelectorAll('button[data-ct]').forEach(function(b){
+    b.onclick=function(){
+      view.cmpType=b.getAttribute('data-ct')||'';
+      app.querySelectorAll('.cmp-grp').forEach(function(g){ g.style.display=(g.getAttribute('data-grp')===view.cmpType)?'':'none'; });
+      app.querySelectorAll('button[data-ct]').forEach(function(x){ x.className='fbtn'+((x.getAttribute('data-ct')===view.cmpType)?' on':''); });
+    };
   });
   /* ---- 绑定：执行请求卡片 → 详情弹窗（纯查看，不触发草稿保护） ---- */
   app.querySelectorAll('.rcard[data-ri]').forEach(function(el){
@@ -1927,7 +2077,7 @@ function renderDetail(d){
       text:txt,
       toSeat:document.getElementById('hTarget').value||undefined,
       byHuman:document.getElementById('hBy').value.trim()
-    }).then(function(){ toast('已发送'); view.dirtyPanel=false; loadDetail(); })
+    }).then(function(){ toast('已发送'); document.getElementById('hText').value=''; view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ toast('发送失败：'+e.message); });
   };
 
@@ -2048,7 +2198,7 @@ function renderDetail(d){
     var to=document.getElementById('askTo').value;
     askSend.disabled=true;
     api('POST','/api/tables/'+view.tableId+'/ask',{text:text,toSeat:to||undefined})
-      .then(function(){ toast('已提问'); view.dirtyPanel=false; loadDetail(); })
+      .then(function(){ toast('已提问'); document.getElementById('askText').value=''; view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ askSend.disabled=false; errEl.textContent='提问失败：'+e.message; });
   };
   var inqEnd=document.getElementById('inqEnd');
@@ -2113,7 +2263,7 @@ function renderDetail(d){
         else { errEl.textContent='该类型请用 JSON 模式'; return; }
       }
       api('POST','/api/tables/'+view.tableId+'/my/message',{type:type,payload:payload})
-        .then(function(){ toast('已代答发送'); view.dirtyPanel=false; loadDetail(); })
+        .then(function(){ toast('已代答发送'); document.getElementById('pxText').value=''; document.getElementById('pxJsonBox').value=''; view.dirtyPanel=false; loadDetail(); })
         .catch(function(e){ document.getElementById('pxErr').textContent='发送失败：'+e.message; });
     };
   }
@@ -2168,7 +2318,7 @@ function renderDetail(d){
     if(!txt){ toast('请输入内容'); return; }
     api('POST','/api/tables/'+view.tableId+'/human-input',{
       text:txt, toSeat:d.mySeatId, byHuman:document.getElementById('myInstrBy').value.trim()
-    }).then(function(){ toast('公开补充已发送（进入会议记录）'); view.dirtyPanel=false; loadDetail(); })
+    }).then(function(){ toast('公开补充已发送（进入会议记录）'); document.getElementById('myInstr').value=''; view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ toast('发送失败：'+e.message); });
   };
 
@@ -2178,7 +2328,7 @@ function renderDetail(d){
     var txt=document.getElementById('podText').value.trim();
     if(!txt){ toast('请输入指令'); return; }
     api('POST','/api/tables/'+view.tableId+'/my/owner-directive',{text:txt}).then(function(){
-      toast('私有指令已提交（本席 agent 下次 poll 即见）'); view.dirtyPanel=false; loadDetail();
+      toast('私有指令已提交（本席 agent 下次 poll 即见）'); document.getElementById('podText').value=''; view.dirtyPanel=false; loadDetail();
     }).catch(function(e){ document.getElementById('podErr').textContent='发送失败：'+e.message; });
   };
   var podList=document.getElementById('podList');
@@ -2297,6 +2447,11 @@ function renderDetail(d){
       })
       .catch(function(e){ document.getElementById('invites').innerHTML='<span class="dim">'+esc(e.message)+'</span>'; });
   }
+
+  /* composer 草稿回填：发送/轮询触发重渲染后保留未发送类型的内容（已发送的由各发送回调清空自身输入框）；
+     代答表单恢复后重算联动显隐（pxSync 在 pxType 存在时由绑定块赋值） */
+  restoreInputs(view.cmpKeep||{});
+  if(typeof pxSync==='function') pxSync();
 }
 
 function loadDetail(){
@@ -2315,7 +2470,8 @@ function loadDetail(){
 }
 function openTable(id){
   view.mode='detail'; view.tableId=id; view.lastDetailJson=''; view.lastDetailData=null;
-  view.dirtyPanel=false; view.cfgEditing=false; view.msgFilter='all'; view.rtExpanded=false;
+  view.dirtyPanel=false; view.cfgEditing=false; view.rtExpanded=false;
+  view.chatFilter='all'; view.cmpType=''; view.seatOpen={}; view.chatAtBottom=true; view.cbPrevTop=0;
   clearInterval(view.timer);
   var want='#/table/'+id;
   if(location.hash!==want) location.hash=want; // 详情页 URL（刷新/分享/后退可用）；先定好 view 再写 hash，hashchange→syncRoute 幂等不重入
@@ -2348,12 +2504,10 @@ window.addEventListener('popstate',syncRoute);
   var app=document.getElementById('app');
   var mark=function(e){
     if(view.mode!=='detail') return;
-    if(e&&e.target&&e.target.id==='msgFilter') return; // 消息筛选是纯视图操作，交给自身处理
     view.dirtyPanel=true;
   };
   app.addEventListener('input',mark,true);
   app.addEventListener('change',function(e){
-    if(e&&e.target&&e.target.id==='msgFilter'){ view.msgFilter=e.target.value; renderDetail(view.lastDetailData); return; }
     mark(e);
   },true);
 })();

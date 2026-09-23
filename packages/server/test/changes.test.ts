@@ -204,9 +204,12 @@ describe("skill 模板与观察页文案（字符串级断言）", () => {
     expect(SKILL_MD).not.toContain("等待约 60 秒");
   });
 
-  it("观察页含变动记录面板渲染", () => {
-    expect(OBSERVER_HTML).toContain("变动记录");
-    expect(OBSERVER_HTML).toContain("recentChanges");
-    expect(OBSERVER_HTML).toContain("CHG_LABEL");
+  it("观察页消息流由会话视图（chatbox）承载：历史面板已移除（任务 0033 第 4 轮）", () => {
+    expect(OBSERVER_HTML).toContain("chatboxCardHtml"); // 会话卡构造器
+    expect(OBSERVER_HTML).toContain('id="cbList"'); // 气泡列表容器
+    expect(OBSERVER_HTML).toContain("data-cf"); // 全部/发言/指令/系统筛选芯片
+    expect(OBSERVER_HTML).toContain("msgBodyText"); // 消息正文提取（气泡渲染用）
+    expect(OBSERVER_HTML).not.toContain("会议历史 · 变动记录"); // 旧合并流面板不再渲染
+    expect(OBSERVER_HTML).not.toContain("recentChanges"); // 前端不再消费（API 保留给 agent changes 同源接口）
   });
 });
