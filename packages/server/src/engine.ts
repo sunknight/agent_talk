@@ -17,7 +17,7 @@ import {
   type PrecheckState, type QuestionPayload, type ReplyPayload, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
   type ReviewCommentPayload, type Role, type SeatDocumentMeta, type SeatInfo, type SupplementPayload,
   type TableChange, type TableChangesPayload, type TableDocumentMeta, type TableType, type TableTypeDef,
-  type TableInfoPayload, type TurnGrantPayload,
+  type TableInfoPayload, type TurnGrantPayload, type TurnProgressStage,
 } from "@rt/shared";
 import type { DirectiveRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 import { Store } from "./store";
@@ -68,6 +68,10 @@ const ASKER_SEAT = "asker";
 /** 持有人私有指令：单条 ≤8000 字符（与 HUMAN_INPUT 一致）；未 ack 挂起上限（防堆积撑爆 poll 响应） */
 const OWNER_DIRECTIVE_MAX = 8_000;
 const OWNER_DIRECTIVE_PENDING_MAX = 20;
+/** 思考进度旁路：合法阶段枚举（只收枚举不收文本，杜绝思考内容经此通道外泄） */
+const TURN_PROGRESS_STAGES: readonly TurnProgressStage[] = ["preparing", "working", "finalizing"];
+/** 思考进度旁路：同轮内重复上报节流窗口（静默忽略，防失控循环热刷） */
+const TURN_PROGRESS_THROTTLE_MS = 1_000;
 
 /** 字段长度/范围校验：超限即 422（防巨字段撑库、撑大 poll/changes 全量响应） */
 function checkField(value: string, field: string, max: number, min = 1): string {
@@ -108,6 +112,8 @@ export class Hub {
   private rateAuditTs = new Map<string, number>();
   /** 预审进行中的桌（临界区：预审结论落地前不授出发言权；全桌型一致） */
   private precheckInFlight = new Set<string>();
+  /** 思考进度旁路记录：tableId → 最近一次上报（不落库、不进消息流，仅观察端展示态） */
+  private turnProgress = new Map<string, { seatId: string; phase: Phase; roundNo: number; stage: TurnProgressStage; ts: number }>();
   /** 预审器（默认 DeepSeek；测试可注入） */
   private readonly precheck: PrecheckFn;
 
@@ -310,15 +316,18 @@ export class Hub {
     const user = this.requireUser(userToken);
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，不再接受凭码入席");
-    // 同一用户已持有本桌 active 席位：拒绝重复入席并引导进桌（退席 left 后可重新凭码入席）
+    // 先只读预检码有效性与归属（消费前）：无效或跨桌的尝试不扣减次数。
+    // 问询方（asker）码不受重复入席限制——同一用户可既持席位又兼任问询方（账号打通场景：
+    // 同号用户网页提问 + 自己的 agent 凭同账号入回答席，入席先后不应影响就位）
+    const inv = this.store.peekInvite(p.inviteCode);
+    const isAskerCode = !!inv && inv.tableId === tableId && inv.role === "asker";
+    // 同一用户已持有本桌 active 席位：拒绝重复入席并引导进桌（退席 left 后可重新凭码入席；asker 码放行）
     const existed = this.activeSeatOfUser(tableId, user.userId);
-    if (existed) {
+    if (existed && !isAskerCode) {
       const s = this.store.getSeat(tableId, existed);
       throw new ApiError(409, "already_seated", `你已在本桌持有席位「${s?.name ?? existed}」，无需重复入席`);
     }
     // 增减参与人：open 阶段自由入席；开始后由建桌人人工协调
-    // 先只读校验码有效性与归属（消费前）：无效或跨桌的尝试不扣减次数
-    const inv = this.store.peekInvite(p.inviteCode);
     if (!inv) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
     if (inv.tableId !== tableId) throw new ApiError(403, "bad_invite", "邀请码不属于本圆桌");
     // 角色由邀请码固定（身份安排权在建桌人），席位不能自封
@@ -327,7 +336,7 @@ export class Hub {
     }
     // 问询方（asker）码分流：不建席位——把操作者绑定为本桌问询方（与自建问询桌的建桌人同构，
     // ownerSeat=ASKER_SEAT 绑定，提问/开始/结束走网页 user token 通道）；同桌问询方唯一；
-    // 已持本桌席位者不可兼任（上方 already_seated 已拦）；agent 持 user token 凭码加入不阻拦
+    // 持席位者凭码可兼任（同号用户 web 提问 + 自己的 agent 作答）；agent 持 user token 凭码加入不阻拦
     if (inv.role === "asker") {
       if (tableTypeOf(meta.tableType).id !== "inquiry") {
         throw new ApiError(422, "bad_invite", "问询方邀请码只能用于问询桌");
@@ -564,15 +573,41 @@ export class Hub {
       artifactId: a.artifactId, name: a.name, ownerSeat: a.ownerSeat,
       latestVersion: a.versions.length, lockedBy: a.lockedBy,
     }));
+    const activeTurn = this.computeTurn(tableId);
     return {
       tableId, topic: meta.topic, template: meta.template, phase: meta.phase, mode: meta.mode,
       tableType: meta.tableType,
       goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, ownerSeat: meta.ownerSeat,
       roundNo: meta.roundNo, deadlockCount: meta.deadlockCount, seats, artifacts,
-      activeTurn: this.computeTurn(tableId),
+      activeTurn,
+      turnProgress: this.turnProgressOf(tableId, activeTurn),
       precheck: this.precheckState(tableId),
       pause: (meta.pause ?? null) as PauseInfo | null,
     };
+  }
+
+  /** 思考进度旁路上报（agent 本回合工作中不定时调用）：只收枚举；仅当前发言权持有者可记录，
+   *  记录按 (seatId, phase, roundNo) 与 activeTurn 匹配才投影——turn 消费/轮转后自然失效，旧 skill 不上报则恒为 null */
+  reportTurnProgress(tableId: string, seat: ServerSeat, stageRaw: string): { recorded: boolean } {
+    this.requireTable(tableId);
+    const stage = TURN_PROGRESS_STAGES.find((s) => s === stageRaw);
+    if (!stage) throw new ApiError(422, "bad_payload", `stage 必须是 ${TURN_PROGRESS_STAGES.join(" / ")} 之一`);
+    this.touchSeat(seat, tableId);
+    const turn = this.computeTurn(tableId);
+    if (!turn || turn.seatId !== seat.seatId) return { recorded: false };
+    const prev = this.turnProgress.get(tableId);
+    if (prev && prev.seatId === seat.seatId && prev.phase === turn.phase && prev.roundNo === turn.roundNo
+      && Date.now() - prev.ts < TURN_PROGRESS_THROTTLE_MS) return { recorded: false };
+    this.turnProgress.set(tableId, { seatId: seat.seatId, phase: turn.phase, roundNo: turn.roundNo, stage, ts: Date.now() });
+    return { recorded: true };
+  }
+
+  /** 进度投影：与当前发言权（席位+阶段+轮次）匹配才输出，否则 null（观察端回落「思考中」） */
+  private turnProgressOf(tableId: string, turn: TurnGrantPayload | null): { stage: TurnProgressStage; updatedAt: number } | null {
+    const rec = this.turnProgress.get(tableId);
+    if (!turn || !rec) return null;
+    if (rec.seatId !== turn.seatId || rec.phase !== turn.phase || rec.roundNo !== turn.roundNo) return null;
+    return { stage: rec.stage, updatedAt: rec.ts };
   }
 
   /** 预审调度层状态投影（全桌型一致；问询桌无回合提交，恒为 idle） */
@@ -2023,14 +2058,15 @@ export class Hub {
   }
 
   /** 观察端桌列表：可见桌摘要 + 当前用户在各桌的席位标记（null = 无席位，供「我的席位」徽章/筛选）；
-   *  问询桌的问询方（无席位）以 mySeatRole="asker" 标记 */
+   *  问询桌的问询方以 mySeatRole="asker" 标记——同号用户兼任问询方+席位时优先标问询方（网页主身份），
+   *  席位面板仍由详情页按 mySeatId 正常渲染 */
   observerTables(userId: string, role: "user" | "systemadmin" = "user") {
     return this.tablesForUser({ userId, role }).map((t) => {
-      const seatId = this.store.seatOfUser(t.tableId, userId);
-      const seat = seatId ? this.store.getSeat(t.tableId, seatId) : null;
-      if (!seat && tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, ASKER_SEAT) === userId) {
+      if (tableTypeOf(t.tableType).id === "inquiry" && this.store.seatOwnerOf(t.tableId, ASKER_SEAT) === userId) {
         return { ...t, mySeatRole: "asker" as const, mySeatName: null };
       }
+      const seatId = this.store.seatOfUser(t.tableId, userId);
+      const seat = seatId ? this.store.getSeat(t.tableId, seatId) : null;
       return { ...t, mySeatRole: seat ? seat.role : null, mySeatName: seat ? seat.name : null };
     });
   }

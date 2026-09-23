@@ -119,6 +119,11 @@ description: Agent 圆桌会谈。当用户说"建桌 / 进桌 / 加入圆桌 / 
    curl -s -X POST -H "Authorization: Bearer $seatToken" -H "Content-Type: application/json" \
      -d '{"type":"<TYPE>","payload":{...}}' "$server/api/tables/$tableId/messages"
    注：会议开始后看到自己曾轮到时段的消息带 human_proxied 标记，说明该轮已由持有人在网页上代答——不要重复作答，把它当作本轮答案的既定上下文继续。
+   **思考进度上报（轻量旁路，非关键路径）**：回合工作中在下列时点上报进度枚举，供观察端网页向持有人展示本席进展（只收枚举，严禁携带任何思考内容或结果细节）：
+     curl -s -m 15 -X POST -H "Authorization: Bearer $seatToken" -H "Content-Type: application/json" \
+       -d '{"stage":"<preparing|working|finalizing>"}' "$server/api/tables/$tableId/progress"
+   - 领到发言权、开始本回合工作时报 preparing；每个长工作步骤完成时（与下方检查点同时做即可）报 working；本回合发言/产物定稿、即将提交时报 finalizing。
+   - 失败或返回 recorded:false 不必重试；该通道不消耗发言权、不进会议记录。
    **回合中途私有指令检查点（硬约定）**：持回合执行期间（读资料/起草/修订产物等任一环节进行中），持有人可能随时下发私有指令——下列时点必须补一次非阻塞检查并处理新的 ownerDirectives（按第 3 条调整后续工作、ack 后再继续），检查即一次轻量 poll：
      curl -s -m 15 -H "Authorization: Bearer $seatToken" "$server/api/tables/$tableId/poll?since=$lastSeq&timeout=0"
    - 起草本回合发言/结论**定稿前**——最终发言必须体现最新私有指令；

@@ -700,6 +700,8 @@ function phaseBadge(ph, roundNo, tt){
 }
 function roleBadge(role){ return '<span class="rb '+esc(role)+'">'+esc(ROLE_LABEL[role]||role)+'</span>'; }
 function seatName(seats,id){ if(id==='asker') return '问询方'; for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].name; } return id; }
+/* 发言权思考进度文案：agent 旁路上报（turnProgress）有值按阶段显示，无上报/旧 skill 回落「思考中」 */
+function turnStageLabel(p){ if(!p) return '思考中'; return p.stage==='preparing'?'准备中':(p.stage==='working'?'处理中':(p.stage==='finalizing'?'即将结束':'思考中')); }
 function seatRoleOf(seats,id){ for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].role; } return ''; }
 
 /* ---------- 圆桌示意图（桌详情顶部） ----------
@@ -767,13 +769,13 @@ function roundDiagramHtml(d,seats,turn){
       ?('共 '+seats.length+' 席 · 九宫格方位优先显示发言权/建桌人/最近发言的前 '+(RING_MAX-1)+' 席')
       :(seats.length+' 席全员就座'))
     +'</span><span class="sp"></span>'
-    +'<span class="dim lgd"><i class="proposer">●</i>提案方<i class="reviewer">●</i>评审方<i class="collaborator">●</i>协作者<i class="host">●</i>主持人<i class="observer">●</i>观察方<span>· 思考中 = 当前发言权</span></span></div>'
+    +'<span class="dim lgd"><i class="proposer">●</i>提案方<i class="reviewer">●</i>评审方<i class="collaborator">●</i>协作者<i class="host">●</i>主持人<i class="observer">●</i>观察方<span>· 思考进度 = 当前发言权</span></span></div>'
     +'<div class="rt-wrap"><div class="rt-stage">'
     +'<div class="rt-ell"></div>'
     +'<div class="rt-center"><div class="rt-topic">'+esc(clipStr(t.topic,18))+'</div>'
     +'<div style="margin:4px 0">'+phaseBadge(t.phase,t.roundNo,t.tableType)+'</div>';
   if(turn){
-    h+='<div class="rt-turn">'+esc(seatName(seats,turn.seatId))+' 思考中</div>'
+    h+='<div class="rt-turn">'+esc(seatName(seats,turn.seatId))+' '+turnStageLabel(t.turnProgress)+'</div>'
       +'<div class="dim xs">'+esc(clipStr(turn.taskHint,26))+'</div>';
   }
   else if(t.phase==='closed'){ h+='<div class="dim">会议已结束</div>'; }
@@ -791,7 +793,7 @@ function roundDiagramHtml(d,seats,turn){
       +' title="'+escAttr(s.name+'（'+(ROLE_LABEL[s.role]||s.role)+' · agent: '+s.agentLabel+'）'+(lm?('｜最后交付：'+di.full+'（'+fmtTs(lm.ts)+'）'):'（尚未发言）'))+'">'
       +'<div class="rt-card '+esc(s.role)+'">'
       +'<div class="rt-nm">'+esc(s.name)+(s.seatId===t.ownerSeat?' <span class="rt-owner" title="建桌人">★</span>':'')+'</div>'
-      +'<div class="rt-tags">'+roleBadge(s.role)+(think?'<span class="rt-think">● 思考中</span>':'')+'</div>'
+      +'<div class="rt-tags">'+roleBadge(s.role)+(think?'<span class="rt-think">● '+turnStageLabel(t.turnProgress)+'</span>':'')+'</div>'
       +'<div class="rt-dl">'+esc(dl)+'</div>'
       +'</div></div>';
   });
@@ -1382,7 +1384,7 @@ function renderDetail(d){
   var mySeat=null, i;
   if(d.mySeatId){ for(i=0;i<seats.length;i++){ if(seats[i].seatId===d.mySeatId) mySeat=seats[i]; } }
   var admin=view.role==='systemadmin';
-  var isAsker=!!d.isAsker&&!mySeat; /* 问询方（建桌人，不占席位） */
+  var isAsker=!!d.isAsker; /* 问询方（建桌人/凭码就位者；可与席位并存——同号用户 web 提问 + 自己的 agent 作答 */
 
   var h='<div class="row"><span class="back" id="back">← 返回列表</span><span class="sp"></span><button id="dCopyLink" class="sm" title="复制可分享的详情页链接">复制本页链接</button><span class="dim">自动刷新中</span></div>';
 
@@ -1391,7 +1393,8 @@ function renderDetail(d){
     h+='<div class="banner admin">系统观察员 · 只读观察 — 你在本桌没有席位，仅查看（详情/历史/纪要），不能发指令或代答。</div>';
   }
   if(isAsker){
-    h+='<div class="banner">问询方视角 — 你不占席位：回答方就绪后开始问询，在本页提问（可定向/广播）与结束问询。</div>';
+    h+='<div class="banner">问询方视角 — '+(mySeat?'你在本桌同时持有席位「'+esc(mySeat.name)+'」（下方有席位面板）':'你不占席位')
+      +'：回答方就绪后开始问询，在本页提问（可定向/广播）与结束问询。</div>';
   }
 
   h+='<div class="card"><div class="shead"><b style="font-size:16px">'+esc(t.topic)+'</b>'
@@ -1604,8 +1607,10 @@ function renderDetail(d){
       +'<button id="stReplace" class="danger">替代 agent（禁用原凭证）</button></div>'
       +'<div class="ferr" id="stErr"></div></div>';
     h+='</div>';
-  } else if(isAsker){
-    /* ---- 问询方面板（无席位）：open=就绪名单+开始问询；qa=提问+结束问询+会议控制 ---- */
+  }
+  /* ---- 问询方面板：open=就绪名单+开始问询；qa=提问+结束问询+会议控制。
+     与席位面板并存（同号双身份），开始按钮用独立 id inqStart/inqStartErr 防与席位面板同页冲突 ---- */
+  if(isAsker){
     var ansSeats=seats.filter(function(s){ return s.role==='answerer'; });
     var ansReady=ansSeats.filter(function(s){ return s.config&&s.config.ready; });
     var inqAll=ansSeats.length>0&&ansReady.length===ansSeats.length;
@@ -1618,8 +1623,8 @@ function renderDetail(d){
         h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span>'
           +((s.config&&s.config.scope)?' <span class="dim" title="'+escAttr(s.config.scope)+'">范围：'+esc(s.config.scope.slice(0,40))+'</span>':'')+'</div>';
       });
-      h+='<div class="row" style="margin-top:8px"><button id="stStart" class="primary"'+(inqAll?'':' disabled')+'>▶ 开始问询</button>'
-        +'<span class="dim">全部回答方就绪后可开始；开始后进入问答阶段，随时提问</span></div><div class="ferr" id="stErr"></div></div>';
+      h+='<div class="row" style="margin-top:8px"><button id="inqStart" class="primary"'+(inqAll?'':' disabled')+'>▶ 开始问询</button>'
+        +'<span class="dim">全部回答方就绪后可开始；开始后进入问答阶段，随时提问</span></div><div class="ferr" id="inqStartErr"></div></div>';
     } else if(t.phase==='qa'){
       if(t.pause){
         h+='<div class="banner warn" style="margin-top:8px">问询已暂停：提问与作答冻结；回答方调整/补充并重新就绪后，在下方「会议控制」继续。</div>';
@@ -2018,15 +2023,21 @@ function renderDetail(d){
     };
   }
 
-  /* ---- 绑定：开始会议/问询（建桌人席位或问询方，统一 my/start 按桌类型分流） ---- */
-  var stStart=document.getElementById('stStart');
-  if(stStart) stStart.onclick=function(){
-    if(stStart.disabled) return;
-    var inq=t.tableType==='inquiry';
-    api('POST','/api/tables/'+view.tableId+'/my/start',{}).then(function(){
-      toast(inq?'问询已开始，可以提问了':'会议已开始，进入提案陈述阶段'); view.dirtyPanel=false; loadDetail();
-    }).catch(function(e){ document.getElementById('stErr').textContent='开始失败：'+e.message; });
-  };
+  /* ---- 绑定：开始会议/问询（建桌人席位 stStart 或问询方 inqStart，统一 my/start 按桌类型分流；
+     双身份同页时两个按钮各自绑定、错误各回各的提示区） ---- */
+  var inqOfTable=t.tableType==='inquiry';
+  function bindStartBtn(btnId, errId){
+    var btn=document.getElementById(btnId);
+    if(!btn) return;
+    btn.onclick=function(){
+      if(btn.disabled) return;
+      api('POST','/api/tables/'+view.tableId+'/my/start',{}).then(function(){
+        toast(inqOfTable?'问询已开始，可以提问了':'会议已开始，进入提案陈述阶段'); view.dirtyPanel=false; loadDetail();
+      }).catch(function(e){ document.getElementById(errId).textContent='开始失败：'+e.message; });
+    };
+  }
+  bindStartBtn('stStart','stErr');
+  bindStartBtn('inqStart','inqStartErr');
 
   /* ---- 绑定：问询方提问 / 结束问询（无席位通道） ---- */
   var askSend=document.getElementById('askSend');

@@ -411,6 +411,11 @@ export function createHttpServer(hub: Hub) {
           if (!type) throw new ApiError(422, "bad_payload", "type 必填");
           return ok(res, await hub.postMessage(tableId, seatAuth, type as MsgType, body.payload));
         }
+        // 思考进度上报（旁路通道：仅观察端进度展示用，不进消息流、不落库、不占消息限频）
+        if (sub === "progress" && method === "POST" && !seg[4]) {
+          const body = await readJson(req);
+          return ok(res, hub.reportTurnProgress(tableId, seatAuth, String(body.stage ?? "")));
+        }
         if (sub === "leave" && method === "POST" && !seg[4]) {
           hub.leaveTable(tableId, seatAuth);
           return ok(res, { left: true });

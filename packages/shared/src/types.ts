@@ -284,6 +284,9 @@ export interface TableSummary {
   paused?: boolean;
 }
 export interface TableListPayload { tables: TableSummary[]; }
+/** 思考进度阶段（agent 旁路上报，仅体现进度粗粒度阶段，不承载任何思考内容） */
+export type TurnProgressStage = "preparing" | "working" | "finalizing";
+
 export interface TableInfoPayload {
   tableId: string; topic: string; template: string; phase: Phase;
   tableType: TableType;
@@ -300,6 +303,8 @@ export interface TableInfoPayload {
   seats: SeatInfo[];
   artifacts: { artifactId: string; name: string; ownerSeat: string; latestVersion: number; lockedBy: string | null }[];
   activeTurn: TurnGrantPayload | null;
+  /** 当前发言权席位的思考进度（旁路上报投影，与 activeTurn 轮次匹配才非空；旧 skill 不上报时为 null） */
+  turnProgress: { stage: TurnProgressStage; updatedAt: number } | null;
   /** hosted 桌的预审调度层状态（self 桌恒为 idle） */
   precheck: PrecheckState;
   /** 会议暂停叠加态（进行中可暂停；恢复后清空，phase 始终保留原阶段） */
