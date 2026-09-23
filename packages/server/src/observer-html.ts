@@ -252,6 +252,9 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   /* 执行请求卡可点击（弹详情）；悬停描边高亮 */
   .rcard { cursor:pointer; }
   .rcard:hover { border-color:var(--acc); background:#20263a; }
+  /* 问答卡（问询桌详情页通栏）：点击弹完整问答，交互样式与请求卡一致 */
+  .qa-item { cursor:pointer; }
+  .qa-item:hover { border-color:var(--acc); background:#20263a; }
   /* 时间线阶段分隔条（回合过程轴：阶段变更不再是普通消息条） */
   .phasediv { display:flex; align-items:center; gap:10px; margin:12px 0 8px; font-size:12px; }
   .phasediv::before,.phasediv::after { content:''; flex:1; height:1px; background:var(--line); }
@@ -289,7 +292,7 @@ var TOKEN = localStorage.getItem('rt_token') || '';
 var view = { mode:'intro', tableId:null, timer:null, lastDetailJson:'', lastDetailData:null,
   userName: localStorage.getItem('rt_user_name') || '', userId: localStorage.getItem('rt_user_id') || '',
   role: localStorage.getItem('rt_role') || 'user',
-  listFilter:'all', listTables:[], dirtyPanel:false, cfgEditing:false, dsDraft:[], msgFilter:'all', rtExpanded:false };
+  listFilter:'all', listTables:[], dirtyPanel:false, cfgEditing:false, dsDraft:[], msgFilter:'all', rtExpanded:false, qaPairs:[] };
 
 /* ---------- 常量映射 ---------- */
 var PHASE_LABEL = { open:'设定中', qa:'问答', statements:'提案陈述', review:'评审', response:'回应评审', execution:'执行修改', convergence:'共识表决', human_intervention:'人工介入', closed:'已结束' };
@@ -548,6 +551,35 @@ function openRequestModal(r,seats,arts){
   m.onclick=function(e){ if(e.target===m) closeRequestModal(); };
   document.body.appendChild(m);
   document.getElementById('rqClose').onclick=closeRequestModal;
+}
+/* ---------- 问询问答全文弹窗（body 级，不受轮询重渲染影响） ----------
+   qa={msg,replies:[…]}：打开时刻快照——完整问题与全部回答（列表卡内是截断文本） */
+function closeQaModal(){ var m=document.getElementById('qaModal'); if(m) m.remove(); }
+function openQaModal(qa,seats){
+  closeQaModal();
+  var p=qa.msg.payload||{};
+  var body='<div class="row"><span class="mt mt-q">Q</span>'
+    +(p.toSeat?('<span class="badge">定向 · '+esc(seatName(seats,p.toSeat))+'</span>'):'<span class="badge phase">广播 · 全体回答方各自作答</span>')
+    +'<span class="dim">'+fmtTs(qa.msg.ts)+' · #'+qa.msg.seq+'</span></div>'
+    +'<div class="sumcard" style="white-space:pre-wrap">'+esc(p.text||'')+'</div>';
+  if(qa.replies.length){
+    body+='<h3 style="margin:14px 0 4px">回答（'+qa.replies.length+'）</h3>';
+    qa.replies.forEach(function(rm){
+      var rp=rm.payload||{};
+      body+='<div class="sumcard"><div class="row"><b>'+esc(seatName(seats,rm.fromSeat))+'</b><span class="dim">'+fmtTs(rm.ts)+' · #'+rm.seq+'</span></div>'
+        +'<div style="white-space:pre-wrap;margin-top:4px">'+esc(rp.text||'')+'</div></div>';
+    });
+  } else {
+    body+='<div class="hint" style="margin-top:10px">尚无回答：等待回答方作答（广播问题每个回答席各答一条，定向问题仅目标席作答）。</div>';
+  }
+  var m=document.createElement('div');
+  m.className='dmodal'; m.id='qaModal';
+  m.innerHTML='<div class="dbox" style="width:min(760px,94vw)">'
+    +'<div class="dhead"><span class="mt mt-q">问答</span><b>完整问答</b><span style="flex:1"></span><button id="qaClose">关闭</button></div>'
+    +'<div class="dbody">'+body+'</div></div>';
+  m.onclick=function(e){ if(e.target===m) closeQaModal(); };
+  document.body.appendChild(m);
+  document.getElementById('qaClose').onclick=closeQaModal;
 }
 /* ---------- 帮助弹窗（body 级，登录与否均可开；复用 dmodal 弹层体系） ---------- */
 function closeHelp(){ var m=document.getElementById('helpModal'); if(m) m.remove(); }
@@ -1677,6 +1709,36 @@ function renderDetail(d){
   }
   h+='</div></div>';
 
+  /* 问答（问询桌专属通栏）：QUESTION+REPLY 按 toMsgId 配对；列表截断显示，点击卡片弹完整问答 */
+  if(ttOf(t.tableType).flow==='inquiry'){
+    var qaPairs=[], qaByMsg={};
+    (d.messages||[]).forEach(function(m){
+      if(m.type==='QUESTION'){ qaByMsg[m.msgId]={msg:m,replies:[]}; qaPairs.push(qaByMsg[m.msgId]); }
+      else if(m.type==='REPLY'&&m.payload&&qaByMsg[m.payload.toMsgId]){ qaByMsg[m.payload.toMsgId].replies.push(m); }
+    });
+    view.qaPairs=qaPairs; /* 点击绑定取的快照（renderDetail 局部闭包亦可，存 view 与 lastDetailData 同生命周期） */
+    var ansCount=seats.filter(function(s){ return s.role==='answerer'; }).length;
+    h+='<div class="card"><div class="shead"><b>问答</b><span class="dim">问题与各方回答汇总 · 点击卡片查看完整问答</span><span class="sp"></span><span class="dim">'+qaPairs.length+' 问 · '+ansCount+' 个回答方</span></div>';
+    qaPairs.forEach(function(qa,qi){
+      var qp=qa.msg.payload||{};
+      h+='<div class="rcard qa-item" data-qa="'+qi+'" title="点击查看完整问答" style="margin:8px 0">'
+        +'<div class="row"><span class="mt mt-q">Q'+(qi+1)+'</span>'
+        +(qp.toSeat?('<span class="badge">定向 · '+esc(seatName(seats,qp.toSeat))+'</span>'):'<span class="badge phase">广播</span>')
+        +'<span class="sp"></span><span class="dim">'+fmtTs(qa.msg.ts)+'</span></div>'
+        +'<div style="margin-top:4px">'+esc(clipStr(qp.text||'',120))+'</div>';
+      if(qa.replies.length){
+        qa.replies.forEach(function(rm){
+          h+='<div class="dim" style="margin-top:4px"><b>'+esc(seatName(seats,rm.fromSeat))+'</b>：'+esc(clipStr((rm.payload&&rm.payload.text)||'',100))+'</div>';
+        });
+      } else {
+        h+='<div style="margin-top:4px"><span class="badge warn">待回答</span></div>';
+      }
+      h+='</div>';
+    });
+    if(!qaPairs.length) h+='<div class="dim">'+(t.phase==='open'?'问询尚未开始，暂无提问':'暂无提问')+'</div>';
+    h+='</div>';
+  }
+
   /* 执行请求（全宽通栏，会议纪要上方；同席=认领自办，跨席=委托他席，点击弹详情） */
   h+='<div class="card"><div class="shead"><b>执行请求</b><span class="dim">回应评审派生的修改/澄清委托：同席 = 认领自办，跨席 = 委托他席 · 点击卡片看详情</span><span class="sp"></span><span class="dim">'+(d.requests||[]).length+' 项</span></div><div class="cards">';
   (d.requests||[]).forEach(function(r,ri){
@@ -1784,6 +1846,14 @@ function renderDetail(d){
       var ri=parseInt(el.getAttribute('data-ri'),10);
       var reqs=(view.lastDetailData&&view.lastDetailData.requests)||[];
       if(reqs[ri]) openRequestModal(reqs[ri],seats,(t.artifacts||[]));
+    };
+  });
+  /* ---- 绑定：问答卡 → 完整问答弹窗（纯查看，不触发草稿保护） ---- */
+  app.querySelectorAll('.qa-item[data-qa]').forEach(function(el){
+    el.onclick=function(){
+      var qi=parseInt(el.getAttribute('data-qa'),10);
+      var pairs=view.qaPairs||[];
+      if(pairs[qi]) openQaModal(pairs[qi],seats);
     };
   });
 

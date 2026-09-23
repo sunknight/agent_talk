@@ -199,6 +199,11 @@ describe("skill 模板与观察页文案（字符串级断言）", () => {
     expect(SKILL_MD.indexOf("回合开始刷新（硬约定）")).toBeGreaterThan(SKILL_MD.indexOf("持续循环：")); // 约定位于核心循环内
   });
 
+  it("skill.md 空转等待间隔为约 15 秒（任务 0029：60 秒→15 秒）", () => {
+    expect(SKILL_MD).toContain("等待约 15 秒再回到第 1 步");
+    expect(SKILL_MD).not.toContain("等待约 60 秒");
+  });
+
   it("观察页含变动记录面板渲染", () => {
     expect(OBSERVER_HTML).toContain("变动记录");
     expect(OBSERVER_HTML).toContain("recentChanges");

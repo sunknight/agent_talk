@@ -115,6 +115,19 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     expect(html).toContain("closeRequestModal"); // Esc/背景关闭
   });
 
+  it("页面含问询桌问答区：问答通栏列表（截断）+ 全文弹窗（任务 0029）", async () => {
+    const html = await (await fetch(base + "/")).text();
+    expect(html).toContain("openQaModal"); // 全文弹窗函数
+    expect(html).toContain("qaModal"); // body 级弹窗节点
+    expect(html).toContain("closeQaModal"); // 背景/按钮关闭
+    expect(html).toContain("qa-item"); // 可点击问答卡样式
+    expect(html).toContain("data-qa"); // 卡片索引绑定
+    expect(html).toContain("点击查看完整问答"); // 卡片 title 提示
+    expect(html).toContain("问题与各方回答汇总"); // 区头说明
+    expect(html).toContain("待回答"); // 无回答的问题显示待回答
+    expect(html).toContain("flow==='inquiry'"); // 仅问询桌渲染
+  });
+
   it("内嵌 script 语法可解析（模板字符串手写 JS 防回归）", async () => {
     const html = await (await fetch(base + "/")).text();
     const m = /<script>([\s\S]*)<\/script>/.exec(html);
