@@ -9,15 +9,15 @@
  */
 import { randomBytes } from "node:crypto";
 import {
-  DISCLOSURE_LEVELS, INJECTION_FLAG, STYLE_PRESETS, makeEnvelope, newId, resolveCaps, scanInjection, sha256, tableTypeOf, validateEnvelope,
+  DISCLOSURE_LEVELS, INJECTION_FLAG, STYLE_PRESETS, disclosureOf, makeEnvelope, newId, resolveCaps, scanInjection, sha256, tableTypeOf, validateEnvelope,
   type ArtifactPublishedPayload, type ArtifactVersion, type AuditEvent, type AuditRecord,
   type ConsensusResultPayload, type DataScopeItem, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
   type HumanInputPayload, type HumanRulingPayload, type MeetingPausedPayload, type MeetingResumedPayload,
   type MsgType, type OwnerDirectiveView, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type Phase, type PhaseChangePayload,
-  type PrecheckState, type QuestionPayload, type ReplyPayload, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
+  type PrecheckState, type PublicSeat, type QuestionPayload, type ReplyPayload, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
   type ReviewCommentPayload, type Role, type SeatDocumentMeta, type SeatInfo, type SupplementPayload,
   type TableChange, type TableChangesPayload, type TableDocumentMeta, type TableType, type TableTypeDef,
-  type TableInfoPayload, type TurnGrantPayload, type TurnProgressStage,
+  type TableInfoPayload, type TurnGrantPayload, type TurnProgressStage, type TurnSkippedPayload,
 } from "@rt/shared";
 import type { DirectiveRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 import { Store } from "./store";
@@ -58,7 +58,7 @@ const COMMON_TYPES: MsgType[] = ["QUESTION", "REPLY", "HUMAN_INPUT", "ESCALATE"]
 /** 人工介入阶段额外放行的人工裁决（仍要求 human_proxied 通道标记） */
 const HUMAN_ONLY_TYPES: MsgType[] = ["HUMAN_RULING"];
 /** 服务器专属系统消息：席位直发一律拒绝（防伪造预审结论/暂停通知操纵调度） */
-const SERVER_ONLY_TYPES: MsgType[] = ["HOST_PREREVIEW", "MEETING_PAUSED", "MEETING_RESUMED", "PAUSE_REQUESTED"];
+const SERVER_ONLY_TYPES: MsgType[] = ["HOST_PREREVIEW", "MEETING_PAUSED", "MEETING_RESUMED", "PAUSE_REQUESTED", "TURN_SKIPPED"];
 /** hosted 桌预审点名链上限：同一根提交上最多连续点名次数（防 ping-pong），超出强制放行 */
 const DIRECTIVE_CHAIN_MAX = 3;
 /** 可暂停的会议阶段：open 未开始、human_intervention 已是人工态、closed 已结束，均不可暂停 */
@@ -198,6 +198,8 @@ export class Hub {
     ownerRole?: Role;
     owner: { seatName: string; agentLabel: string };
     maxReviewRounds?: number; turnTimeoutMs?: number;
+    /** 本桌系统预审开关（缺省 true 开） */
+    precheckEnabled?: boolean;
   }): {
     tableId: string; ownerSeatId: string; ownerSeatToken: string; tableType: TableType;
     mode: "self" | "hosted";
@@ -247,6 +249,7 @@ export class Hub {
       goals, deliverables, rules, rolePlan, ownerSeat: "",
       roundNo: 1, deadlockCount: 0, createdAt: Date.now(), seatCount: 0,
       maxReviewRounds, turnTimeoutMs,
+      precheckEnabled: p.precheckEnabled !== false,
     };
 
     // 自建问询桌：建桌人即问询方，不占席位（ownerSeat=ASKER_SEAT 虚拟标识，提问走 my 通道）；
@@ -303,7 +306,7 @@ export class Hub {
     }));
     for (const inv of inviteCodes) this.store.addInvite(inv.code, tableId, inv.role);
 
-    this.sysMsg(tableId, "SEAT_JOINED", { seat: ownerSeat });
+    this.sysMsg(tableId, "SEAT_JOINED", { seat: this.seatPublicView(ownerSeat) });
     if (def.id === "inquiry") {
       this.sysMsg(tableId, "INFO", { text: `主持人已建问询桌：问询方凭「问询方」邀请码经网页就位，回答方凭码入席并声明回答范围，就绪后由问询方开始问询`, level: "info" });
     }
@@ -410,7 +413,7 @@ export class Hub {
     this.store.saveTable(meta);
     const token = `rts_${randomBytes(24).toString("base64url")}`;
     this.store.saveSeatToken(token, tableId, seatId);
-    this.sysMsg(tableId, "SEAT_JOINED", { seat });
+    this.sysMsg(tableId, "SEAT_JOINED", { seat: this.seatPublicView(seat) });
     this.audit(tableId, seatId, "seat_join", { name: seatName, role: p.role, by: user.name });
     return { seatId, token, seat };
   }
@@ -453,7 +456,7 @@ export class Hub {
       ready,
     };
     this.store.saveSeat(tableId, seat);
-    this.sysMsg(tableId, "SEAT_JOINED", { seat, configUpdate: true });
+    this.sysMsg(tableId, "SEAT_JOINED", { seat: this.seatPublicView(seat), configUpdate: true });
     this.audit(tableId, seat.seatId, "seat_config", { ready, stancePreset: p.stancePreset, stylePreset: p.stylePreset, ...(meta.pause ? { paused: true } : {}) });
     return seat;
   }
@@ -616,9 +619,18 @@ export class Hub {
     return s as ServerSeat;
   }
 
-  tableInfo(tableId: string): TableInfoPayload {
+  /** 席位公开投影：立场/风格（含预设 ID）仅本席与系统观察员可见——他席视角剥掉四字段，
+   *  保留分工与就绪语义（scope/dataScope/ready 全桌互见）。SEAT_JOINED 广播同用此投影。 */
+  private seatPublicView(seat: SeatInfo): PublicSeat {
+    return { ...seat, config: { scope: seat.config.scope, dataScope: seat.config.dataScope, ready: seat.config.ready } };
+  }
+
+  /** 桌况投影：viewer 给出视角时，非本席（且非 admin）席位走公开投影（立场/风格不可见）；
+   *  引擎内部消费（就绪判定/角色统计）只读 ready/role/scope，不受剥离影响 */
+  tableInfo(tableId: string, viewer?: { seatId?: string | null; admin?: boolean }): TableInfoPayload {
     const meta = this.requireTable(tableId);
-    const seats = this.store.getSeats(tableId);
+    const seats = this.store.getSeats(tableId).map((s) =>
+      viewer && (viewer.admin || (viewer.seatId && s.seatId === viewer.seatId)) ? s : this.seatPublicView(s));
     const artifacts = this.store.getArtifacts(tableId).map((a) => ({
       artifactId: a.artifactId, name: a.name, ownerSeat: a.ownerSeat,
       latestVersion: a.versions.length, lockedBy: a.lockedBy,
@@ -627,6 +639,7 @@ export class Hub {
     return {
       tableId, topic: meta.topic, template: meta.template, phase: meta.phase, mode: meta.mode,
       tableType: meta.tableType,
+      precheckEnabled: meta.precheckEnabled !== false,
       goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, ownerSeat: meta.ownerSeat,
       roundNo: meta.roundNo, deadlockCount: meta.deadlockCount, seats, artifacts,
       activeTurn,
@@ -687,7 +700,7 @@ export class Hub {
     for (;;) {
       const messages = this.store.getMessagesSince(tableId, since);
       const ownerDirectives = this.pendingOwnerDirectives(tableId, seat.seatId);
-      const table = this.tableInfo(tableId);
+      const table = this.tableInfo(tableId, { seatId: seat.seatId });
       const yourTurn = table.activeTurn && table.activeTurn.seatId === seat.seatId ? table.activeTurn : null;
       const myTask = this.myTaskOf(table, seat, yourTurn);
       if (messages.length > 0 || ownerDirectives.length > 0 || Date.now() >= deadline) {
@@ -710,7 +723,7 @@ export class Hub {
     this.requireTable(tableId);
     this.touchSeat(seat, tableId);
     return {
-      table: this.tableInfo(tableId),
+      table: this.tableInfo(tableId, { seatId: seat.seatId }),
       documents: this.listDocuments(tableId, seat.seatId) as SeatDocumentMeta[],
       changes: this.changesOf(tableId, since),
       ownerDirectives: this.pendingOwnerDirectives(tableId, seat.seatId),
@@ -891,7 +904,8 @@ export class Hub {
 
     // 预审调度层（全桌型一致，self/hosted 均过）：消费发言权的回合提交，在原调度推导/阶段推进之前过一道预审；
     // pass/skipped → 照常 maybeAdvance；redirect → 落点名指令并压住推进，等被点名席 SUPPLEMENT。
-    if (TURN_BOUND[type]) {
+    // 两个豁免：本桌预审已关闭（meta.precheckEnabled，控制人可随时切换）；人工代答（human_proxied，持有人亲手写的回合内容不经系统预审）。
+    if (TURN_BOUND[type] && meta.precheckEnabled !== false && !(extraFlags ?? []).includes("human_proxied")) {
       await this.runPrecheck(tableId, seat, msg);
       return msg;
     }
@@ -1233,9 +1247,10 @@ export class Hub {
     const proposer = seats.find((s) => s.role === "proposer");
     const reviewers = seats.filter((s) => s.role === "reviewer");
     const msgs = this.store.getMessages(tableId);
-    const grant = (seatId: string, taskHint: string, pendingRequest?: RequestPayload): TurnGrantPayload => ({
+    const grant = (seatId: string, taskHint: string, pendingRequest?: RequestPayload, toMsgId?: string): TurnGrantPayload => ({
       seatId, phase: meta.phase, roundNo: meta.roundNo,
       deadline: Date.now() + meta.turnTimeoutMs, taskHint, pendingRequest,
+      ...(toMsgId ? { toMsgId } : {}),
     });
 
     // 预审调度层（全桌型一致，在原调度之前）：预审进行中不授出发言权；点名指令挂起时发言权归被点名席
@@ -1263,14 +1278,16 @@ export class Hub {
           if (!answered.has(to)) answered.set(to, new Set());
           answered.get(to)!.add(m.fromSeat);
         }
+        const skippedAns = this.skippedAnswersOf(tableId);
         for (const q of msgs) {
           if (q.seq <= startIdx || q.type !== "QUESTION" || q.fromSeat !== ASKER_SEAT) continue;
           const qp = q.payload as QuestionPayload;
           const targets = qp.toSeat ? answerers.filter((s) => s.seatId === qp.toSeat) : answerers;
-          const next = targets.find((s) => !answered.get(q.msgId)?.has(s.seatId));
+          const next = targets.find((s) => !answered.get(q.msgId)?.has(s.seatId) && !skippedAns.get(q.msgId)?.has(s.seatId));
           if (next) {
             return grant(next.seatId,
-              `问询方提问待你作答：${qp.text.slice(0, 120)}…——在本席声明的讨论/数据范围内作答（超范围请明确说明并拒答、给出建议问询方向），POST /api/tables/:id/messages type=REPLY payload={"toMsgId":"${q.msgId}","text":"回答全文"}；如需文档支撑可先发布产物`);
+              `问询方提问待你作答：${qp.text.slice(0, 120)}…——在本席声明的讨论/数据范围内作答（超范围请明确说明并拒答、给出建议问询方向），POST /api/tables/:id/messages type=REPLY payload={"toMsgId":"${q.msgId}","text":"回答全文"}；如需文档支撑可先发布产物`,
+              undefined, q.msgId);
           }
         }
         return null;
@@ -1299,16 +1316,17 @@ export class Hub {
 
       case "statements": {
         const def = tableTypeOf(meta.tableType);
+        const skipped = this.skippedOf(tableId, "statements", meta.roundNo);
         if (def.flow === "collab") {
           // 协同流：各协作者依次发布自己负责部分的初稿（产物 + STATEMENT），全员齐备自动进互审
           const collaborators = seats.filter((s) => s.role === "collaborator");
           const artifacts = this.store.getArtifacts(tableId);
-          const next = collaborators.find((s) =>
-            !msgs.some((m) => m.type === "STATEMENT" && m.fromSeat === s.seatId)
-            || !artifacts.some((a) => a.ownerSeat === s.seatId));
+          const next = collaborators.find((s) => !skipped.has(s.seatId) &&
+            (!msgs.some((m) => m.type === "STATEMENT" && m.fromSeat === s.seatId)
+              || !artifacts.some((a) => a.ownerSeat === s.seatId)));
           return next ? grant(next.seatId, `${def.phaseLabels.statements ?? "初稿发布"}：先 POST /api/tables/:id/artifacts 发布你负责部分的初稿产物，再发 STATEMENT 概述（分工/覆盖范围/已知缺口）；全员齐备自动进入${def.phaseLabels.review ?? "互审"}`) : null;
         }
-        return proposer ? grant(proposer.seatId, "陈述提案：先 POST /api/tables/:id/artifacts 发布产物 v1，再发 STATEMENT 概述（两者齐备自动进入评审）") : null;
+        return proposer && !skipped.has(proposer.seatId) ? grant(proposer.seatId, "陈述提案：先 POST /api/tables/:id/artifacts 发布产物 v1，再发 STATEMENT 概述（两者齐备自动进入评审）") : null;
       }
 
       case "review": {
@@ -1323,6 +1341,7 @@ export class Hub {
           spoken.add(m.fromSeat);
           if ((m.payload as ReviewCommentPayload).done) done.add(m.fromSeat);
         }
+        for (const s of this.skippedOf(tableId, "review", meta.roundNo)) spoken.add(s);
         const next = speakers.find((s) => !spoken.has(s.seatId) && !done.has(s.seatId));
         return next ? grant(next.seatId, def.flow === "collab"
           ? `第 ${meta.roundNo} 轮${def.phaseLabels.review ?? "互审"}：REVIEW_COMMENT 对其他协作者的部分逐条指出缺口与建议（severity: must/should/nice；也可对自己部分提求助缺口），全部给完可 done:true`
@@ -1332,12 +1351,14 @@ export class Hub {
       case "response": {
         const def = tableTypeOf(meta.tableType);
         if (def.flow === "collab") {
-          // 协同流：意见归属方依次处置（产物 owner / 资料上传者 / 建桌人统稿）
+          // 协同流：意见归属方依次处置（产物 owner / 资料上传者 / 建桌人统稿）；被控制人跳过的归属方本轮不再轮到
           const pending = this.collabPendingResponses(tableId);
           const next = pending[0];
           return next ? grant(next.seat.seatId, `${def.phaseLabels.response ?? "缺口认领"}：有 ${next.itemIds.length} 条互审意见待你处置（GET /api/tables/:id/review-items 对照）：RESPONSE items 认领补齐（accept，action.executeBy: self 自己改 / reviewerSeat 请意见提出席改）/ defer / reject / human`) : null;
         }
-        return proposer ? grant(proposer.seatId, "逐条回应评审：RESPONSE items[].decision=accept/reject（accept 可带 action.executeBy：self 自己改 / reviewerSeat 请意见提出席改）") : null;
+        return proposer && !this.skippedOf(tableId, "response", meta.roundNo).has(proposer.seatId)
+          ? grant(proposer.seatId, "逐条回应评审：RESPONSE items[].decision=accept/reject（accept 可带 action.executeBy：self 自己改 / reviewerSeat 请意见提出席改）")
+          : null;
       }
 
       case "execution": {
@@ -1355,6 +1376,7 @@ export class Hub {
       case "convergence": {
         const startIdx = this.phaseStartSeq(tableId, "convergence", null);
         const voted = new Set(msgs.filter((m) => m.seq > startIdx && m.type === "CONSENSUS_VOTE").map((m) => m.fromSeat));
+        for (const s of this.skippedOf(tableId, "convergence", meta.roundNo)) voted.add(s);
         const next = seats.find((s) => s.caps.canVote && !voted.has(s.seatId));
         return next ? grant(next.seatId, "共识表决：CONSENSUS_VOTE decision: pass / conditional_pass / reject") : null;
       }
@@ -1381,6 +1403,7 @@ export class Hub {
     }
     const byOwner = new Map<string, string[]>();
     const activeIds = new Set(seats.map((s) => s.seatId));
+    const skippedResp = this.skippedOf(tableId, "response", meta.roundNo);
     for (const m of msgs) {
       if (m.seq <= reviewStart || m.type !== "REVIEW_COMMENT") continue;
       const pl = m.payload as ReviewCommentPayload;
@@ -1390,11 +1413,36 @@ export class Hub {
           ? this.store.getDocument(tableId, pl.docId)?.uploadedBy
           : undefined;
       if (!owner || !activeIds.has(owner)) owner = meta.ownerSeat; // 归属席退席/缺失 → 建桌人统稿兜底
+      if (skippedResp.has(owner)) continue; // 控制人跳过的归属方：本轮意见视为已处置（留案底不派生请求）
       const pendingIds = pl.items.filter((it) => !responded.has(it.id)).map((it) => it.id);
       if (pendingIds.length === 0 || !activeIds.has(owner)) continue;
       byOwner.set(owner, [...(byOwner.get(owner) ?? []), ...pendingIds]);
     }
     return seats.filter((s) => byOwner.has(s.seatId)).map((s) => ({ seat: s, itemIds: byOwner.get(s.seatId)! }));
+  }
+
+  /** 控制人跳过标记（TURN_SKIPPED 系统消息）：按 (phase, roundNo) 维度取被跳过席位——新一轮该席正常参与，不被永久跳过 */
+  private skippedOf(tableId: string, phase: Phase, roundNo: number): Set<string> {
+    const s = new Set<string>();
+    for (const m of this.store.getMessages(tableId)) {
+      if (m.type !== "TURN_SKIPPED") continue;
+      const p = m.payload as TurnSkippedPayload;
+      if (p.phase === phase && p.roundNo === roundNo) s.add(p.seatId);
+    }
+    return s;
+  }
+
+  /** qa 的跳过标记：toMsgId（提问）→ 被跳过的回答席（每问题独立） */
+  private skippedAnswersOf(tableId: string): Map<string, Set<string>> {
+    const map = new Map<string, Set<string>>();
+    for (const m of this.store.getMessages(tableId)) {
+      if (m.type !== "TURN_SKIPPED") continue;
+      const p = m.payload as TurnSkippedPayload;
+      if (!p.toMsgId) continue;
+      if (!map.has(p.toMsgId)) map.set(p.toMsgId, new Set());
+      map.get(p.toMsgId)!.add(p.seatId);
+    }
+    return map;
   }
 
   /** 进入某阶段（第 roundNo 轮 review）的消息 seq 分界 */
@@ -1449,20 +1497,21 @@ export class Hub {
         break;
 
       case "statements": {
+        const skipped = this.skippedOf(tableId, "statements", meta.roundNo);
         if (def.flow === "collab") {
           const collaborators = seats.filter((s) => s.role === "collaborator");
           if (collaborators.length === 0) break;
           const artifacts = this.store.getArtifacts(tableId);
-          const allDone = collaborators.every((s) =>
-            msgs.some((m) => m.type === "STATEMENT" && m.fromSeat === s.seatId)
-            && artifacts.some((a) => a.ownerSeat === s.seatId));
+          const allDone = collaborators.every((s) => skipped.has(s.seatId) ||
+            (msgs.some((m) => m.type === "STATEMENT" && m.fromSeat === s.seatId)
+              && artifacts.some((a) => a.ownerSeat === s.seatId)));
           if (allDone) this.setPhase(tableId, "review", "全部协作者已发布初稿并陈述", 1);
           break;
         }
         if (!proposer) break;
         const hasStatement = msgs.some((m) => m.type === "STATEMENT" && m.fromSeat === proposer.seatId);
         const hasArtifact = this.store.getArtifacts(tableId).some((a) => a.ownerSeat === proposer.seatId);
-        if (hasStatement && hasArtifact) this.setPhase(tableId, "review", "提案已发布并陈述", 1);
+        if (skipped.has(proposer.seatId) || (hasStatement && hasArtifact)) this.setPhase(tableId, "review", "提案已发布并陈述", 1);
         break;
       }
 
@@ -1473,6 +1522,7 @@ export class Hub {
           : seats.filter((s) => s.role === "reviewer");
         if (speakers.length === 0) break;
         const spoken = new Set(msgs.filter((m) => m.seq > startIdx && m.type === "REVIEW_COMMENT").map((m) => m.fromSeat));
+        for (const s of this.skippedOf(tableId, "review", meta.roundNo)) spoken.add(s);
         if (speakers.every((r) => spoken.has(r.seatId))) {
           this.setPhase(tableId, "response", def.flow === "collab" ? "全部协作者已完成互审" : "全部评审人已出具意见");
           if (def.flow === "collab") this.maybeAdvance(tableId); // 归属方全部缺位时立即推进，不停在空 response
@@ -1490,7 +1540,8 @@ export class Hub {
           break;
         }
         const startIdx = this.phaseStartSeq(tableId, "response", null);
-        const hasResponse = msgs.some((m) => m.seq > startIdx && m.type === "RESPONSE");
+        const hasResponse = msgs.some((m) => m.seq > startIdx && m.type === "RESPONSE")
+          || (proposer ? this.skippedOf(tableId, "response", meta.roundNo).has(proposer.seatId) : false);
         if (!hasResponse) break;
         const pending = this.store.getRequests(tableId).some((r) => r.status === "pending");
         this.setPhase(tableId, pending ? "execution" : "convergence", pending ? "存在待执行修改请求" : "评审意见已全部处置");
@@ -1512,7 +1563,7 @@ export class Hub {
     }
   }
 
-  /** convergence：全员投票后计票 */
+  /** convergence：全员投票后计票（被控制人跳过的席位=弃权：不计票也不否决） */
   private maybeTally(tableId: string) {
     const meta = this.requireTable(tableId);
     if (meta.phase !== "convergence") return;
@@ -1526,7 +1577,8 @@ export class Hub {
       const pl = m.payload as { decision: "pass" | "conditional_pass" | "reject"; conditions?: string };
       tally[m.fromSeat] = { decision: pl.decision, conditions: pl.conditions };
     }
-    if (Object.keys(tally).length < voters.length) return;
+    const skippedConv = this.skippedOf(tableId, "convergence", meta.roundNo);
+    if (voters.some((v) => !tally[v.seatId] && !skippedConv.has(v.seatId))) return;
     const pass = Object.values(tally).every((t) => t.decision !== "reject");
     this.sysMsg(tableId, "CONSENSUS_RESULT", { pass, tally, roundNo: meta.roundNo } satisfies ConsensusResultPayload);
     this.audit(tableId, "-", "consensus_result", { pass });
@@ -2088,6 +2140,139 @@ export class Hub {
     return this.doResume(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, force);
   }
 
+  /**
+   * 跳过当前回合发言人（控制人调度逃生门）：预审点名挂起时=解除点名按原提交放行；
+   * 其余=该席本轮该任务视为已处理（qa 对该问题弃答 / statements-review-response-convergence 计入已处理 / execution 请求置 rejected）。
+   * 落 TURN_SKIPPED 系统消息（事件溯源，崩溃后推导一致），全程审计。
+   */
+  private doSkipTurn(tableId: string, by: { seatId: string; name: string; role: string }, reason?: string) {
+    const meta = this.requireTable(tableId);
+    if (meta.pause) throw new ApiError(409, "meeting_paused", "会议暂停中：请先继续会议再跳过发言人");
+    if (!PAUSABLE_PHASES.includes(meta.phase)) {
+      throw new ApiError(409, meta.phase === "closed" ? "table_closed" : "not_meeting",
+        meta.phase === "closed" ? "会议已结束" : meta.phase === "open" ? "会议尚未开始（设定阶段无发言人可跳过）" : "人工介入模式由人工裁决推进");
+    }
+    if (this.precheckInFlight.has(tableId)) throw new ApiError(409, "precheck_in_progress", "预审进行中，稍候再跳过");
+
+    const reasonClean = reason ? checkField(reason, "reason", 1_000, 0) : undefined;
+    const seatName = (sid: string) => this.store.getSeat(tableId, sid)?.name ?? sid;
+    const emitSkip = (seatId: string, toMsgId?: string) => {
+      this.sysMsg(tableId, "TURN_SKIPPED", {
+        seatId, phase: meta.phase, roundNo: meta.roundNo,
+        ...(toMsgId ? { toMsgId } : {}),
+        ...(reasonClean ? { reason: reasonClean } : {}),
+        bySeat: by.seatId, byName: by.name, byRole: by.role,
+      } satisfies TurnSkippedPayload);
+    };
+
+    // ① 预审点名挂起：解除点名，按原提交放行
+    const directive = this.store.pendingDirective(tableId);
+    if (directive) {
+      directive.status = "closed";
+      directive.closedAt = Date.now();
+      directive.skippedBy = `${by.name}(${by.role})`;
+      this.store.saveDirective(directive);
+      emitSkip(directive.toSeat);
+      this.sysMsg(tableId, "INFO", {
+        text: `${by.name} 跳过了对 ${seatName(directive.toSeat)} 的预审点名补充，按原提交放行继续。`,
+        level: "info",
+      });
+      this.audit(tableId, by.seatId, "turn_skipped", { target: directive.toSeat, directive: directive.directiveId, reason: reasonClean ?? "" });
+      this.maybeAdvance(tableId);
+      return { skipped: true, seatId: directive.toSeat, via: "directive" as const };
+    }
+
+    // ② 当前发言权持有者（含 qa 的待答问题）
+    const turn = this.computeTurn(tableId);
+    if (turn) {
+      if (meta.phase === "execution") {
+        // execution：把本 turn 的执行请求置 rejected（无 turn 时兜底取首条 pending）
+        const reqs = this.store.getRequests(tableId);
+        const target = (turn.pendingRequest ? reqs.find((r) => r.req.requestId === turn.pendingRequest!.requestId && r.status === "pending") : undefined)
+          ?? reqs.find((r) => r.status === "pending");
+        if (target) {
+          target.status = "rejected";
+          target.response = { requestId: target.req.requestId, decision: "reject", reason: `控制人跳过（${reasonClean ?? "无响应"}）` };
+          this.store.saveRequest(tableId, target);
+        }
+        emitSkip(turn.seatId);
+        this.sysMsg(tableId, "INFO", {
+          text: `${by.name} 跳过了 ${seatName(turn.seatId)} 的执行请求处理${target ? `「${target.req.title}」` : ""}，该请求按拒绝处理，流程继续。`,
+          level: "info",
+        });
+      } else {
+        emitSkip(turn.seatId, turn.toMsgId);
+        this.sysMsg(tableId, "INFO", {
+          text: meta.phase === "qa"
+            ? `${by.name} 跳过了 ${seatName(turn.seatId)} 对当前问题的回答，继续后续问答。`
+            : `${by.name} 跳过了 ${seatName(turn.seatId)} 的本轮发言，流程继续推进。`,
+          level: "info",
+        });
+      }
+      this.audit(tableId, by.seatId, "turn_skipped", { target: turn.seatId, phase: meta.phase, roundNo: meta.roundNo, toMsgId: turn.toMsgId ?? "", reason: reasonClean ?? "" });
+      this.maybeAdvance(tableId);
+      return { skipped: true, seatId: turn.seatId, via: "turn" as const, ...(turn.toMsgId ? { toMsgId: turn.toMsgId } : {}) };
+    }
+
+    // ③ execution 无发言权（目标席不新鲜）但仍有挂起请求：按 rejected 收口
+    if (meta.phase === "execution") {
+      const target = this.store.getRequests(tableId).find((r) => r.status === "pending");
+      if (target) {
+        target.status = "rejected";
+        target.response = { requestId: target.req.requestId, decision: "reject", reason: `控制人跳过（${reasonClean ?? "无响应"}）` };
+        this.store.saveRequest(tableId, target);
+        this.sysMsg(tableId, "INFO", {
+          text: `${by.name} 跳过了 ${seatName(target.req.toSeat)} 的执行请求「${target.req.title}」（无响应），该请求按拒绝处理，流程继续。`,
+          level: "info",
+        });
+        this.audit(tableId, by.seatId, "turn_skipped", { target: target.req.toSeat, requestId: target.req.requestId, reason: reasonClean ?? "" });
+        this.maybeAdvance(tableId);
+        return { skipped: true, seatId: target.req.toSeat, via: "request" as const };
+      }
+    }
+
+    throw new ApiError(409, "nothing_to_skip", "当前没有可跳过的发言人（无挂起点名、无发言权持有者、无待处理执行请求）");
+  }
+
+  /** 网页持有人通道：主持人/建桌人（问询桌为问询方）跳过当前发言人 */
+  skipTurnByUser(userToken: string, tableId: string, reason?: string) {
+    const { by } = this.controllerOf(userToken, tableId);
+    return this.doSkipTurn(tableId, by, reason);
+  }
+
+  /** 切换本桌系统预审开关（控制人）：只影响之后的回合提交；在飞预审自然完成，已挂起点名仍需 SUPPLEMENT 或跳过处理 */
+  private doSetPrecheck(tableId: string, by: { seatId: string; name: string; role: string }, enabled: boolean) {
+    const meta = this.requireTable(tableId);
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "会议已结束");
+    if (meta.precheckEnabled === enabled) throw new ApiError(409, "no_change", `本桌系统预审已是${enabled ? "开启" : "关闭"}状态`);
+    meta.precheckEnabled = enabled;
+    this.store.saveTable(meta);
+    this.sysMsg(tableId, "INFO", {
+      text: `${by.name} ${enabled ? "开启" : "关闭"}了本桌系统预审${enabled ? "：之后的回合提交将先经系统预审" : "：之后的回合提交不再经系统预审，直接按原调度生效"}。`,
+      level: "info",
+    });
+    this.audit(tableId, by.seatId, "precheck_toggle", { by: by.name, role: by.role, enabled });
+    return { precheckEnabled: enabled };
+  }
+
+  /** 网页持有人通道：主持人/建桌人（问询桌为问询方）切换本桌预审 */
+  setPrecheckByUser(userToken: string, tableId: string, enabled: boolean) {
+    const { by } = this.controllerOf(userToken, tableId);
+    return this.doSetPrecheck(tableId, by, enabled);
+  }
+
+  /** 管理台：systemadmin 切换本桌预审 */
+  setPrecheckByAdmin(adminToken: string, tableId: string, enabled: boolean) {
+    const admin = this.requireAdmin(adminToken);
+    return this.doSetPrecheck(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, enabled);
+  }
+
+  /** 管理台：systemadmin 跳过当前发言人 */
+  skipTurnByAdmin(adminToken: string, tableId: string, reason?: string) {
+    const admin = this.requireAdmin(adminToken);
+    return this.doSkipTurn(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, reason);
+  }
+
   /** 待同意的暂停申请投影（观察端「暂停申请」卡数据源） */
   private pendingPauseViews(tableId: string): PauseRequestView[] {
     return this.store.getPauseRequests(tableId)
@@ -2148,8 +2333,9 @@ export class Hub {
     if (userId && role !== "systemadmin" && !this.activeSeatOfUser(tableId, userId) && !isAsker) {
       throw new ApiError(403, "not_participant", "仅可查看自己参与的圆桌（你在本桌没有席位）");
     }
+    const mySeatId = userId ? this.activeSeatOfUser(tableId, userId) : null;
     return {
-      table: this.tableInfo(tableId),
+      table: this.tableInfo(tableId, { seatId: mySeatId, admin: role === "systemadmin" }),
       documents: this.listDocuments(tableId),
       requests: this.store.getRequests(tableId),
       reviewItems: this.collectReviewItems(tableId),
@@ -2157,7 +2343,7 @@ export class Hub {
       minutes: this.store.getMessages(tableId).filter((m) => m.type === "MINUTES").at(-1)?.payload ?? null,
       recentChanges: this.changesOf(tableId, 0).slice(-50),
       meta: { createdAt: meta.createdAt, closedAt: meta.closedAt ?? null, goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, rolePlan: meta.rolePlan },
-      mySeatId: userId ? this.activeSeatOfUser(tableId, userId) : null,
+      mySeatId,
       /** 问询桌：当前用户是否问询方（建桌人，无席位）——详情页提问区/结束按钮的显示依据 */
       isAsker: userId ? isAsker : false,
       /** 问询桌已就位的问询方真名（席位与立场/圆桌示意图的问询方卡片来源；非问询桌为 null） */
@@ -2408,6 +2594,12 @@ export class Hub {
   // ================= 纪要 =================
 
   /** 问询纪要：问答对汇总 + 回答方范围声明 + 产物/资料（无评审与表决段） */
+  /** 纪要里的数据范围格式化：对象条目（v1.1.0 披露级别）标注授权语义，字符串旧条目原样——修 [object Object] 序列化 */
+  private fmtDataScope(items: DataScopeItem[]): string {
+    const label: Record<string, string> = { read: "仅概括", quote: "可摘录", full: "可原文" };
+    return items.map((x) => (typeof x === "string" ? x : `${x.text}（${label[disclosureOf(x)] ?? x.grant}）`)).join("；");
+  }
+
   private buildInquiryMinutes(tableId: string, meta: TableMeta, closeReason: string): { tableId: string; topic: string; markdown: string; finalArtifacts: { artifactId: string; name: string; version: number }[] } {
     const seats = this.store.getSeats(tableId);
     const artifacts = this.store.getArtifacts(tableId);
@@ -2431,7 +2623,7 @@ export class Hub {
       if (!s.config.stance) continue;
       lines.push(`- **${s.name}**：${s.config.stance}`);
       if (s.config.scope) lines.push(`  - 回答范围：${s.config.scope}`);
-      if (s.config.dataScope.length) lines.push(`  - 数据范围：${s.config.dataScope.join("；")}`);
+      if (s.config.dataScope.length) lines.push(`  - 数据范围：${this.fmtDataScope(s.config.dataScope)}`);
     }
     lines.push("");
     lines.push("## 问答记录");
@@ -2500,7 +2692,7 @@ export class Hub {
       if (!s.config.stance) continue;
       lines.push(`- **${s.name}**（${s.role}）：${s.config.stance}`);
       if (s.config.scope) lines.push(`  - 讨论范围：${s.config.scope}`);
-      if (s.config.dataScope.length) lines.push(`  - 数据范围：${s.config.dataScope.join("；")}`);
+      if (s.config.dataScope.length) lines.push(`  - 数据范围：${this.fmtDataScope(s.config.dataScope)}`);
     }
     lines.push("");
     lines.push("## 最终产物");

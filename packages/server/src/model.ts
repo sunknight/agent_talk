@@ -9,6 +9,8 @@ export interface TableMeta {
   tableType: TableType;
   /** 建桌模式：self 各方自行建桌（原流程）/ hosted 主持人建桌（预审调度层启用） */
   mode: "self" | "hosted";
+  /** 本桌系统预审开关（缺省视为 true 开）；控制人可随时切换 */
+  precheckEnabled?: boolean;
   /** 本次讨论需要达成的共识 */
   goals: string;
   /** 期望交付物 */
@@ -75,6 +77,8 @@ export interface DirectiveRecord {
   createdAt: number;
   status: "pending" | "closed";
   closedAt?: number;
+  /** 控制人跳过（非席位 SUPPLEMENT 闭合）：原提交按放行处理 */
+  skippedBy?: string;
 }
 
 /** 入库消息：信封 + 桌内单调递增 seq（长轮询增量拉取的游标） */

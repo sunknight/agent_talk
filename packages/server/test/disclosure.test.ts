@@ -16,6 +16,7 @@ import { is } from "@rt/shared";
 
 let base = "";
 let http: import("node:http").Server;
+let hub: Awaited<ReturnType<typeof start>>["hub"];
 
 async function call(method: string, path: string, opts: { token?: string; body?: unknown } = {}) {
   const res = await fetch(base + path, {
@@ -32,7 +33,7 @@ async function call(method: string, path: string, opts: { token?: string; body?:
 
 beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), "rt-disc-test-"));
-  ({ http } = await start({ port: 0, dataDir: dir, host: "127.0.0.1" }));
+  ({ http, hub } = await start({ port: 0, dataDir: dir, host: "127.0.0.1" }));
   base = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
 });
 afterAll(() => new Promise<void>((r) => { http.closeIdleConnections?.(); http.close(() => r()); }));
@@ -125,5 +126,44 @@ describe("数据范围披露级别", () => {
     expect(OBSERVER_HTML).toContain("账号不同的各方即不同参与方");
     expect(OBSERVER_HTML).toContain("与本桌问询方是不同用户");
     expect(OBSERVER_HTML).toContain("账号即身份边界");
+  });
+
+  it("纪要数据范围序列化：对象条目标注披露级别，不再出现 [object Object]（任务 0043）", async () => {
+    const admin = ((await call("POST", "/api/users", { body: { name: "纪要-admin" } })).data!.token) as string;
+    hub.store.setUserRole(hub.store.findUserByToken(admin)!.userId, "systemadmin");
+    const owner = ((await call("POST", "/api/users", { body: { name: "纪要-建桌人" } })).data!.token) as string;
+    const created = await call("POST", "/api/tables", {
+      token: owner, body: { topic: "纪要序列化桌", owner: { seatName: "A", agentLabel: "z" } },
+    });
+    const tid = created.data!.tableId;
+    const seatTok = created.data!.ownerSeatToken;
+    const rc = created.data!.inviteCodes.find((c: { role: string }) => c.role === "reviewer").code;
+    const revUser = ((await call("POST", "/api/users", { body: { name: "纪要-评审" } })).data!.token) as string;
+    const rj = await call("POST", `/api/tables/${tid}/seats`, {
+      token: revUser, body: { inviteCode: rc, seatName: "B", role: "reviewer", agentLabel: "c" },
+    });
+    // 建桌人带混合条目（对象 + 旧字符串）就绪
+    const cfg = await call("POST", `/api/tables/${tid}/seat-config`, {
+      token: seatTok,
+      body: { stance: "提案", scope: "全文", ready: true, dataScope: [{ text: "设计文档", grant: "quote" }, "旧格式条目"] },
+    });
+    expect(cfg.ok).toBe(true);
+    await call("POST", `/api/tables/${tid}/seat-config`, { token: rj.data.token, body: { stance: "评审", ready: true } });
+    await call("POST", `/api/tables/${tid}/start`, { token: seatTok });
+    const closed = await call("POST", `/api/admin/tables/${tid}/close`, { token: admin, body: { reason: "验证纪要序列化" } });
+    expect(closed.ok, JSON.stringify(closed.error)).toBe(true);
+    const minutes = (await call("GET", `/api/tables/${tid}/poll?since=0&timeout=0`, { token: seatTok })).data!.messages
+      .filter((m: { type: string }) => m.type === "MINUTES").at(-1);
+    expect(minutes).toBeTruthy();
+    expect(minutes.payload.markdown).not.toContain("[object Object]");
+    expect(minutes.payload.markdown).toContain("设计文档（可摘录）");
+    expect(minutes.payload.markdown).toContain("旧格式条目");
+  });
+
+  it("GET /api/styles 别名：返回风格预设（任务 0043）", async () => {
+    const r = await call("GET", "/api/styles");
+    expect(r.ok).toBe(true);
+    expect(Array.isArray(r.data!.styles)).toBe(true);
+    expect(r.data!.styles.length).toBeGreaterThan(0);
   });
 });

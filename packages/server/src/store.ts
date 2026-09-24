@@ -157,7 +157,7 @@ export class Store extends EventEmitter {
       modelCallOfTable: this.db.prepare("SELECT * FROM model_call_logs WHERE table_id = ? ORDER BY id"),
       modelCallDeleteOfTable: this.db.prepare("DELETE FROM model_call_logs WHERE table_id = ?"),
 
-      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
       tableAll: this.db.prepare("SELECT * FROM tables ORDER BY rowid"),
 
@@ -242,6 +242,9 @@ export class Store extends EventEmitter {
     } catch { /* duplicate column：已是新 schema */ }
     try {
       this.db.exec("ALTER TABLE tables ADD COLUMN paused TEXT");
+    } catch { /* duplicate column：已是新 schema */ }
+    try {
+      this.db.exec("ALTER TABLE tables ADD COLUMN precheck_enabled INTEGER NOT NULL DEFAULT 1");
     } catch { /* duplicate column：已是新 schema */ }
   }
 
@@ -462,6 +465,7 @@ export class Store extends EventEmitter {
       t.mode ?? "self",
       t.tableType ?? "review",
       t.pause ? J(t.pause) : null,
+      t.precheckEnabled === false ? 0 : 1,
     );
   }
   /** paused 列（PauseInfo JSON）→ 结构化；坏数据（手改库）按未暂停处理，不让单行脏数据拖垮启动 */
@@ -485,6 +489,7 @@ export class Store extends EventEmitter {
       seatCount: Number(r.seat_count), maxReviewRounds: Number(r.max_review_rounds), turnTimeoutMs: Number(r.turn_timeout_ms),
       mode: r.mode === "hosted" ? "hosted" : "self",
       pause: Store.rowPause(r.paused),
+      precheckEnabled: Number(r.precheck_enabled ?? 1) !== 0,
     };
   }
   saveTable(meta: TableMeta) { this.upsertTableRow(meta); }

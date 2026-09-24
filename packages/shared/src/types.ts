@@ -46,6 +46,9 @@ export interface SeatInfo {
   config: SeatConfig;
 }
 
+/** 席位公开投影（他席视角）：config 剥掉立场/风格四字段——立场/风格仅本席与系统观察员可见（见 engine.seatPublicView） */
+export type PublicSeat = Omit<SeatInfo, "config"> & { config: Omit<SeatConfig, "stancePreset" | "stance" | "stylePreset" | "style"> };
+
 export interface SeatConfig {
   /** 选用的立场预设 ID（见 STANCE_PRESETS），可为空（纯自定义） */
   stancePreset?: string;
@@ -491,6 +494,8 @@ export type MsgType =
   | "SEAT_JOIN" | "SEAT_JOINED" | "SEAT_CONFIG" | "SEAT_LEAVE" | "SEAT_LEFT"
   // 调度
   | "TURN_GRANT" | "TURN_RELEASE" | "PHASE_CHANGE"
+  // 控制人跳过当前发言人（服务器专属系统消息，席位不可直发）
+  | "TURN_SKIPPED"
   // 主持人预审（服务器专属系统消息，席位不可直发）
   | "HOST_PREREVIEW" | "SUPPLEMENT"
   // 讨论
@@ -550,6 +555,8 @@ export interface TableInfoPayload {
   tableType: TableType;
   /** 建桌模式：self 各方自行建桌 / hosted 主持人建桌（预审调度层启用） */
   mode: "self" | "hosted";
+  /** 本桌系统预审开关（缺省开）：关闭后回合提交不再经系统预审，直接按原调度生效；控制人可随时切换 */
+  precheckEnabled: boolean;
   /** 本次讨论要达成的共识 */
   goals: string;
   /** 期望交付物 */
@@ -558,7 +565,7 @@ export interface TableInfoPayload {
   rules: string;
   ownerSeat: string;
   roundNo: number; deadlockCount: number;
-  seats: SeatInfo[];
+  seats: (SeatInfo | PublicSeat)[];
   artifacts: { artifactId: string; name: string; ownerSeat: string; latestVersion: number; lockedBy: string | null }[];
   activeTurn: TurnGrantPayload | null;
   /** 当前发言权席位的思考进度（旁路上报投影，与 activeTurn 轮次匹配才非空；旧 skill 不上报时为 null） */
@@ -606,6 +613,8 @@ export interface TableCreatePayload {
   inviteRoles?: Role[];
   /** self（默认）= 建桌人自动成为提案方（协作类桌成为协作者），原流程；hosted = 建桌人成为主持人（只管桌与调度，预审层启用） */
   mode?: "self" | "hosted";
+  /** 本桌系统预审开关（缺省 true 开启；问询桌无回合提交，开关无效果） */
+  precheckEnabled?: boolean;
   /** 本次讨论需要达成的共识 */
   goals?: string;
   /** 期望交付物 */
@@ -651,9 +660,26 @@ export interface TurnGrantPayload {
   deadline: number; taskHint: string;
   /** execution 阶段：本 turn 需处理的请求 */
   pendingRequest?: RequestPayload;
+  /** qa 阶段：本 turn 待答的提问 msgId（跳过发言人时按问题定位） */
+  toMsgId?: string;
 }
 export interface TurnReleasePayload { reason?: string; pass?: boolean; }
 export interface PhaseChangePayload { from: Phase; to: Phase; reason: string; }
+
+/** TURN_SKIPPED 载荷（服务器专属系统消息）：控制人（建桌人/主持人/系统管理员，问询桌含问询方）
+ *  跳过当前回合发言人——该席本轮该任务视为已处理（预审点名=按原提交放行；qa=该席对该问题弃答） */
+export interface TurnSkippedPayload {
+  /** 被跳过的席位 */
+  seatId: string;
+  /** 跳过发生时的阶段与轮次（推导层按 (phase, roundNo) 匹配，新一轮不受影响） */
+  phase: Phase;
+  roundNo: number;
+  /** qa 阶段：被跳过的提问 msgId */
+  toMsgId?: string;
+  /** 跳过原因（控制人填写） */
+  reason?: string;
+  bySeat: string; byName: string; byRole: string;
+}
 
 // ---------- 主持人预审（hosted 桌专用） ----------
 
@@ -903,6 +929,8 @@ export type AuditEvent =
   | "precheck_result" | "directive_open" | "supplement_done" | "table_update"
   /** 会议暂停/恢复（叠加态）与暂停申请：pause_request/table_pause(via=request) 的 detail 均记录申请方 */
   | "table_pause" | "table_resume" | "pause_request" | "pause_request_approved"
+  /** 控制人跳过当前回合发言人（预审点名挂起=放行；execution=请求按拒绝收口）与按桌预审开关切换 */
+  | "turn_skipped" | "precheck_toggle"
   /** 管理台（systemadmin）事件 */
   | "admin_set_role" | "admin_set_disabled" | "admin_reissue_user_token" | "admin_close" | "admin_human" | "admin_delete_table"
   /** 网页登录链接：agent 生成 / 持有人兑换（一次性 + 短时效；只记元信息不记 token） */

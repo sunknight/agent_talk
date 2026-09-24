@@ -386,8 +386,8 @@ function ttOf(id){ return TT_BY_ID[id] || TT_BY_ID.review; }
 function typeBadge(tt){ return '<span class="rb ttype" title="'+escAttr(ttOf(tt).description||'')+'">'+esc(ttOf(tt).label)+'</span>'; }
 function phaseLabel(tt, ph){ var d = ttOf(tt); return (d.phaseLabels && d.phaseLabels[ph]) || PHASE_LABEL[ph] || ph; }
 var STEP_DEFS = [['open','设定'],['statements','陈述'],['review','评审'],['response','回应'],['execution','执行'],['convergence','表决'],['closed','结束']];
-var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交', MEETING_PAUSED:'会议暂停', MEETING_RESUMED:'继续会议', PAUSE_REQUESTED:'暂停申请' };
-var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st', MEETING_PAUSED:'mt-req', MEETING_RESUMED:'mt-phase', PAUSE_REQUESTED:'mt-human' };
+var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交', MEETING_PAUSED:'会议暂停', MEETING_RESUMED:'继续会议', PAUSE_REQUESTED:'暂停申请', TURN_SKIPPED:'跳过发言' };
+var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st', MEETING_PAUSED:'mt-req', MEETING_RESUMED:'mt-phase', PAUSE_REQUESTED:'mt-human', TURN_SKIPPED:'mt-human' };
 var CHAT_SPEECH={STATEMENT:1,REVIEW_COMMENT:1,RESPONSE:1,SUPPLEMENT:1,CONSENSUS_VOTE:1,ARTIFACT_PUBLISHED:1,REQUEST:1,RESPOND_REQUEST:1,QUESTION:1,REPLY:1};
 var CHAT_HUMAN_MSG={HUMAN_INPUT:1,HUMAN_RULING:1,ESCALATE:1};
 var CHAT_VIEWS=[['all','全部'],['speech','发言'],['human','指令'],['sys','系统']];
@@ -404,13 +404,16 @@ var STAGE_LABEL={prep:'准备中',ready:'全员就绪 · 待开始',running:'进
 function stageOf(t,seats){
   if(t.phase==='closed') return 'ended';
   if(t.phase==='open'){
-    var need,rolesOk;
-    if(ttOf(t.tableType).flow==='inquiry'){
+    var need,rolesOk,flow=ttOf(t.tableType).flow;
+    if(flow==='inquiry'){
       need=seats.filter(function(s){ return s.role==='answerer'; });
       rolesOk=need.length>0;
     }else{
       need=seats.filter(function(s){ return s.role!=='host'; });
-      rolesOk=seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; });
+      /* 角色齐备按流程（对齐服务端 startTable）：协作流协作者≥2，评审流才需提案方+评审方 */
+      rolesOk=flow==='collab'
+        ?seats.filter(function(s){ return s.role==='collaborator'; }).length>=2
+        :seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; });
     }
     return (rolesOk&&need.length>0&&need.every(function(s){ return s.config&&s.config.ready; }))?'ready':'prep';
   }
@@ -436,6 +439,7 @@ function msgBodyText(m,seats){
     if(p.targetSeatId) body+='　→ 点名 '+(seatName(seats,p.targetSeatId));
   }
   else if(m.type==='SUPPLEMENT') body=(p.text||'');
+  else if(m.type==='TURN_SKIPPED') body='跳过 '+(seatName(seats,p.seatId))+' 的发言 by '+(p.byName||'')+(p.reason?('：'+p.reason):'')+'（该席本轮视为已处理）';
   else if(m.type==='MEETING_PAUSED') body='会议暂停 by '+(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）'+(p.via==='request'&&p.requestedByName?('，经 '+p.requestedByName+' 申请'):'')+(p.reason?('：'+p.reason):'')+'；'+(p.note||'');
   else if(m.type==='MEETING_RESUMED') body='继续会议 by '+(p.byName||'')+'，恢复到「'+(PHASE_LABEL[p.phase]||p.phase||'')+'」'+(p.forced?'［强制 · 跳过就绪检查］':'');
   else if(m.type==='PAUSE_REQUESTED') body=(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）申请暂停'+(p.reason?('：'+p.reason):'')+' — 等待 主持人/建桌人/系统管理员 同意';
@@ -1409,6 +1413,7 @@ function renderCreateForm(){
     +'<h4>高级参数（留空用默认）</h4>'
     +'<div class="row"><div class="frow" style="flex:1"><label class="t" for="ctRounds">评审轮次上限（默认 2）</label><input id="ctRounds" type="number" min="1" max="10"></div>'
     +'<div class="frow" style="flex:1"><label class="t" for="ctTurnSec">发言超时秒（默认 300）</label><input id="ctTurnSec" type="number" min="30"></div></div>'
+    +'<div class="frow" id="ctPrecheckRow"><label class="t">系统预审</label><div class="cchoice"><label><input type="checkbox" id="ctPrecheck" checked> 开启——各方 agent 的回合提交先经系统预审（人代答不受影响；建桌后可在「会议控制」随时开关）</label></div></div>'
     +'<div class="ferr" id="ctErr"></div>'
     +'<div class="row" style="margin-top:10px"><button id="ctCancel">取消</button><span class="sp"></span><button id="ctSubmit" class="primary">创建</button></div>'
     +'</div>';
@@ -1478,6 +1483,7 @@ function renderCreateForm(){
       :hosted
       ?'我的席位（主持人）'
       :'我的席位（角色：'+(ROLE_LABEL[role]||role)+'）';
+    document.getElementById('ctPrecheckRow').style.display = inq?'none':'';
   }
   document.querySelectorAll('input[name="ctType"]').forEach(function(r){ r.onchange=syncType; });
   syncType();
@@ -1501,6 +1507,7 @@ function renderCreateForm(){
     var rp=document.getElementById('ctRolePlan').value.trim(); if(rp) body.rolePlan=rp;
     var rounds=parseInt(document.getElementById('ctRounds').value,10); if(rounds>=1&&rounds<=10) body.maxReviewRounds=rounds;
     var turnSec=parseInt(document.getElementById('ctTurnSec').value,10); if(turnSec>=30) body.turnTimeoutMs=turnSec*1000;
+    if(tt.flow!=='inquiry') body.precheckEnabled=document.getElementById('ctPrecheck').checked;
     var btn=document.getElementById('ctSubmit'); btn.disabled=true; btn.textContent='创建中…';
     api('POST','/api/tables',body).then(function(r){ renderCreateResult(r,topic); })
       .catch(function(e){ btn.disabled=false; btn.textContent='创建'; err.textContent='创建失败：'+e.message; });
@@ -1705,7 +1712,7 @@ function seatCfgFormHtml(cfg, pausedMode){
 
 /* ---------- 我的席位折叠子区块（会议控制 / 申请暂停 / 凭证恢复）----------
    内容与元素 id 和旧版长面板一致（绑定不动），仅收纳为可折叠子区块；开合状态存 view.seatOpen 抗轮询重渲染 */
-function ctlBodyHtml(t,seats){
+function ctlBodyHtml(t,seats,turn){
   if(t.pause){
     var ctlSeats=seats.filter(function(s){ return s.role!=='host'; });
     var ctlReady=ctlSeats.filter(function(s){ return s.config&&s.config.ready; });
@@ -1719,8 +1726,20 @@ function ctlBodyHtml(t,seats){
       +'<div class="ferr" id="ctlErr"></div>';
     return h;
   }
+  var skippable=(t.precheck&&t.precheck.state==='directive')||!!turn||t.phase==='execution';
+  var inq=ttOf(t.tableType).flow==='inquiry';
   return '<div class="row"><input id="ctlPauseReason" placeholder="暂停原因（进入会议记录，可空）" style="flex:1;min-width:180px">'
     +'<button id="ctlPause">⏸ 暂停会议</button></div>'
+    +(skippable
+      ?'<div class="row" style="margin-top:6px"><button id="ctlSkip" class="danger">⏭ 跳过当前发言人</button>'
+       +'<span class="dim">'+(t.precheck&&t.precheck.state==='directive'
+          ?'解除当前预审点名，按原提交放行'
+          :turn?('跳过 '+esc(seatName(seats,turn.seatId))+' 的本轮发言，流程继续（该席本轮视为已处理）')
+          :'跳过当前待处理执行请求（按拒绝收口）')+'</span></div>'
+      :'')
+    +(t.precheckEnabled===false
+      ?'<div class="row" style="margin-top:6px"><button id="ctlPre">☑ 开启系统预审</button><span class="dim">本桌预审已关闭：agent 回合提交不经预审直接生效</span></div>'
+      :(inq?'':'<div class="row" style="margin-top:6px"><button id="ctlPre">☐ 关闭系统预审</button><span class="dim">关闭后 agent 回合提交不再经系统预审（人代答本就不经预审）</span></div>'))
     +'<div class="hint" style="margin-top:4px">暂停后各方可在「会话」输入框补充信息、在上方调整立场并重新就绪；全员就绪后在这里继续会议。</div>'
     +'<div class="ferr" id="ctlErr"></div>';
 }
@@ -1889,11 +1908,19 @@ function renderDetail(d){
   var admin=view.role==='systemadmin';
   var isAsker=!!d.isAsker; /* 问询方（建桌人/凭码就位者；可与席位并存——同号用户 web 提问 + 自己的 agent 作答 */
   var turn=t.activeTurn;
-  var inqFlow=ttOf(t.tableType).flow==='inquiry';
+  var flow=ttOf(t.tableType).flow;
+  var inqFlow=flow==='inquiry';
   var stage=stageOf(t,seats); /* prep/ready/running/paused/ended：驱动模块显隐 */
-  /* 就绪度（open 期面板与就绪进度共用）：问询桌看回答方，其余看非主持人席 + 角色齐备 */
+  /* 就绪度（open 期面板与就绪进度共用）：问询桌看回答方，其余看非主持人席 + 角色齐备（按流程，对齐服务端 startTable） */
   var needSeats=inqFlow?seats.filter(function(s){ return s.role==='answerer'; }):seats.filter(function(s){ return s.role!=='host'; });
-  var rolesOk=inqFlow?needSeats.length>0:(seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; }));
+  var rolesOk=inqFlow?needSeats.length>0:(flow==='collab'
+    ?seats.filter(function(s){ return s.role==='collaborator'; }).length>=2
+    :seats.some(function(s){ return s.role==='proposer'; })&&seats.some(function(s){ return s.role==='reviewer'; }));
+  var rolesGap=flow==='inquiry'
+    ?'角色不齐备：还需回答方席位凭邀请码入席'
+    :flow==='collab'
+      ?'角色不齐备：还需协作者席位凭邀请码入席（至少 2 位协作者）'
+      :'角色不齐备：还需提案方/评审方席位凭邀请码入席';
   var allReady=rolesOk&&needSeats.length>0&&needSeats.every(function(s){ return s.config&&s.config.ready; });
   /* 会话滚动状态采集（重渲染前拿旧容器位置，渲染后回位/贴底）+ composer 草稿采集（重渲染后回填，防发送/轮询丢未发送内容） */
   var prevCb=document.getElementById('cbList');
@@ -1931,7 +1958,8 @@ function renderDetail(d){
   h+='<div class="card"><div class="section turn" style="margin-top:0"><b>下一步动作</b><div style="margin-top:4px">';
   if(t.precheck){
     if(t.precheck.state==='reviewing') h+='<div class="badge warn">预审中</div> <span class="dim">系统正在预审刚提交的回合结果，预审完成前暂不轮转发言权</span>';
-    else if(t.precheck.state==='directive') h+='<div class="badge warn">预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交</span><br>';
+    else if(t.precheck.state==='directive') h+='<div class="badge warn">预审点名</div> <span class="dim">等待 <b>'+esc(seatName(seats,t.precheck.toSeat))+'</b> 按预审意见补充并以 SUPPLEMENT 提交'
+      +((admin||(mySeat&&(mySeat.seatId===t.ownerSeat||mySeat.role==='host')))?'；长期无响应可在「会议控制」跳过本次点名':'')+'</span><br>';
   }
   if(t.pause){
     /* 暂停叠加态：阶段保留、无发言权；展示就绪进度与继续条件 */
@@ -1950,7 +1978,7 @@ function renderDetail(d){
   else if(t.phase==='open'){
     if(stage==='ready') h+='<span class="badge ok">全员就绪</span> <span class="dim">等待'+(inqFlow?'问询方':'建桌人')+'在右侧面板点「▶ '+(inqFlow?'开始问询':'开始会议')+'」</span>';
     else{
-      h+='<span class="badge warn">准备中</span> <span class="dim">设定阶段：各席完成入桌设定并就绪'+(rolesOk?'':'（角色不齐备：还需提案方/评审方凭邀请码入席）')+'</span>';
+      h+='<span class="badge warn">准备中</span> <span class="dim">设定阶段：各席完成入桌设定并就绪'+(rolesOk?'':'（'+(flow==='collab'?'角色不齐备：还需协作者凭邀请码入席（至少 2 位）':'角色不齐备：还需提案方/评审方凭邀请码入席')+'）')+'</span>';
       h+='<div class="dim" style="margin-top:4px">就绪进度：'+needSeats.filter(function(s){ return s.config&&s.config.ready; }).length+' / '+needSeats.length
         +(needSeats.length?(' — 未就绪：'+needSeats.filter(function(s){ return !(s.config&&s.config.ready); }).map(function(s){ return esc(s.name); }).join('、')):'')+'</div>';
     }
@@ -1988,8 +2016,11 @@ function renderDetail(d){
       +sideToggleHtml(s.seatId,d,isAsker)
       +'</div>'
       +'<div class="dim">agent: '+esc(s.agentLabel)+'</div>'
-      +'<div class="kv"><span class="k">立场</span><span title="'+escAttr(cfg.stance||'')+'">'+esc((cfg.stance||'').slice(0,60)||'（未填写）')+'</span></div>'
-      +(cfg.style?'<div class="kv"><span class="k">风格</span><span title="'+escAttr(cfg.style)+'">'+esc(cfg.style.slice(0,60))+'</span></div>':'')
+      /* 立场/风格仅本席（与系统观察员）可见：服务端已剥字段（cfg.stance===undefined）时显示占位 */
+      +(typeof cfg.stance==='undefined'
+        ?'<div class="kv"><span class="k">立场</span><span class="dim">仅本席可见</span></div><div class="kv"><span class="k">风格</span><span class="dim">仅本席可见</span></div>'
+        :'<div class="kv"><span class="k">立场</span><span title="'+escAttr(cfg.stance||'')+'">'+esc((cfg.stance||'').slice(0,60)||'（未填写）')+'</span></div>'
+          +(cfg.style?'<div class="kv"><span class="k">风格</span><span title="'+escAttr(cfg.style)+'">'+esc(cfg.style.slice(0,60))+'</span></div>':''))
       +(admin?'<div class="row" style="margin-top:8px"><button class="admCred sm" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">复制配置</button> '
         +'<button class="admRepl sm danger" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">替代 agent</button></div>':'')
       +'</div>';
@@ -2052,10 +2083,14 @@ function renderDetail(d){
           if(s.role==='host'){ h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge">主持人 · 豁免就绪</span></div>'; }
           else h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
         });
-        if(!rolesOk) h+='<div class="ferr">角色不齐备：还需提案方/评审方席位凭邀请码入席。</div>';
+        if(!rolesOk) h+='<div class="ferr">'+rolesGap+'。</div>';
         else if(!allReady) h+='<div class="ferr">尚有席位未就绪，各方就绪后才能开始。</div>';
+        if(flow!=='inquiry'){
+          h+='<div class="row" style="margin-top:6px"><button id="stPre">'+(t.precheckEnabled===false?'☑ 开启系统预审':'☐ 关闭系统预审')+'</button>'
+            +'<span class="dim">'+(t.precheckEnabled===false?'本桌预审已关闭：agent 回合提交不经预审直接生效':'各方 agent 的回合提交先经系统预审（人代答不受影响；会议中可随时开关）')+'</span></div>';
+        }
         h+='<div class="row" style="margin-top:8px"><button id="stStart" class="primary"'+((allReady&&rolesOk)?'':' disabled')+'>▶ 开始会议</button>'
-          +'<span class="dim">开始后进入提案陈述阶段，席位设定锁定</span></div><div class="ferr" id="stErr"></div></div>';
+          +'<span class="dim">开始后进入'+esc(phaseLabel(t.tableType,'statements'))+'阶段，席位设定锁定</span></div><div class="ferr" id="stErr"></div></div>';
       } else if(cfg.ready){
         h+='<div class="section dim">已就绪，等待建桌人开始会议。</div>';
       }
@@ -2078,7 +2113,7 @@ function renderDetail(d){
 
       /* 会议控制（建桌人/主持人，会议中）：暂停 / 就绪名单 + 继续（暂停中默认展开） */
       if(isOwner||isHost){
-        h+=secDetailsHtml('seatDetCtl',t.pause?'会议控制（暂停中）':'会议控制','暂停 / 就绪名单 + 继续',ctlBodyHtml(t,seats),!!t.pause);
+        h+=secDetailsHtml('seatDetCtl',t.pause?'会议控制（暂停中）':'会议控制','暂停 / 跳过发言人 / 继续',ctlBodyHtml(t,seats,turn),!!t.pause);
       }
       /* 申请暂停（未暂停时，非控制人席位；控制人直接用「会议控制」的暂停按钮） */
       if(!t.pause&&!(isOwner||isHost)){
@@ -2134,6 +2169,10 @@ function renderDetail(d){
         h+='<div class="section sumcard"><h3 style="margin-top:0">会议控制</h3>'
           +'<div class="row"><input id="ctlPauseReason" placeholder="暂停原因（进入会议记录，可空）" style="flex:1;min-width:180px">'
           +'<button id="ctlPause">⏸ 暂停问询</button></div>'
+          +(turn
+            ?'<div class="row" style="margin-top:6px"><button id="ctlSkip" class="danger">⏭ 跳过当前发言人</button>'
+             +'<span class="dim">跳过 '+esc(seatName(seats,turn.seatId))+' 对当前问题的回答，继续后续问答</span></div>'
+            :'')
           +'<div class="hint" style="margin-top:4px">暂停后提问与作答都冻结；回答方可调整立场/补充信息并重新就绪，全就绪后在这里继续。</div>'
           +'<div class="ferr" id="ctlErr"></div></div>';
       }
@@ -2160,6 +2199,7 @@ function renderDetail(d){
     h+='<div class="card gold"><div class="shead"><b>管理员操作</b><span class="dim">系统观察员专属 · 全部动作写入审计</span></div>'
       +'<div class="row"><input id="admReason" placeholder="原因（进入会议记录 / 审计）" style="flex:1;min-width:200px">'
       +(active&&!t.pause&&t.phase!=='human_intervention'?'<button id="admPause">暂停会议</button>':'')
+      +(active&&!t.pause&&(t.precheck&&t.precheck.state==='directive'||t.activeTurn||t.phase==='execution')?'<button id="admSkip" class="danger">跳过当前发言人</button>':'')
       +(t.pause?'<button id="admResume">继续会议</button><button id="admForce" class="danger">强制继续（跳过就绪）</button>':'')
       +(active&&t.phase!=='human_intervention'?'<button id="admHuman">强制人工介入</button>':'')
       +(active?'<button id="admClose">强制闭桌</button>':'')
@@ -2770,6 +2810,27 @@ function renderDetail(d){
       .then(function(){ toast('会议已继续'); view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ document.getElementById('ctlErr').textContent='继续失败：'+e.message; });
   };
+  var ctlSkip=document.getElementById('ctlSkip');
+  if(ctlSkip) ctlSkip.onclick=function(){
+    if(!window.confirm('确定跳过当前发言人？该席本轮发言/预审点名将被视为已处理，流程继续推进。')) return;
+    api('POST','/api/tables/'+view.tableId+'/my/skip-turn',{})
+      .then(function(){ toast('已跳过当前发言人'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ document.getElementById('ctlErr').textContent='跳过失败：'+e.message; });
+  };
+  var ctlPre=document.getElementById('ctlPre');
+  if(ctlPre) ctlPre.onclick=function(){
+    var enable=view.lastDetailData.table.precheckEnabled===false;
+    api('POST','/api/tables/'+view.tableId+'/my/precheck',{enabled:enable})
+      .then(function(){ toast(enable?'系统预审已开启':'系统预审已关闭'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ document.getElementById('ctlErr').textContent='设置失败：'+e.message; });
+  };
+  var stPre=document.getElementById('stPre');
+  if(stPre) stPre.onclick=function(){
+    var enable=view.lastDetailData.table.precheckEnabled===false;
+    api('POST','/api/tables/'+view.tableId+'/my/precheck',{enabled:enable})
+      .then(function(){ toast(enable?'系统预审已开启':'系统预审已关闭'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ document.getElementById('stErr').textContent='设置失败：'+e.message; });
+  };
 
   /* ---- 绑定：申请暂停（普通席位，会议中未暂停时） ---- */
   var prApply=document.getElementById('prApply');
@@ -2814,6 +2875,13 @@ function renderDetail(d){
   };
 
   /* ---- 绑定：管理员操作 ---- */
+  var admSkip=document.getElementById('admSkip');
+  if(admSkip) admSkip.onclick=function(){
+    if(!confirm('确定跳过当前发言人？该席本轮发言/预审点名将被视为已处理，流程继续推进。')) return;
+    api('POST','/api/admin/tables/'+view.tableId+'/skip-turn',{reason:document.getElementById('admReason').value.trim()})
+      .then(function(){ toast('已跳过当前发言人'); view.dirtyPanel=false; loadDetail(); })
+      .catch(function(e){ toast('失败：'+e.message); });
+  };
   var admHuman=document.getElementById('admHuman');
   if(admHuman) admHuman.onclick=function(){
     if(!confirm('将本桌转入人工介入模式？会议暂停，等待人工处理。')) return;

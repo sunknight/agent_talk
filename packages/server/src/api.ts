@@ -248,6 +248,14 @@ export function createHttpServer(hub: Hub) {
         if (seg[4] === "resume" && !seg[5]) {
           return ok(res, hub.resumeByUser(bearer(req), tableId));
         }
+        // 跳过当前回合发言人（主持人/建桌人；解除预审点名卡死/无响应发言人）
+        if (seg[4] === "skip-turn" && !seg[5] && method === "POST") {
+          return ok(res, hub.skipTurnByUser(bearer(req), tableId, body.reason !== undefined ? String(body.reason) : undefined));
+        }
+        // 切换本桌系统预审开关（主持人/建桌人）
+        if (seg[4] === "precheck" && !seg[5] && method === "POST") {
+          return ok(res, hub.setPrecheckByUser(bearer(req), tableId, body.enabled === true));
+        }
       }
       // ---------- 问询桌问询方通道（user token，建桌人专属） ----------
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "ask" && method === "POST" && !seg[4]) {
@@ -263,6 +271,10 @@ export function createHttpServer(hub: Hub) {
       }
       if (path === "/api/stances" && method === "GET") {
         return ok(res, { stances: STANCE_PRESETS, styles: STYLE_PRESETS });
+      }
+      // 风格预设独立别名（与 /api/stances 响应内的 styles 同源）：agent 直觉路由，消除 404 no_route
+      if (path === "/api/styles" && method === "GET") {
+        return ok(res, { styles: STYLE_PRESETS });
       }
       // 桌类型注册表：开桌先选类型，按类型选可用角色（UI / skill 共享）
       if (path === "/api/table-types" && method === "GET") {
@@ -322,6 +334,16 @@ export function createHttpServer(hub: Hub) {
           const body = await readJson(req);
           return ok(res, hub.resumeByAdmin(bearer(req), seg[3], body.force === true));
         }
+        // 跳过当前回合发言人（systemadmin；解除预审点名卡死/无响应发言人）
+        if (seg[2] === "tables" && seg[3] && seg[4] === "skip-turn" && method === "POST" && !seg[5]) {
+          const body = await readJson(req);
+          return ok(res, hub.skipTurnByAdmin(bearer(req), seg[3], body.reason !== undefined ? String(body.reason) : undefined));
+        }
+        // 切换本桌系统预审开关（systemadmin）
+        if (seg[2] === "tables" && seg[3] && seg[4] === "precheck" && method === "POST" && !seg[5]) {
+          const body = await readJson(req);
+          return ok(res, hub.setPrecheckByAdmin(bearer(req), seg[3], body.enabled === true));
+        }
         if (seg[2] === "tables" && seg[3] && seg[4] === "human" && method === "POST" && !seg[5]) {
           const body = await readJson(req);
           return ok(res, hub.adminEnterHumanMode(bearer(req), seg[3], String(body.reason ?? "")));
@@ -379,6 +401,7 @@ export function createHttpServer(hub: Hub) {
           owner: { seatName: owner.seatName, agentLabel: String(owner.agentLabel ?? "unknown") },
           maxReviewRounds: body.maxReviewRounds ? Number(body.maxReviewRounds) : undefined,
           turnTimeoutMs: body.turnTimeoutMs ? Number(body.turnTimeoutMs) : undefined,
+          precheckEnabled: body.precheckEnabled === undefined ? undefined : body.precheckEnabled === true,
         }));
       }
       if (path === "/api/tables" && method === "GET") {
@@ -436,7 +459,7 @@ export function createHttpServer(hub: Hub) {
         }
 
         if (sub === undefined && method === "GET") {
-          return ok(res, hub.tableInfo(tableId));
+          return ok(res, hub.tableInfo(tableId, { seatId: seatAuth.seatId }));
         }
         if (sub === "poll" && method === "GET") {
           const since = Number(url.searchParams.get("since") ?? 0) || 0;
