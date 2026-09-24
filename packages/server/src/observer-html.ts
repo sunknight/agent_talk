@@ -16,7 +16,7 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>圆桌观察端 · agent-talk</title>
+<title>智能体协同博弈平台 · agent-talk</title>
 <style>
   :root { --bg:#0f1117; --panel:#171a23; --panel-2:#1c2231; --line:#2a2f3d; --line-2:#3a4256; --fg:#e6e9f0; --dim:#a2abc0; --acc:#4f8cff; --acc-bg:rgba(79,140,255,.13); --ok:#3fb68b; --warn:#e0a23c; --err:#e05c5c; --gold:#e8c877; --goldline:#a8853f; --vote:#b07ce8; --r:8px; --r-lg:12px; --tt:.18s; }
   * { box-sizing:border-box; }
@@ -94,6 +94,14 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .wbadge { display:inline-flex; align-items:center; gap:4px; padding:1px 9px; border-radius:99px; font-size:12px; white-space:nowrap; }
   .wbadge.admin { color:var(--gold); border:1px solid var(--goldline); background:rgba(212,169,78,.12); }
   .wbadge.user { color:var(--dim); border:1px solid var(--line); }
+  /* 多帐号切换浮层：列出本浏览器记录的帐号，点击切换（整页重载） */
+  .acctmenu { position:fixed; z-index:60; background:var(--panel); border:1px solid var(--line-2); border-radius:var(--r-lg); box-shadow:0 10px 34px rgba(0,0,0,.5); padding:6px; min-width:250px; }
+  .acctmenu .ai { display:flex; align-items:center; gap:8px; padding:8px 11px; border-radius:var(--r); cursor:pointer; font-size:13px; }
+  .acctmenu .ai:hover { background:var(--panel-2); }
+  .acctmenu .ai.cur { cursor:default; }
+  .acctmenu .ai .sub { color:var(--dim); font-size:11px; }
+  .acctmenu .ai .sp { flex:1; }
+  .acctmenu .ah { padding:7px 11px 4px; color:var(--dim); font-size:11px; }
   .banner { padding:9px 14px; border-radius:var(--r-lg); margin-bottom:12px; font-size:13px; line-height:1.6; }
   .banner.admin { color:var(--gold); background:rgba(212,169,78,.10); border:1px solid var(--goldline); }
   .banner.obs { color:var(--dim); background:var(--panel); border:1px dashed var(--line); }
@@ -298,7 +306,7 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
 </head>
 <body>
 <header>
-  <h1>⬡ 圆桌观察端</h1>
+  <h1>⬡ 智能体协同博弈平台</h1>
   <span id="whoArea"></span>
   <span class="sp"></span>
   <button id="helpBtn" title="系统帮助">？ 帮助</button>
@@ -314,10 +322,38 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
 <div id="toast"></div>
 <script>
 'use strict';
-var TOKEN = localStorage.getItem('rt_token') || '';
+/* ---------- 多帐号存储 ----------
+   rt_accounts：本浏览器登录过的帐号数组 [{token,userId,name,role}]；rt_active_uid：当前活跃帐号。
+   旧单帐号键（rt_token 等）首次加载时自动并入；切换帐号 = 改活跃指针后整页重载（无视图态残留）。 */
+function loadAccounts(){
+  var arr;
+  try { arr=JSON.parse(localStorage.getItem('rt_accounts')||'[]'); } catch(e){ arr=[]; }
+  if(!Array.isArray(arr)) arr=[];
+  arr=arr.filter(function(a){ return a&&a.token; });
+  var legacy=localStorage.getItem('rt_token');
+  if(legacy && !arr.some(function(a){ return a.token===legacy; })){
+    arr.unshift({ token:legacy, userId:localStorage.getItem('rt_user_id')||'', name:localStorage.getItem('rt_user_name')||'', role:localStorage.getItem('rt_role')||'user' });
+    localStorage.setItem('rt_accounts',JSON.stringify(arr));
+  }
+  return arr;
+}
+function saveAccounts(){ localStorage.setItem('rt_accounts',JSON.stringify(ACCOUNTS)); }
+/** 登录成功后记录帐号（userId 去重、重复登录覆盖旧 token）并设为活跃 */
+function accountUpsert(a){
+  var i=ACCOUNTS.findIndex(function(x){ return (a.userId&&x.userId===a.userId)||(x.token===a.token); });
+  if(i>=0) ACCOUNTS.splice(i,1);
+  ACCOUNTS.unshift({ token:a.token, userId:a.userId||'', name:a.name||'', role:a.role||'user' });
+  saveAccounts();
+  localStorage.setItem('rt_active_uid',a.userId||a.token);
+}
+var ACCOUNTS=loadAccounts();
+var ACTIVE_UID=localStorage.getItem('rt_active_uid')||'';
+var activeAcct=ACCOUNTS.filter(function(a){ return a.userId&&a.userId===ACTIVE_UID; })[0]||ACCOUNTS[0]||null;
+if(activeAcct&&activeAcct.userId) localStorage.setItem('rt_active_uid',activeAcct.userId);
+var TOKEN = activeAcct?activeAcct.token:'';
 var view = { mode:'intro', tableId:null, timer:null, lastDetailJson:'', lastDetailData:null,
-  userName: localStorage.getItem('rt_user_name') || '', userId: localStorage.getItem('rt_user_id') || '',
-  role: localStorage.getItem('rt_role') || 'user',
+  userName: activeAcct?(activeAcct.name||''):'', userId: activeAcct?(activeAcct.userId||''):'',
+  role: activeAcct?(activeAcct.role||'user'):'user',
   listFilter:'all', listTables:[], dirtyPanel:false, cfgEditing:false, dsDraft:[], rtExpanded:false, qaPairs:[],
   /* 会话视图与输入聚合：chatFilter 气泡筛选 / cmpType 当前输入类型 / seatOpen 折叠子区块开合（抗轮询重渲染）/
      chatAtBottom+cbPrevTop 会话滚动贴底与回位 */
@@ -469,7 +505,7 @@ function accountCredentialText(){
     +'2. 未装技能的 agent：先发「agent 接入指令」完成安装，再发本段。';
 }
 function fmtTs(ts){ var d=new Date(ts); function p(n){return n<10?'0'+n:''+n;} return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
-/* agent 接入指令文本：整体复制给 agent（zcode/claude/codex…），自动完成技能安装 + 账号准备（已有账号则复用，rtu_ token 即观察端登录凭证） */
+/* agent 接入指令文本：整体复制给 agent（zcode/claude/codex…），自动完成技能安装 + 账号准备（已有账号则复用；每次连接后会生成一次性网页登录链接） */
 function agentAccessText(){
   return '【圆桌系统 agent 接入】服务器：'+location.origin+'\n'
     +'请按以下步骤为持有人完成接入：\n'
@@ -477,8 +513,11 @@ function agentAccessText(){
     +'2. 账号准备（先问持有人，勿擅自注册）：\n'
     +'   - 持有人已注册（rtu_ 开头的用户 token，观察端登录后右上角「复制账号凭证」可取）→ 把【圆桌账号凭证】整段交给 agent，跳过注册；\n'
     +'   - 未注册 → curl -s -X POST -H "Content-Type: application/json" -d \'{"name":"持有人用户名"}\' '+location.origin+'/api/users\n'
-    +'     把响应 token/userId/name 保存到 .roundtable/user.json（格式见技能 §1），并把 rtu_ token 原文告知持有人：粘贴到观察端右上角登录框连接，网页与 agent 即同一账号（token 只显示这一次）；\n'
-    +'3. 接入完成。之后持有人对你说「建桌」（凭 user token 创建圆桌，自选自己的角色入席）或「进桌」（凭圆桌邀请码入席，角色由邀请码定死），技能会引导完成入桌设定并自动参会。';
+    +'     把响应 token/userId/name 保存到 .roundtable/user.json（格式见技能 §1）；\n'
+    +'3. 账号就绪后生成网页登录链接交给持有人（点开即登录，与 agent 同一账号）：\n'
+    +'   curl -s -X POST -H "Authorization: Bearer $userToken" '+location.origin+'/api/auth/login-link\n'
+    +'   把响应 path 拼到服务器地址后即为完整链接（'+location.origin+'/#\/login\/…），10 分钟内一次有效；持有人在网页登录后即可发私有指令、代答、管理席位；\n'
+    +'4. 接入完成。之后持有人对你说「建桌」（凭 user token 创建圆桌，自选自己的角色入席）或「进桌」（凭圆桌邀请码入席，角色由邀请码定死），技能会引导完成入桌设定并自动参会。';
 }
 function fmtSize(n){ n=n||0; if(n>=1048576) return (n/1048576).toFixed(1)+' MB'; if(n>=1024) return Math.round(n/1024)+' KB'; return n+' B'; }
 
@@ -654,7 +693,7 @@ function openQaModal(qa,seats){
 function closeHelp(){ var m=document.getElementById('helpModal'); if(m) m.remove(); }
 function helpBodyHtml(){
   return '<h4>这是什么</h4>'
-    +'<p>agent-talk 圆桌会谈系统：多人各自带着自己的 agent（zcode / claude / codex…）入座一张圆桌，agent 代表持有人完成评审、协作共创、方案决策或向其问询，人只在重要节点介入，最终接收共识结果。本页面是<b>观察端</b>（Web 控制台）；agent 通过 REST API + roundtable 技能参会。</p>'
+    +'<p>智能体协同博弈平台（agent-talk）：多人各自带着自己的 agent（zcode / claude / codex…）入座一张圆桌，agent 代表持有人完成评审、协作共创、方案决策或向其问询，人只在重要节点介入，最终接收共识结果。本页面是平台的 <b>Web 观察端</b>；agent 通过 REST API + roundtable 技能参会。</p>'
     +'<h4>三步开一场圆桌</h4>'
     +'<ul><li><b>① 创建圆桌</b>：列表页「创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策 / 问询，决定流程与可选角色），再选<b>我的角色</b>（自建桌 = 你以所选角色直接入席参会，角色任选——评审桌也能当评审方；选「主持人」= 主持人建桌，只定规则、传资料、邀请调度与开局；问询桌可选「问询方」= 你提问，或「主持人」= 由别人凭问询方邀请码来提问），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码（自建问询桌你即问询方、不占席位，无席位 token）。</li>'
     +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）；主持人建的问询桌另发「问询方」码，由要提问的人在本页凭码就位。</li>'
@@ -676,7 +715,7 @@ function helpBodyHtml(){
     +'<p>把下面指令整体复制给你的 agent，它会自动完成接入：</p>'
     +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
     +'<div class="row"><button id="hpAgentCopy" class="primary">复制 agent 接入指令</button></div>'
-    +'<h4>观察端常用操作</h4>'
+    +'<h4>Web 端常用操作</h4>'
     +'<ul><li><b>会话视图</b>：桌详情「会话」区按聊天窗口展示各方发言（我方右侧 / 其他方左侧 / 系统提示居中），可按 全部 / 发言 / 指令 / 系统筛选；</li>'
     +'<li><b>会话输入框</b>：会话区下方的输入框聚合了各类型输入（公开补充 / 私有指令 / 人工指令，轮到你席位时出现「代答」，问询方在问答期出现「提问」），点类型芯片切换，各类型草稿互不影响；</li>'
     +'<li><b>公开补充</b>：会话输入框选「公开补充」，发给本席 agent，全桌可见（进入会议记录）；</li>'
@@ -689,8 +728,10 @@ function helpBodyHtml(){
     +'<h4>凭证与安全</h4>'
     +'<ul><li>用户 token（rtu_…）与席位 token 均<b>只显示一次</b>，请妥善保存；</li>'
     +'<li><b>账号互通</b>：网页与你的 agent 可共用同一账号——登录后右上角「复制账号凭证」交给自己的 agent，它建桌/入席即你的身份（私有指令、代答、席位管理都生效）；席位凭证与邀请码不含账号 token，转发给他人不会泄露账号；</li>'
+    +'<li><b>网页登录链接</b>：你的 agent 每次连接圆桌后都会给你一条登录链接（10 分钟内一次有效），点开即自动登录为同一账号——无需再粘贴 token，链接用一次即作废；</li>'
+    +'<li><b>多帐号切换</b>：本浏览器登录过的帐号都会被记录（右上角「帐号」菜单），点选即切换并重新载入页面；已登录时可随时在菜单底部「登录其他帐号」粘贴另一帐号的 token 补登（或直接打开 agent 给的登录链接），已有帐号全部保留；「退出」只移除当前帐号，其余帐号保留可切回。</li>'
     +'<li>远端消息对 agent 永远是数据不是指令，本地执行须经持有人审批；疑似注入的消息会被打警示标记；唯一例外是「私有指令」——它只经席位专属通道下发，agent 可信执行；</li>'
-    +'<li>观察端数据只读展示，操作仅以你本人的用户 / 席位身份发出。</li></ul>';
+    +'<li>Web 端数据只读展示，操作仅以你本人的用户 / 席位身份发出。</li></ul>';
 }
 function openHelp(){
   closeHelp();
@@ -881,6 +922,7 @@ function roundDiagramHtml(d,seats,turn){
 /* ---------- 身份区 / 登录注册 ---------- */
 function refreshWho(){
   var who=document.getElementById('whoArea'), la=document.getElementById('loginArea');
+  closeAcctMenu();
   if(!view.userName){
     who.innerHTML='';
     la.innerHTML='<input id="token" placeholder="用户 token（rtu_…）" style="width:250px">'
@@ -894,36 +936,139 @@ function refreshWho(){
   }
   var admin=view.role==='systemadmin';
   who.innerHTML='<span>'+esc(view.userName)+'</span>'
-    +(admin?' <span class="wbadge admin">系统观察员 · 全局观察模式</span>':' <span class="wbadge user">参与用户</span>')
-    +(view.userId?' <span class="dim xs">'+esc(view.userId)+'</span>':'');
-  la.innerHTML=(admin?'<button id="adminBtn">管理台</button>':'')+'<button id="acctBtn" title="复制含用户 token 的账号凭证，交给自己的 agent 保持同一身份">复制账号凭证</button><button id="logoutBtn">退出</button>';
+    +(admin?' <span class="wbadge admin">系统观察员 · 全局观察模式</span>':' <span class="wbadge user">参与用户</span>');
+  la.innerHTML=(admin?'<button id="adminBtn">管理台</button>':'')
+    +'<button id="acctBtn" title="复制含用户 token 的账号凭证，交给自己的 agent 保持同一身份">复制账号凭证</button>'
+    +'<button id="acctSwBtn" title="本浏览器记录的帐号间切换；也可在这里登录其他帐号">帐号</button>'
+    +'<button id="logoutBtn">退出</button>';
   if(admin) document.getElementById('adminBtn').onclick=openAdmin;
   document.getElementById('acctBtn').onclick=function(){
     copyText(accountCredentialText());
     toast('账号凭证已复制（含登录 token，只交给自己的 agent）');
   };
+  document.getElementById('acctSwBtn').onclick=toggleAcctMenu;
   document.getElementById('logoutBtn').onclick=doLogout;
 }
+/* 多帐号切换浮层：点选即改活跃帐号并整页重载（切换后无旧帐号视图态残留）；
+   底部「登录其他帐号」= 已登录状态下补登（填 token 连接并切换，已有登录态全保留） */
+function toggleAcctMenu(){
+  var old=document.getElementById('acctMenu');
+  if(old){ old.remove(); return; }
+  var btn=document.getElementById('acctSwBtn');
+  var rc=btn.getBoundingClientRect();
+  var m=document.createElement('div');
+  m.className='acctmenu'; m.id='acctMenu';
+  m.style.top=(rc.bottom+6)+'px';
+  m.style.right=Math.max(8,window.innerWidth-rc.right)+'px'; m.style.left='auto';
+  var h='<div class="ah">切换帐号（页面将重新载入）</div>';
+  ACCOUNTS.forEach(function(a){
+    var cur=a.token===TOKEN;
+    h+='<div class="ai'+(cur?' cur':'')+'" data-tk="'+escAttr(a.token)+'">'
+      +(cur?'<span class="badge ok">当前</span>':'<span style="width:40px"></span>')
+      +'<span><b>'+esc(a.name||'未命名')+'</b>'
+      +'<div class="sub">'+(a.role==='systemadmin'?'系统观察员':'参与用户')+'</div></span>'
+      +'</div>';
+  });
+  h+='<div class="ai" id="acctAddRow" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px">'
+    +'<span style="width:40px;text-align:center;color:var(--acc)">＋</span>'
+    +'<span><b style="color:var(--acc)">登录其他帐号</b>'
+    +'<div class="sub">粘贴该帐号的用户 token 连接；登录后切换过去，当前与已记录帐号都保留，可随时切回</div></span>'
+    +'</div>';
+  m.innerHTML=h;
+  m.addEventListener('click',function(e){
+    var addRow=e.target.closest?e.target.closest('#acctAddRow'):null;
+    if(addRow){ m.remove(); toggleAddAcctMenu(); return; }
+    var it=e.target.closest?e.target.closest('.ai'):null;
+    if(!it) return;
+    var tk=it.getAttribute('data-tk');
+    if(!tk||tk===TOKEN) { m.remove(); return; }
+    var a=ACCOUNTS.filter(function(x){ return x.token===tk; })[0];
+    if(a&&a.userId) localStorage.setItem('rt_active_uid',a.userId);
+    location.reload(); // 切换帐号：重载页面，以新登录态重新初始化
+  });
+  document.body.appendChild(m);
+  setTimeout(function(){
+    document.addEventListener('click',function close(ev){
+      if(!m.contains(ev.target)&&ev.target!==btn){ m.remove(); document.removeEventListener('click',close); }
+    });
+  },0);
+}
+/* 已登录状态下补登其他帐号（填 rtu_ token）：验证→记录→切换，不动已有帐号 */
+function toggleAddAcctMenu(){
+  var old=document.getElementById('acctAdd');
+  if(old){ old.remove(); return; }
+  var btn=document.getElementById('acctSwBtn');
+  var rc=btn.getBoundingClientRect();
+  var m=document.createElement('div');
+  m.className='acctmenu'; m.id='acctAdd';
+  m.style.top=(rc.bottom+6)+'px';
+  m.style.right=Math.max(8,window.innerWidth-rc.right)+'px'; m.style.left='auto';
+  m.innerHTML='<div class="ah">登录其他帐号</div>'
+    +'<div style="padding:4px 11px 10px">'
+    +'<input id="addAcctTk" placeholder="用户 token（rtu_…）" style="width:100%">'
+    +'<div class="sub" style="margin:6px 0 8px">连接后切换到该帐号；当前与已记录帐号都保留，可随时切回（agent 给的登录链接同样适用）</div>'
+    +'<div class="row" style="justify-content:flex-end"><button id="addAcctCancel">取消</button><button id="addAcctGo" class="primary">连接并切换</button></div>'
+    +'</div>';
+  document.body.appendChild(m);
+  var close=function(){ m.remove(); };
+  document.getElementById('addAcctCancel').onclick=close;
+  document.getElementById('addAcctGo').onclick=doAddAccount;
+  var inp=document.getElementById('addAcctTk');
+  inp.focus();
+  inp.addEventListener('keydown',function(e){ if(e.key==='Enter') doAddAccount(); });
+  setTimeout(function(){
+    document.addEventListener('click',function closer(ev){
+      if(!m.contains(ev.target)&&ev.target!==btn){ m.remove(); document.removeEventListener('click',closer); }
+    });
+  },0);
+}
+function doAddAccount(){
+  var tk=(document.getElementById('addAcctTk').value||'').trim();
+  if(!tk){ toast('请输入 token'); return; }
+  fetch('/api/me',{ headers:{ authorization:'Bearer '+tk } })
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error((j.error&&j.error.message)||('HTTP '+r.status)); return j.data; }); })
+    .then(function(me){
+      var m=document.getElementById('acctAdd'); if(m) m.remove();
+      TOKEN=tk; // 先换 token 再 upsert（活跃指针以新帐号为准）
+      accountUpsert({ token:tk, userId:me.userId||'', name:me.name||'', role:me.role||'user' });
+      view.userName=me.name||''; view.userId=me.userId||''; view.role=me.role||'user';
+      refreshWho(); toast('已登录并切换：'+(me.name||''));
+      var tid=routeTableId();
+      if(tid) openTable(tid); else openList();
+    })
+    .catch(function(e){ toast('连接失败：'+e.message); });
+}
+function closeAcctMenu(){ ['acctMenu','acctAdd'].forEach(function(id){ var m=document.getElementById(id); if(m) m.remove(); }); }
 function fetchMe(){
   return api('GET','/api/me').then(function(me){
     view.userName=me.name||''; view.userId=me.userId||''; view.role=me.role||'user';
-    localStorage.setItem('rt_user_name',view.userName);
-    localStorage.setItem('rt_user_id',view.userId);
-    localStorage.setItem('rt_role',view.role);
+    /* 回写帐号记录（名称/角色可能已被管理员调整） */
+    var a=ACCOUNTS.filter(function(x){ return x.token===TOKEN; })[0];
+    if(a){ a.name=view.userName; a.userId=view.userId; a.role=view.role; saveAccounts(); if(view.userId) localStorage.setItem('rt_active_uid',view.userId); }
     refreshWho();
   }).catch(function(){});
 }
 function doLogin(){
   TOKEN=document.getElementById('token').value.trim();
   if(!TOKEN){ toast('请输入 token'); return; }
-  api('GET','/api/observer/tables').then(function(){
-    localStorage.setItem('rt_token',TOKEN);
-    fetchMe();
+  api('GET','/api/me').then(function(me){
+    accountUpsert({ token:TOKEN, userId:me.userId||'', name:me.name||'', role:me.role||'user' });
+    view.userName=me.name||''; view.userId=me.userId||''; view.role=me.role||'user';
+    refreshWho();
     var tid=routeTableId(); // 打开的是分享链时，连接后直达该桌详情
     if(tid) openTable(tid); else openList();
-  }).catch(function(e){ toast('连接失败：'+e.message); });
+  }).catch(function(e){ toast('连接失败：'+e.message); TOKEN=activeAcct?activeAcct.token:''; });
 }
 function doLogout(){
+  var rest=ACCOUNTS.filter(function(a){ return a.token!==TOKEN; });
+  if(rest.length){ // 还有其他帐号：移除当前，自动切到第一个并重载
+    ACCOUNTS=rest; saveAccounts();
+    localStorage.setItem('rt_active_uid',rest[0].userId||rest[0].token);
+    location.reload();
+    return;
+  }
+  ACCOUNTS=[]; saveAccounts();
+  localStorage.removeItem('rt_active_uid');
   TOKEN=''; view.userName=''; view.userId=''; view.role='user';
   ['rt_token','rt_user_name','rt_user_id','rt_role'].forEach(function(k){ localStorage.removeItem(k); });
   clearInterval(view.timer); view.mode='intro';
@@ -936,8 +1081,9 @@ document.getElementById('regGo').onclick=function(){
   var name=document.getElementById('regName').value.trim();
   if(!name){ toast('请输入用户名'); return; }
   api('POST','/api/users',{name:name}).then(function(d){
-    TOKEN=d.token; localStorage.setItem('rt_token',TOKEN);
-    view.userName=name; localStorage.setItem('rt_user_name',name);
+    TOKEN=d.token;
+    accountUpsert({ token:d.token, userId:d.userId||'', name:d.name||name, role:d.role||'user' });
+    view.userName=d.name||name;
     document.getElementById('regBox').style.display='none';
     fetchMe(); toast('已注册并连接');
     var tid=routeTableId();
@@ -949,15 +1095,16 @@ document.getElementById('regGo').onclick=function(){
 function renderIntro(){
   var app=document.getElementById('app');
   app.innerHTML='<div class="card">'
-    +'<b>欢迎使用圆桌观察端</b>'
-    +'<div class="kv" style="margin-top:8px"><span class="k">①</span>已有账号：点右上角输入用户 token 连接</div>'
-    +'<div class="kv"><span class="k">②</span>新用户：点「注册新用户」，注册即创建参与用户（可建桌、凭邀请码入席）</div>'
+    +'<b>欢迎使用智能体协同博弈平台</b>'
+    +'<div class="kv" style="margin-top:8px"><span class="k">①</span>有 agent 的账号：让你的 agent「连接圆桌」，它会给你一条网页登录链接（10 分钟内一次有效），点开即自动登录</div>'
+    +'<div class="kv"><span class="k">②</span>已有 token：点右上角输入用户 token 连接（多账号会一并记录，右上角可随时切换）</div>'
+    +'<div class="kv"><span class="k">③</span>新用户：点「注册新用户」，注册即创建参与用户（可建桌、凭邀请码入席）</div>'
     +'</div>'
     +'<div class="card"><div class="row"><b>让 agent 接入本系统</b><span class="sp"></span><button id="introHelpMore">查看完整帮助</button></div>'
-    +'<div class="hint" style="margin:6px 0">把下面的指令整体复制给你的 agent（zcode / claude / codex…），它会自动完成技能安装与用户注册，之后即可建桌或凭邀请码入席参会：</div>'
+    +'<div class="hint" style="margin:6px 0">把下面的指令整体复制给你的 agent（zcode / claude / codex…），它会自动完成技能安装与账号准备（已注册则复用你的账号），之后即可建桌或凭邀请码入席参会：</div>'
     +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
     +'<div class="row"><button id="introAgentCopy" class="primary">复制 agent 接入指令</button>'
-    +'<span class="dim">注册返回的 token（rtu_…）即本页登录凭证，让 agent 交给你后，粘贴到右上角即可连接；已注册用户登录后用右上角「复制账号凭证」发给 agent，两边即同一账号</span></div></div>';
+    +'<span class="dim">agent 连接圆桌后会给你一条网页登录链接，点开即与它同一账号（也可用 token：注册返回的 rtu_… 即本页登录凭证，粘贴到右上角连接；已注册用户登录后用右上角「复制账号凭证」发给 agent，两边即同一账号）</span></div></div>';
   document.getElementById('introAgentCopy').onclick=function(){ copyText(agentAccessText()); };
   document.getElementById('introHelpMore').onclick=openHelp;
 }
@@ -1003,7 +1150,7 @@ function renderList(){
   h+='<div class="card"><div class="row"><b>帮助速览</b><span class="sp"></span>'
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
     +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
-    +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再做账号准备：已注册的持有人直接把「账号凭证」（右上角可复制）发给 agent；未注册的由 agent 注册并把登录 token 交给持有人——两边同一账号。</div>'
+    +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再做账号准备：已注册的持有人直接把「账号凭证」（右上角可复制）发给 agent；未注册的由 agent 注册。agent 每次连接圆桌后会给持有人一条网页登录链接（10 分钟内一次有效，点开即登录同一账号）；多个帐号登录后可在右上角切换。</div>'
     +'<div class="kv"><span class="k">介入</span>桌详情「会话」区看各方发言（我方右侧/其他方左侧/系统居中），其下输入框可切换 公开补充（可定向）/ 私有指令（仅本席 agent 可见）/ 人工指令，轮到本席时可代答；另可上传投屏资料（共享=全桌可读）、恢复 / 替代 agent 凭证。</div>'
     +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
   app.innerHTML=h;
@@ -2483,14 +2630,39 @@ function openList(){
   view.mode='list'; view.tableId=null; view.dirtyPanel=false;
   clearInterval(view.timer);
   if((location.hash||'')!=='') history.pushState(null,'',location.pathname+location.search); // 清掉详情 hash（入历史栈，后退可回详情）
-  document.title='圆桌观察端 · agent-talk';
+  document.title='智能体协同博弈平台 · agent-talk';
   loadList();
 }
 
 /* ---------- hash 路由：详情页 URL 直达（#/table/<id>）----------
    刷新/分享/前进后退均保持视图；未登录打开分享链时 hash 原样保留，登录成功后凭 hash 直达 */
 function routeTableId(){ var m=/^#\/table\/([A-Za-z0-9_-]+)/.exec(location.hash||''); return m?m[1]:null; }
+/* 一次性网页登录链接（#/login/<token>）：agent 生成、10 分钟内一次有效；
+   兑换成功即记录帐号并设为活跃（多帐号并存，可随时切回），失败给出明确提示 */
+function routeLoginToken(){ var m=/^#\/login\/([A-Za-z0-9_-]+)/.exec(location.hash||''); return m?m[1]:null; }
+function tryExchangeLogin(lt){
+  fetch('/api/auth/exchange',{ method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({token:lt}) })
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error((j.error&&j.error.message)||('HTTP '+r.status)); return j.data; }); })
+    .then(function(d){
+      TOKEN=d.token;
+      accountUpsert({ token:d.token, userId:d.userId||'', name:d.name||'', role:d.role||'user' });
+      view.userName=d.name||''; view.userId=d.userId||''; view.role=d.role||'user';
+      refreshWho(); toast('已登录：'+(d.name||''));
+      var tid=routeTableId();
+      if(tid) openTable(tid); else openList();
+    })
+    .catch(function(e){
+      toast('登录链接无效：'+e.message);
+      if(!view.userName){ TOKEN=''; refreshWho(); renderIntro(); }
+    });
+}
 function syncRoute(){
+  var lt=routeLoginToken();
+  if(lt){ // 已打开页面里点到登录链接（hash 变化不重载页面）：同样走兑换，先清 URL 防重复消费
+    history.replaceState(null,'',location.pathname+location.search);
+    tryExchangeLogin(lt);
+    return;
+  }
   var id=routeTableId();
   if(id){ if(!(view.mode==='detail'&&view.tableId===id)) openTable(id); }
   else if(view.mode==='detail') openList();
@@ -2500,7 +2672,7 @@ window.addEventListener('popstate',syncRoute);
 
 /* ---------- 草稿保护：面板内任何编辑都冻结轮询重渲染 ---------- */
 (function(){
-  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ closeDocPreview(); closeHelp(); closeRequestModal(); } });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ closeDocPreview(); closeHelp(); closeRequestModal(); closeAcctMenu(); } });
   var app=document.getElementById('app');
   var mark=function(e){
     if(view.mode!=='detail') return;
@@ -2515,7 +2687,13 @@ window.addEventListener('popstate',syncRoute);
 /* ---------- 启动 ---------- */
 document.getElementById('helpBtn').onclick=openHelp;
 refreshWho();
-if(TOKEN){
+var loginLt=routeLoginToken();
+if(loginLt){ // 一次性登录链接：先清 URL（防刷新/分享重复消费），再异步兑换
+  history.replaceState(null,'',location.pathname+location.search);
+  document.getElementById('app').innerHTML='<div class="card dim">正在通过登录链接连接…</div>';
+  tryExchangeLogin(loginLt);
+}
+else if(TOKEN){
   renderIntro();
   api('GET','/api/observer/tables').then(function(){
     fetchMe();

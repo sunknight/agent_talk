@@ -104,6 +104,8 @@ export interface PollResult {
 }
 
 export class Hub {
+  /** 一次性网页登录链接有效期（毫秒）：agent 生成 → 持有人点开，10 分钟内一次有效 */
+  static readonly LOGIN_LINK_TTL_MS = 10 * 60 * 1000;
   /** 长轮询等待者：tableId → 唤醒回调 */
   private waiters = new Map<string, Set<() => void>>();
   /** 席位限频窗口：tableId:seatId → 时间戳数组 */
@@ -137,6 +139,36 @@ export class Hub {
     if (!u) throw new ApiError(401, "unauthorized", "用户 token 无效");
     if (u.disabled) throw new ApiError(403, "user_disabled", "该用户已被系统观察员禁用（联系管理员恢复）");
     return u;
+  }
+
+  /**
+   * 生成一次性网页登录链接（agent 连接圆桌后调用，交付持有人直接点开登录）。
+   * 链接 token 为 24 字节 crypto 随机数（rtwb_ 前缀），库内只存 sha256——链接本身不含
+   * 任何可推导账号凭证的信息；一次性（兑换即作废）+ 短时效（默认 10 分钟，测试可注入 TTL）。
+   */
+  createLoginLink(userToken: string, ttlMs?: number): { token: string; expiresAt: number; path: string } {
+    const u = this.requireUser(userToken);
+    const ttl = ttlMs ?? Hub.LOGIN_LINK_TTL_MS;
+    if (ttl <= 0) throw new ApiError(422, "bad_ttl", "链接有效期必须大于 0");
+    const token = `rtwb_${randomBytes(24).toString("base64url")}`;
+    const expiresAt = Date.now() + ttl;
+    this.store.addLoginLink(sha256(token), u.userId, expiresAt);
+    this.audit("-", "-", "login_link_created", { userId: u.userId, expiresAt });
+    return { token, expiresAt, path: `#/login/${token}` };
+  }
+
+  /** 兑换一次性登录链接：成功即签发并行 user token（网页登录态；agent 主 token 不受影响） */
+  exchangeLoginLink(linkToken: string): { token: string; userId: string; name: string; role: "user" | "systemadmin" } {
+    const clean = checkField(linkToken, "token", 256, 1);
+    const userId = this.store.consumeLoginLink(sha256(clean));
+    if (!userId) throw new ApiError(401, "bad_login_link", "登录链接无效、已使用或已过期——请让你的 agent 重新生成一条");
+    const u = this.store.getUser(userId);
+    if (!u) throw new ApiError(403, "user_disabled", "该用户已不可用（链接生成后被移除或禁用）");
+    if (u.disabled) throw new ApiError(403, "user_disabled", "该用户已被系统观察员禁用（链接生成后被禁用）");
+    const token = `rtu_${randomBytes(24).toString("base64url")}`;
+    this.store.addUserToken(userId, sha256(token));
+    this.audit("-", "-", "login_link_exchanged", { userId });
+    return { token, userId, name: u.name, role: u.role };
   }
 
   /** 管理台统一鉴权：仅 systemadmin */
@@ -2218,13 +2250,14 @@ export class Hub {
     return this.store.listUsers().map((u) => ({ ...u, seatCount: this.store.seatsOfUser(u.userId).length }));
   }
 
-  /** systemadmin 为用户重签登录 token：原 token 立即失效，新 token 仅本次返回（粘贴到浏览器登录框） */
+  /** systemadmin 为用户重签登录 token：原 token 立即失效（含登录链接兑换的并行网页 token），新 token 仅本次返回（粘贴到浏览器登录框） */
   adminReissueUserToken(adminToken: string, userId: string): { userId: string; name: string; token: string } {
     const admin = this.requireAdmin(adminToken);
     const u = this.store.getUser(userId);
     if (!u) throw new ApiError(404, "no_user", "用户不存在");
     const token = `rtu_${randomBytes(24).toString("base64url")}`;
     this.store.resetUserToken(userId, sha256(token));
+    this.store.deleteUserTokensOf(userId); // 旧网页登录凭证一并失效，保持「重签即换新」语义
     this.audit("-", "-", "admin_reissue_user_token", { userId, by: admin.userId });
     return { userId, name: u.name, token };
   }

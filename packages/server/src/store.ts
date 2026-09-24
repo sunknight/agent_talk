@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS pause_requests (
 CREATE TABLE IF NOT EXISTS owner_directives (
   table_id TEXT NOT NULL, directive_id TEXT NOT NULL, seat_id TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (table_id, directive_id));
+CREATE TABLE IF NOT EXISTS login_links (
+  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);
+CREATE TABLE IF NOT EXISTS user_tokens (
+  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL);
 `;
 
 /** node:sqlite 行类型（.get/.all 返回的原样记录） */
@@ -123,6 +128,14 @@ export class Store extends EventEmitter {
       userAll: this.db.prepare("SELECT * FROM users ORDER BY created_at, rowid"),
       userSetRole: this.db.prepare("UPDATE users SET role = ? WHERE user_id = ?"),
       userSetDisabled: this.db.prepare("UPDATE users SET disabled = ? WHERE user_id = ?"),
+
+      loginLinkInsert: this.db.prepare("INSERT INTO login_links (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)"),
+      loginLinkConsume: this.db.prepare("UPDATE login_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?"),
+      loginLinkUserId: this.db.prepare("SELECT user_id FROM login_links WHERE token_hash = ?"),
+      loginLinkCleanup: this.db.prepare("DELETE FROM login_links WHERE expires_at < ? OR used_at IS NOT NULL"),
+      webTokenInsert: this.db.prepare("INSERT INTO user_tokens (token_hash, user_id, created_at) VALUES (?, ?, ?)"),
+      webTokenUserByHash: this.db.prepare("SELECT u.* FROM user_tokens t JOIN users u ON u.user_id = t.user_id WHERE t.token_hash = ?"),
+      webTokenDeleteOfUser: this.db.prepare("DELETE FROM user_tokens WHERE user_id = ?"),
 
       tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
@@ -319,9 +332,12 @@ export class Store extends EventEmitter {
     return { userId: String(r.user_id), name: String(r.name), role: (r.role as "user" | "systemadmin") ?? "user", disabled: Number(r.disabled) === 1, createdAt: Number(r.created_at) };
   }
   findUserByToken(token: string): { userId: string; name: string; role: "user" | "systemadmin"; disabled: boolean } | null {
-    const r = this.st.userByToken.get(sha256(token)) as Row | undefined;
-    if (!r) return null;
-    const u = this.rowUser(r);
+    const h = sha256(token);
+    const r = this.st.userByToken.get(h) as Row | undefined;
+    // 并行登录 token（网页登录链接兑换签发）：与主 token 同权，用户状态实时跟随 users 行
+    const row = r ?? (this.st.webTokenUserByHash.get(h) as Row | undefined);
+    if (!row) return null;
+    const u = this.rowUser(row);
     return { userId: u.userId, name: u.name, role: u.role, disabled: u.disabled };
   }
   listUsers(): Array<{ userId: string; name: string; role: "user" | "systemadmin"; disabled: boolean; createdAt: number }> {
@@ -341,6 +357,33 @@ export class Store extends EventEmitter {
   /** 重签用户登录 token（原始 token 只存 hash 不可取回，恢复登录 = 换新 token） */
   resetUserToken(userId: string, tokenHash: string) {
     return this.db.prepare("UPDATE users SET token_hash = ? WHERE user_id = ?").run(tokenHash, userId).changes > 0;
+  }
+
+  // ---------- 网页登录链接（agent 生成 → 持有人一键登录；一次性 + 短时效） ----------
+
+  /** 新链接入库；顺带清理全表已用/过期链接，保持表小（生成是低频操作） */
+  addLoginLink(tokenHash: string, userId: string, expiresAt: number) {
+    this.st.loginLinkCleanup.run(Date.now());
+    this.st.loginLinkInsert.run(tokenHash, userId, Date.now(), expiresAt);
+  }
+  /**
+   * 原子消费链接：UPDATE 仅在「未用且未过期」时命中（并发下恰好一个请求 changes>0）。
+   * 返回关联 userId；无效/已用/过期返回 null。
+   */
+  consumeLoginLink(tokenHash: string): string | null {
+    const changes = this.st.loginLinkConsume.run(Date.now(), tokenHash, Date.now()).changes;
+    if (changes === 0) return null;
+    const r = this.st.loginLinkUserId.get(tokenHash) as Row | undefined;
+    return r ? String(r.user_id) : null;
+  }
+
+  /** 登录链接兑换签发的并行 token（不动 users 主 token，agent 侧凭证不受影响） */
+  addUserToken(userId: string, tokenHash: string) {
+    this.st.webTokenInsert.run(tokenHash, userId, Date.now());
+  }
+  /** 清除某用户的全部并行 token（重签主 token 时联动：旧网页登录凭证一并失效） */
+  deleteUserTokensOf(userId: string) {
+    this.st.webTokenDeleteOfUser.run(userId);
   }
 
   /** 用户参桌索引：seatOwners 反查（管理台参桌明细用） */

@@ -644,7 +644,9 @@ export type AuditEvent =
   /** 会议暂停/恢复（叠加态）与暂停申请：pause_request/table_pause(via=request) 的 detail 均记录申请方 */
   | "table_pause" | "table_resume" | "pause_request" | "pause_request_approved"
   /** 管理台（systemadmin）事件 */
-  | "admin_set_role" | "admin_set_disabled" | "admin_reissue_user_token" | "admin_close" | "admin_human" | "admin_delete_table";
+  | "admin_set_role" | "admin_set_disabled" | "admin_reissue_user_token" | "admin_close" | "admin_human" | "admin_delete_table"
+  /** 网页登录链接：agent 生成 / 持有人兑换（一次性 + 短时效；只记元信息不记 token） */
+  | "login_link_created" | "login_link_exchanged";
 
 export interface AuditRecord {
   id: string; ts: number; tableId: string; seatId: string;

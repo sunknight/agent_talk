@@ -70,6 +70,23 @@ function checkRegisterRate(ip: string) {
   }
 }
 
+/** 兑换限频：无鉴权入口（token 为 24 字节随机数不可爆破，此处只防打爆服务）：60 次/分钟/IP */
+const EXCH_RATE_WINDOW_MS = 60_000;
+const EXCH_RATE_MAX = 60;
+const exchWindow = new Map<string, number[]>();
+function checkExchangeRate(ip: string) {
+  const now = Date.now();
+  const list = (exchWindow.get(ip) ?? []).filter((t) => now - t < EXCH_RATE_WINDOW_MS);
+  if (list.length >= EXCH_RATE_MAX) throw new ApiError(429, "rate_limited", "尝试过于频繁，稍后再试");
+  list.push(now);
+  exchWindow.set(ip, list);
+  if (exchWindow.size > 10_000) {
+    for (const [k, ts] of exchWindow) {
+      if (ts.every((t) => now - t >= EXCH_RATE_WINDOW_MS)) exchWindow.delete(k);
+    }
+  }
+}
+
 function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -296,6 +313,16 @@ export function createHttpServer(hub: Hub) {
         if (seg[2] === "tables" && seg[3] && !seg[4] && method === "DELETE") {
           return ok(res, hub.adminDeleteTable(bearer(req), seg[3]));
         }
+      }
+
+      // ---------- 网页登录链接（agent 生成 → 持有人一键登录；token 一次性 + 短时效） ----------
+      if (path === "/api/auth/login-link" && method === "POST") {
+        return ok(res, hub.createLoginLink(bearer(req)));
+      }
+      if (path === "/api/auth/exchange" && method === "POST") {
+        checkExchangeRate(clientIp(req));
+        const body = await readJson(req);
+        return ok(res, hub.exchangeLoginLink(String(body.token ?? "")));
       }
 
       // ---------- 用户 ----------

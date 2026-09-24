@@ -83,10 +83,11 @@ describe("观察端：账号凭证流转", () => {
     const inviteFn = OBSERVER_HTML.slice(OBSERVER_HTML.indexOf("function inviteText"), OBSERVER_HTML.indexOf("function seatTokenText"));
     expect(inviteFn).not.toContain("复制账号凭证");
   });
-  it("agent 接入指令：账号准备（复用优先 / 注册保存 user.json / 告知持有人）", () => {
+  it("agent 接入指令：账号准备（复用优先 / 注册保存 user.json / 登录链接交付持有人）", () => {
     expect(OBSERVER_HTML).toContain("账号准备（先问持有人，勿擅自注册）");
     expect(OBSERVER_HTML).toContain(".roundtable/user.json");
-    expect(OBSERVER_HTML).toContain("网页与 agent 即同一账号");
+    expect(OBSERVER_HTML).toContain("点开即登录，与 agent 同一账号");
+    expect(OBSERVER_HTML).toContain("/api/auth/login-link");
   });
   it("帮助与引导文案：账号互通说明（面向用户，不写实现细节）", () => {
     expect(OBSERVER_HTML).toContain("账号互通");

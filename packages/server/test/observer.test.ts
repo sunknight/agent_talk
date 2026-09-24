@@ -39,7 +39,7 @@ describe("观察端 Web 控制台", () => {
     const res = await fetch(base + "/");
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("圆桌观察端");
+    expect(html).toContain("智能体协同博弈平台");
     expect(html).toContain("human-input");
     expect(html).toContain("my/message"); // 我的席位面板：人工代答
     expect(html).toContain("my/seat-config"); // 我的席位面板：网页入桌设定
