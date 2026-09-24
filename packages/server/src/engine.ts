@@ -9,9 +9,9 @@
  */
 import { randomBytes } from "node:crypto";
 import {
-  INJECTION_FLAG, makeEnvelope, newId, resolveCaps, scanInjection, sha256, tableTypeOf, validateEnvelope,
+  DISCLOSURE_LEVELS, INJECTION_FLAG, makeEnvelope, newId, resolveCaps, scanInjection, sha256, tableTypeOf, validateEnvelope,
   type ArtifactPublishedPayload, type ArtifactVersion, type AuditEvent, type AuditRecord,
-  type ConsensusResultPayload, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
+  type ConsensusResultPayload, type DataScopeItem, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
   type HumanInputPayload, type HumanRulingPayload, type MeetingPausedPayload, type MeetingResumedPayload,
   type MsgType, type OwnerDirectiveView, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type Phase, type PhaseChangePayload,
   type PrecheckState, type QuestionPayload, type ReplyPayload, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
@@ -22,7 +22,7 @@ import {
 import type { DirectiveRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, ReviewItemRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 import { Store } from "./store";
 import { unifiedDiff } from "./diff";
-import { deepseekPrecheck, type PrecheckFn, type PrecheckInput, type PrecheckOutcome } from "./precheck";
+import { resolvePrecheck, setModelCallLogger, type PrecheckFn, type PrecheckInput, type PrecheckOutcome } from "./precheck";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -116,12 +116,14 @@ export class Hub {
   private precheckInFlight = new Set<string>();
   /** 思考进度旁路记录：tableId → 最近一次上报（不落库、不进消息流，仅观察端展示态） */
   private turnProgress = new Map<string, { seatId: string; phase: Phase; roundNo: number; stage: TurnProgressStage; ts: number }>();
-  /** 预审器（默认 DeepSeek；测试可注入） */
+  /** 预审器（PRECHECK_PROVIDER 选择：deepseek 缺省 / jev 分层；测试可注入） */
   private readonly precheck: PrecheckFn;
 
   constructor(public readonly store: Store, opts?: { precheck?: PrecheckFn }) {
     this.store.on("message", (tableId: string) => this.notify(tableId));
-    this.precheck = opts?.precheck ?? deepseekPrecheck;
+    this.precheck = opts?.precheck ?? resolvePrecheck();
+    // 预审模型调用审计：postJson 层完整报文/用量 → model_call_logs（模块级单例，多 Hub 实例以后建者为准）
+    setModelCallLogger((rec) => this.store.saveModelCallLog(rec));
   }
 
   // ================= 用户与桌 =================
@@ -185,7 +187,7 @@ export class Hub {
    * 选 host 视同主持人建桌，mode 升级 hosted），发其余角色码 —— 各方自行建桌的原流程；
    * mode=hosted：建桌人为主持人（host，只管桌与调度，不参与评审协作），按所选类型发参与方各角色码邀请各方；
    * 主持人建问询桌额外签发「问询方 asker」码，由人凭码经 web 成为问询方（不占席位）。
-   * 每条消费发言权的回合提交过 DeepSeek 预审调度层（全桌型一致，见 runPrecheck；问询桌 qa 无回合提交）。
+   * 每条消费发言权的回合提交过系统预审调度层（全桌型一致，见 runPrecheck；问询桌 qa 无回合提交）。
    * tableType（缺省 review）：开桌先选类型，再按类型勾选开放邀请码的角色（inviteRoles）。
    */
   createTable(userToken: string, p: {
@@ -413,11 +415,11 @@ export class Hub {
     return { seatId, token, seat };
   }
 
-  /** 入桌设定：立场（预设+补充）、讨论范围、数据范围、就绪标记（open 阶段与会议暂停期可反复修改）。
+  /** 入桌设定：立场（预设+补充）、讨论范围、数据范围（条目可带披露级别）、就绪标记（open 阶段与会议暂停期可反复修改）。
    *  暂停期就绪语义（动设定才重置）：保存时未显式带 ready:true 则置为未就绪——
    *  调整主张中的席位不会被视为「已补充完成」；无需补充的席位不保存即保持就绪。 */
   updateSeatConfig(tableId: string, seat: ServerSeat, p: {
-    stancePreset?: string; stance: string; scope?: string; dataScope?: string[]; ready?: boolean;
+    stancePreset?: string; stance: string; scope?: string; dataScope?: DataScopeItem[]; ready?: boolean;
   }): SeatInfo {
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open" && !meta.pause) throw new ApiError(409, "already_started", "会议已开始，席位设定锁定（暂停期可调整）");
@@ -425,7 +427,11 @@ export class Hub {
     const stance = checkField(p.stance, "stance", 8_000);
     const scope = p.scope !== undefined ? checkField(p.scope, "scope", 4_000, 0) : "";
     const stancePreset = p.stancePreset !== undefined ? checkField(p.stancePreset, "stancePreset", 64, 0) : undefined;
-    const dataScope = (p.dataScope ?? []).slice(0, 50).map((x) => checkField(x, "dataScope 条目", 500));
+    const dataScope = (p.dataScope ?? []).slice(0, 50).map((x) => {
+      if (typeof x === "string") return checkField(x, "dataScope 条目", 500);
+      if (!DISCLOSURE_LEVELS.includes(x.grant)) throw new ApiError(422, "bad_payload", "dataScope 授权级别 grant 必须是 read / quote / full");
+      return { text: checkField(x.text, "dataScope 条目", 500), grant: x.grant };
+    });
     const ready = meta.pause ? (p.ready ?? false) : (p.ready ?? seat.config.ready);
     seat.config = {
       stancePreset,
@@ -1027,6 +1033,7 @@ export class Hub {
       .slice(-8)
       .map((m) => ({ from: m.fromSeat === "server" ? "server" : nameOf.get(m.fromSeat) ?? m.fromSeat, type: m.type, text: JSON.stringify(m.payload) }));
     return {
+      tableId,
       table: {
         topic: meta.topic, goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, rolePlan: meta.rolePlan,
         sharedDocs: this.store.getDocuments(tableId)
@@ -2262,7 +2269,7 @@ export class Hub {
 
   /** 网页持有人（user token）完成入桌设定：与 agent 通道同一入口（open 阶段可反复修改） */
   seatConfigByUser(userToken: string, tableId: string, p: {
-    stancePreset?: string; stance: string; scope?: string; dataScope?: string[]; ready?: boolean;
+    stancePreset?: string; stance: string; scope?: string; dataScope?: DataScopeItem[]; ready?: boolean;
   }): SeatInfo {
     const user = this.requireUser(userToken);
     const seatId = this.store.seatOfUser(tableId, user.userId);

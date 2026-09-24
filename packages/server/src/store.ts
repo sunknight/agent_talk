@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { sha256, tableTypeOf, type AuditRecord, type Envelope, type PauseInfo, type SeatInfo, type TableSummary } from "@rt/shared";
-import type { ArtifactRecord, DirectiveRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import type { ArtifactRecord, DirectiveRecord, ModelCallLogRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
 
 const SCHEMA_VERSION = 1;
 
@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS user_tokens (
 CREATE TABLE IF NOT EXISTS user_table_prefs (
   user_id TEXT NOT NULL, table_id TEXT NOT NULL, chat_sides TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (user_id, table_id));
+CREATE TABLE IF NOT EXISTS model_call_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL, time TEXT NOT NULL,
+  provider TEXT NOT NULL, purpose TEXT NOT NULL, table_id TEXT,
+  model TEXT NOT NULL, url TEXT NOT NULL,
+  status INTEGER NOT NULL, ok INTEGER NOT NULL, duration_ms INTEGER NOT NULL,
+  usage TEXT, request TEXT NOT NULL, response TEXT, error TEXT);
 `;
 
 /** node:sqlite 行类型（.get/.all 返回的原样记录） */
@@ -143,6 +150,12 @@ export class Store extends EventEmitter {
       prefChatSidesGet: this.db.prepare("SELECT chat_sides FROM user_table_prefs WHERE user_id = ? AND table_id = ?"),
       prefChatSidesSet: this.db.prepare("INSERT OR REPLACE INTO user_table_prefs (user_id, table_id, chat_sides) VALUES (?, ?, ?)"),
       prefDeleteOfTable: this.db.prepare("DELETE FROM user_table_prefs WHERE table_id = ?"),
+
+      modelCallInsert: this.db.prepare(
+        "INSERT INTO model_call_logs (ts, time, provider, purpose, table_id, model, url, status, ok, duration_ms, usage, request, response, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+      modelCallAll: this.db.prepare("SELECT * FROM model_call_logs ORDER BY id"),
+      modelCallOfTable: this.db.prepare("SELECT * FROM model_call_logs WHERE table_id = ? ORDER BY id"),
+      modelCallDeleteOfTable: this.db.prepare("DELETE FROM model_call_logs WHERE table_id = ?"),
 
       tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
@@ -433,6 +446,7 @@ export class Store extends EventEmitter {
       this.db.prepare("DELETE FROM directives WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM pause_requests WHERE table_id = ?").run(tableId);
       this.st.prefDeleteOfTable.run(tableId);
+      this.st.modelCallDeleteOfTable.run(tableId);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -552,6 +566,31 @@ export class Store extends EventEmitter {
   pendingDirective(tableId: string): DirectiveRecord | null {
     const pend = this.getDirectives(tableId).filter((d) => d.status === "pending");
     return pend.length ? pend[pend.length - 1] : null;
+  }
+
+  // ---------- model_call_logs（预审模型调用审计） ----------
+  saveModelCallLog(rec: ModelCallLogRecord) {
+    this.st.modelCallInsert.run(
+      rec.ts, rec.time, rec.provider, rec.purpose, rec.tableId ?? null, rec.model, rec.url,
+      rec.status, rec.ok ? 1 : 0, rec.durationMs,
+      rec.usage === undefined ? null : J(rec.usage), J(rec.request),
+      rec.response === undefined ? null : J(rec.response), rec.error ?? null,
+    );
+  }
+  /** 调用日志（时间序；可按桌过滤；tableId 为空的记录仅在全量里可见） */
+  getModelCallLogs(tableId?: string): ModelCallLogRecord[] {
+    const rows = (tableId ? this.st.modelCallOfTable.all(tableId) : this.st.modelCallAll.all()) as Row[];
+    return rows.map((r) => ({
+      ts: Number(r.ts), time: String(r.time), provider: String(r.provider) as ModelCallLogRecord["provider"],
+      purpose: String(r.purpose) as ModelCallLogRecord["purpose"],
+      ...(r.table_id === null ? {} : { tableId: String(r.table_id) }),
+      model: String(r.model), url: String(r.url),
+      status: Number(r.status), ok: Number(r.ok) === 1, durationMs: Number(r.duration_ms),
+      ...(r.usage === null ? {} : { usage: JSON.parse(String(r.usage)) as ModelCallLogRecord["usage"] }),
+      request: JSON.parse(String(r.request)),
+      ...(r.response === null ? {} : { response: JSON.parse(String(r.response)) }),
+      ...(r.error === null ? {} : { error: String(r.error) }),
+    }));
   }
 
   // ---------- pause_requests（会议暂停申请） ----------

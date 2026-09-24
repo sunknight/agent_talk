@@ -86,7 +86,7 @@ curl -s -X POST $SERVER/api/tables/$TID/start -H "authorization: Bearer $OWNER_S
 
 **推进与兜底**：阶段流转由消息事件触发自动判定（如 review → response 只需全部评审人本轮都已发言）。表决有 reject 且未达 `maxReviewRounds`（默认 2）→ 回 review 开下一轮；超上限 → 自动 `human_intervention`。执行目标席位超 2 分钟无心跳不授予执行发言权（不空耗在掉线席位上）。注意 `turnTimeoutMs`（默认 5 分钟）只是随 TURN_GRANT 下发的提示，服务端**不做超时强制剥夺**——持权方卡住时靠 agent 自觉 deadline、`TURN_RELEASE` 主动让权（`pass:true`）或 ESCALATE / 人工介入解卡。
 
-## 主持人模式（hosted）与预审调度（DeepSeek · 全桌型）
+## 主持人模式（hosted）与预审调度（系统预审 · 全桌型）
 
 除「各方自行建桌」外，另有**主持人建桌**流程：主持人建桌 → 定规则 → 传文档 → 邀请各方 → 点开始。主持人（host）是建桌网页里的人类角色，只负责圆桌管理与调度，**不参与评审、需求补充或各 agent 协作**（不能发布产物/评审/表决/被请求执行，仅可上传共享资料与发送人工指令）。自建桌时把 `ownerRole` 选为 `host` 等同主持人建桌（`mode` 自动升级 hosted）；问询桌也支持主持人建（见问询模式一节）。各方以参与角色自建入席的原流程完全保留。
 
@@ -100,19 +100,20 @@ curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
 # 用 documents 接口上传共享资料（传文档）；各方凭码入席并设定就绪（host 豁免就绪）；主持人点开始。
 ```
 
-**预审调度层（在原调度之前补一层）**：所有评审/协作类桌（review / collab / brainstorm / decision，**自建与主持人建一致**；问询桌问答不预审）上任一方每一回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE）都先经 DeepSeek 预审再进入原调度推导：
+**预审调度层（在原调度之前补一层）**：所有评审/协作类桌（review / collab / brainstorm / decision，**自建与主持人建一致**；问询桌问答不预审）上任一方每一回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE）都先经系统预审再进入原调度推导：
 
 ```
-agent 结果 → DeepSeek 预审 ─┬─ pass / skipped（未配置或失败，放行+标注）→ 原调度照常（阶段推进、下一位发言）
-                           └─ redirect（点名某方补充）→ 落点名指令、压住原推进，
-                              发言权授予被点名席 → 其提交 SUPPLEMENT 补充 → 补充再预审 → …… 直至 pass
+agent 结果 → 系统预审 ─┬─ pass / skipped（未配置或失败，放行+标注）→ 原调度照常（阶段推进、下一位发言）
+                       └─ redirect（点名某方补充）→ 落点名指令、压住原推进，
+                          发言权授予被点名席 → 其提交 SUPPLEMENT 补充 → 补充再预审 → …… 直至 pass
 ```
 
 - 预审结果以服务器系统消息 `HOST_PREREVIEW` 广播（席位伪造该类型一律 403）；桌况 `table.precheck` 暴露 `reviewing / directive / idle` 三态。
 - 被点名席以 `SUPPLEMENT`（`{directiveId, text}`）提交补充；同一提交上连续点名至多 3 次，触顶强制放行并标注。
 - 预审进行中该桌不授予发言权、并发的回合提交收到 409 `precheck_in_progress`；点名期间仅被点名席可提交回合型消息（QUESTION/REPLY 讨论不受限）。
-- DeepSeek 配置（环境变量注入，未配置即自动跳过放行）：`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`DEEPSEEK_MODEL`（默认 `deepseek-chat`）、`PRECHECK_TIMEOUT_MS`（默认 30000）。
+- 预审器配置（环境变量注入，未配置即自动跳过放行）。`PRECHECK_PROVIDER` 选路：`deepseek`（缺省，单次调用出判定与说明）：`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`DEEPSEEK_MODEL`（默认 `deepseek-chat`）；`jev`（方案 A 分层：OpenRouter Decisions API 的 Jev 负责合格判定/点名/严重度，redirect 时 DeepSeek 仅生成问题说明，说明不可用退模板——判定调用失败仍 fail-open 放行）：`OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL`（默认 `https://openrouter.ai`）、`JEV_MODEL`（默认 `~typesafe/jev-latest`）+ 上述 DeepSeek 变量（供说明生成共用）。`PRECHECK_TIMEOUT_MS`（默认 30000，单次模型调用超时）两路共用。
 - 点名目标经服务端校验：必须是本桌在席的提案/评审方（host/observer 不可被点名）；模型输出只是数据，不构成指令。
+- **模型调用审计**：jev/deepseek 的每次调用（判定与 redirect 说明生成）完整落库 `roundtable.db` 的 `model_call_logs` 表——时间（ts/ISO）、桌 id、provider/purpose、model、URL、HTTP 状态、耗时、token 用量（归一化 input/output；网络异常记 status=0+error）、完整提交与返回报文；日志失败不影响预审（fail-open），删桌连带清理。查询示例：`sqlite3 roundtable.db "SELECT id,time,provider,purpose,table_id,status,duration_ms,usage FROM model_call_logs ORDER BY id DESC LIMIT 20"`。
 
 ## 问询模式（inquiry · 人问 agent 答）
 

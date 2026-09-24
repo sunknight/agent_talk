@@ -76,12 +76,16 @@ describe("观察端：账号凭证流转", () => {
     expect(OBSERVER_HTML).toContain("只交给自己的 agent"); // 复制后警示 toast / 文本内警示
     expect(OBSERVER_HTML).toContain("系统观察员权限"); // systemadmin 强警示
   });
-  it("席位凭证与恢复凭证带「另发账号凭证」提示；邀请码不带（不引导外发账号）", () => {
+  it("席位凭证与恢复凭证带「另发账号凭证」提示；通用邀请不带（不引导外发账号），仅自建问询桌特例带凭证流转引导", () => {
     expect(OBSERVER_HTML).toContain("function seatTokenText");
     expect(OBSERVER_HTML).toContain("function recoveryText");
     expect(OBSERVER_HTML).toContain("另点网页右上角「复制账号凭证」发给它");
     const inviteFn = OBSERVER_HTML.slice(OBSERVER_HTML.indexOf("function inviteText"), OBSERVER_HTML.indexOf("function seatTokenText"));
-    expect(inviteFn).not.toContain("复制账号凭证");
+    // 凭证引导只出现在 selfInquiry（自建问询桌，邀请对象=建桌人自己的 agent）条件分支内，其余邀请路径不引导外发账号
+    const beforeBranch = inviteFn.slice(0, inviteFn.indexOf("selfInquiry?"));
+    expect(beforeBranch).not.toContain("复制账号凭证");
+    expect(inviteFn).toContain("随本邀请一起发给它");
+    expect(inviteFn).toContain("与本桌问询方是不同用户");
   });
   it("agent 接入指令：账号准备（复用优先 / 注册保存 user.json / 登录链接交付持有人）", () => {
     expect(OBSERVER_HTML).toContain("账号准备（先问持有人，勿擅自注册）");

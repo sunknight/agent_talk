@@ -225,7 +225,15 @@ const seatConfigSchema = s({
     stancePreset: str(1, 64),
     stance: str(1, 8_000),
     scope: str(0, 4_000),
-    dataScope: { type: "array", items: str(1, 500), maxItems: 50 },
+    dataScope: {
+      type: "array", maxItems: 50,
+      items: {
+        anyOf: [
+          str(1, 500), // 旧格式：纯声明文本（等价 read）
+          { type: "object", required: ["text", "grant"], properties: { text: str(1, 500), grant: { type: "string", enum: ["read", "quote", "full"] } }, additionalProperties: false },
+        ],
+      },
+    },
     ready: { type: "boolean" },
   },
   additionalProperties: false,

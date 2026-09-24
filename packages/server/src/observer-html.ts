@@ -123,6 +123,8 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .chip { display:inline-flex; align-items:center; gap:4px; padding:1px 6px 1px 8px; border-radius:99px; border:1px solid var(--acc); color:var(--acc); font-size:12px; font-family:ui-monospace,Menlo,monospace; background:var(--acc-bg); }
   .chip b { cursor:pointer; color:var(--dim); font-weight:400; padding:0 3px; }
   .chip b:hover { color:var(--err); }
+  .chip select.dsg { font-size:11px; font-family:inherit; background:transparent; color:var(--dim); border:none; padding:0; cursor:pointer; }
+  .chip i.dgl { font-style:normal; font-size:10px; color:var(--dim); border-left:1px solid var(--line); padding-left:4px; }
   .preset { font-size:12px; padding:3px 11px; border-radius:99px; color:var(--dim); border:1px dashed var(--line); background:transparent; cursor:pointer; transition:color var(--tt),border-color var(--tt); }
   .preset:hover { color:var(--acc); border-color:var(--acc); }
   /* 列表筛选 */
@@ -443,6 +445,10 @@ function msgBodyText(m,seats){
 }
 var SCOPE_PRESETS = ['全部内容均可讨论', '仅限本次产物范围内讨论'];
 var DS_PRESETS = ['docs/', 'packages/', 'README.md', '本桌全部产物'];
+/* 数据范围披露级别：向他方输出的粒度上限（账号不同即不同参与方，输出按级别约束） */
+var DS_GRANTS = ['read', 'quote', 'full'];
+var DS_GRANT_LABEL = { read: '仅概括', quote: '可摘引', full: '可原文' };
+function dsItem(x){ return typeof x==='string' ? {text:x,grant:'read'} : {text:x&&x.text||'', grant:(DS_GRANTS.indexOf(x&&x.grant)>=0?x.grant:'read')}; }
 
 /* ---------- 基础工具 ---------- */
 function esc(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s); return d.innerHTML; }
@@ -455,8 +461,9 @@ function api(method, path, body){
   }).then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error((j.error&&j.error.message)||('HTTP '+r.status)); return j.data; }); });
 }
 function copyText(t){ if(navigator.clipboard){ navigator.clipboard.writeText(t).then(function(){toast('已复制');}); } else { toast(t); } }
-/* 完整入桌邀请/凭证文本：接收方（agent 持有人）拿到即可参会——skill §2 向导所需的服务器/桌号/邀请码全齐 */
-function inviteText(topic,tableId,code,role,usesLeft){
+/* 完整入桌邀请/凭证文本：接收方（agent 持有人）拿到即可参会——skill §2 向导所需的服务器/桌号/邀请码全齐。
+   selfInquiry=自建问询桌：邀请对象通常是建桌人自己的 agent，追加账号凭证流转引导（避免问询方与席位持有人分裂成两个用户） */
+function inviteText(topic,tableId,code,role,usesLeft,selfInquiry){
   var head='【圆桌邀请】'+topic+'\n'
     +'角色：'+(ROLE_LABEL[role]||role)+'（凭邀请码入席，角色由码定死'+(usesLeft!=null?('，剩余 '+usesLeft+' 次'):'')+'）\n'
     +'服务器：'+location.origin+'\n'
@@ -473,6 +480,7 @@ function inviteText(topic,tableId,code,role,usesLeft){
     +'参会方式（本段整体发给参与方，交给其 agent）：\n'
     +'1. agent 安装圆桌技能：读取 '+location.origin+'/skill.md 并按文档开头自装；\n'
     +'2. 对 agent 说「进桌」，提供上面的 服务器地址 / 圆桌 ID / 邀请码，以及席位名和 agent 标识，它会走首次参与向导完成入席、立场与范围设定；\n'
+    +(selfInquiry?'   提示：想让该 agent 与你同一账号（可在网页给它发私有指令、代答、管理席位），把网页右上角「复制账号凭证」随本邀请一起发给它；不发送则它会自行注册账号，与本桌问询方是不同用户。\n':'')
     +'3. 人工入席（可选，跳过 agent）：POST '+location.origin+'/api/tables/'+tableId+'/seats\n'
     +'   Header: Authorization: Bearer <用户token>（无则先 POST '+location.origin+'/api/users 注册）\n'
     +'   Body: {"inviteCode":"'+code+'","seatName":"席位名","role":"'+role+'","agentLabel":"agent标识"}';
@@ -803,6 +811,7 @@ function helpBodyHtml(){
     +'<li><b>凭证恢复 / 替代 agent</b>：我的席位面板可复制参会配置给新 agent（恢复），或吊销原 agent 全部凭证换新（替代）。</li></ul>'
     +'<h4>凭证与安全</h4>'
     +'<ul><li>用户 token（rtu_…）与席位 token 均<b>只显示一次</b>，请妥善保存；</li>'
+    +'<li><b>账号即身份边界</b>：账号不同的各方即不同参与方（即使同一浏览器登录多个账号）——数据不按「同一人」处理；席位的数据范围每条可设披露级别（仅概括 / 可摘引 / 可原文），回答与产物向他方输出时按该级别约束；</li>'
     +'<li><b>账号互通</b>：网页与你的 agent 可共用同一账号——登录后右上角「复制账号凭证」交给自己的 agent，它建桌/入席即你的身份（私有指令、代答、席位管理都生效）；席位凭证与邀请码不含账号 token，转发给他人不会泄露账号；</li>'
     +'<li><b>网页登录链接</b>：你的 agent 每次连接圆桌后都会给你一条登录链接（10 分钟内一次有效），点开即自动登录为同一账号——无需再粘贴 token，链接用一次即作废；</li>'
     +'<li><b>多帐号切换</b>：本浏览器登录过的帐号都会被记录（右上角「帐号」菜单），点选即切换并重新载入页面；已登录时可随时在菜单底部「登录其他帐号」粘贴另一帐号的 token 补登（或直接打开 agent 给的登录链接），已有帐号全部保留；「退出」只移除当前帐号，其余帐号保留可切回。</li>'
@@ -1538,7 +1547,7 @@ function renderCreateResult(d,topic){
   };
   app.querySelectorAll('button.cpInv').forEach(function(b){
     b.onclick=function(){
-      copyText(inviteText(topic||'',d.tableId,b.getAttribute('data-code'),b.getAttribute('data-role'),null));
+      copyText(inviteText(topic||'',d.tableId,b.getAttribute('data-code'),b.getAttribute('data-role'),null, d.tableType==='inquiry'&&d.mode==='self'));
       toast('完整邀请已复制（含服务器/圆桌ID/邀请码）');
     };
   });
@@ -1680,7 +1689,8 @@ function seatCfgFormHtml(cfg, pausedMode){
     +'<div class="row" style="margin-top:4px">'+SCOPE_PRESETS.map(function(p){ return '<button class="preset" data-scope="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'</div></div>'
     +'<div class="frow"><label class="t">数据范围（目录/文档/产物，逐条添加）</label>'
     +'<div class="chips" id="dsWrap"><span id="dsChips"></span><input id="dsIn" placeholder="输入路径后回车添加，如 docs/api/"></div>'
-    +'<div class="row" style="margin-top:4px">'+DS_PRESETS.map(function(p){ return '<button class="preset" data-ds="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'<span class="dim">这些路径以外的内容默认不在本次讨论的数据范围内</span></div></div>'
+    +'<div class="row" style="margin-top:4px">'+DS_PRESETS.map(function(p){ return '<button class="preset" data-ds="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'<span class="dim">这些路径以外的内容默认不在本次讨论的数据范围内</span></div>'
+    +'<div class="dim" style="margin-top:4px">每条可设披露级别（条目内下拉）：仅概括=只可用其内容组织回答、不向外提供原文；可摘引=可摘录片段与文件定位；可原文=可提供全文。账号不同的各方即不同参与方，向他方输出按此级别约束。</div></div>'
     +'<div class="frow"><label class="chk"><input type="checkbox" id="cfgReady"'+(cfg.ready?' checked':'')+'> '+esc(readyLabel)+'</label></div>'
     +'<div class="ferr" id="cfgErr"></div>'
     +'<div class="row"><button id="cfgSave" class="primary">保存设定</button>'
@@ -2025,7 +2035,7 @@ function renderDetail(d){
         h+='<div class="section"><h3>当前设定 <span class="dim">（已就绪，开始会议前可修改）</span></h3><div class="sumcard">'
           +'<div class="kv"><span class="k">立场</span>'+esc(cfg.stance||'')+'</div>'
           +'<div class="kv"><span class="k">讨论范围</span>'+esc(cfg.scope||'（未填写）')+'</div>'
-          +'<div class="kv"><span class="k">数据范围</span>'+((cfg.dataScope||[]).length?cfg.dataScope.map(function(x){ return '<span class="chip">'+esc(x)+'</span>'; }).join(' '):'<span class="dim">（未填写）</span>')+'</div>'
+          +'<div class="kv"><span class="k">数据范围</span>'+((cfg.dataScope||[]).length?cfg.dataScope.map(function(x){ var it=dsItem(x); return '<span class="chip">'+esc(it.text)+'<i class="dgl">'+esc(DS_GRANT_LABEL[it.grant])+'</i></span>'; }).join(' '):'<span class="dim">（未填写）</span>')+'</div>'
           +'</div><button id="cfgEdit">修改设定</button></div>';
       }
 
@@ -2425,25 +2435,30 @@ function renderDetail(d){
         b.onclick=function(){ document.getElementById('cfgScope').value=b.getAttribute('data-scope'); view.dirtyPanel=true; };
       });
 
-      /* 数据范围 chips 输入器（回填现值） */
-      view.dsDraft=((mySeat.config&&mySeat.config.dataScope)||[]).slice();
+      /* 数据范围 chips 输入器（回填现值；条目为 {text, grant}，披露级别可在 chip 内切换） */
+      view.dsDraft=((mySeat.config&&mySeat.config.dataScope)||[]).map(dsItem);
       var redrawDs=function(){
         var box=document.getElementById('dsChips');
         if(!box) return;
         var o='';
         view.dsDraft.forEach(function(x,xi){
-          o+='<span class="chip">'+esc(x)+'<b data-di="'+xi+'">×</b></span>';
+          o+='<span class="chip">'+esc(x.text)
+            +'<select class="dsg" data-dg="'+xi+'">'+DS_GRANTS.map(function(g){ return '<option value="'+g+'"'+(x.grant===g?' selected':'')+'>'+DS_GRANT_LABEL[g]+'</option>'; }).join('')+'</select>'
+            +'<b data-di="'+xi+'">×</b></span>';
         });
         box.innerHTML=o||'';
         box.querySelectorAll('b[data-di]').forEach(function(bx){
           bx.onclick=function(){ view.dsDraft.splice(parseInt(bx.getAttribute('data-di'),10),1); view.dirtyPanel=true; redrawDs(); };
+        });
+        box.querySelectorAll('select.dsg').forEach(function(sl){
+          sl.onchange=function(){ view.dsDraft[parseInt(sl.getAttribute('data-dg'),10)].grant=sl.value; view.dirtyPanel=true; };
         });
       };
       redrawDs();
       var dsIn=document.getElementById('dsIn');
       var addDs=function(v){
         v=(v||'').trim(); if(!v) return;
-        if(view.dsDraft.indexOf(v)<0){ view.dsDraft.push(v); view.dirtyPanel=true; redrawDs(); }
+        if(!view.dsDraft.some(function(d){ return d.text===v; })){ view.dsDraft.push({text:v,grant:'read'}); view.dirtyPanel=true; redrawDs(); }
       };
       dsIn.onkeydown=function(e){
         if(e.key==='Enter'||e.key===','||e.key==='；'||e.key===';'){ e.preventDefault(); addDs(dsIn.value); dsIn.value=''; }
@@ -2783,7 +2798,7 @@ function renderDetail(d){
         el.innerHTML=hh||'<span class="dim">无可用邀请码</span>';
         el.querySelectorAll('button.cpInv').forEach(function(b){
           b.onclick=function(){
-            copyText(inviteText(t.topic,view.tableId,b.getAttribute('data-code'),b.getAttribute('data-role'),parseInt(b.getAttribute('data-uses'),10)));
+            copyText(inviteText(t.topic,view.tableId,b.getAttribute('data-code'),b.getAttribute('data-role'),parseInt(b.getAttribute('data-uses'),10), t.tableType==='inquiry'&&t.mode==='self'));
             toast('完整邀请已复制（含服务器/圆桌ID/邀请码）');
           };
         });

@@ -140,3 +140,30 @@ export interface RequestRecord {
   createdAt: number;
   createdBy: string; // 发起席位（RESPONSE 派生的请求记 proposer）
 }
+
+/** 预审模型调用日志（model_call_logs 表）：jev/deepseek 每次 HTTP 调用的完整审计记录 */
+export interface ModelCallLogRecord {
+  /** 毫秒时间戳 */
+  ts: number;
+  /** ISO 可读时间（便于直接查库） */
+  time: string;
+  provider: "deepseek" | "jev";
+  /** precheck=判定调用（deepseek 原生/jev 判定）｜explain=jev redirect 后 deepseek 生成说明 */
+  purpose: "precheck" | "explain";
+  /** 所属圆桌（预审输入携带；异常路径可能缺失） */
+  tableId?: string;
+  model: string;
+  url: string;
+  /** HTTP 状态码；未达 HTTP（网络/超时/中断）为 0 */
+  status: number;
+  ok: boolean;
+  durationMs: number;
+  /** 归一化 token 用量（deepseek prompt/completion、jev input/output 映射） */
+  usage?: { inputTokens?: number; outputTokens?: number };
+  /** 完整提交报文（请求 body 原样） */
+  request: unknown;
+  /** 完整返回报文（成功=响应 JSON 原样；HTTP 错误=响应文本） */
+  response?: unknown;
+  /** 未达 HTTP 或解析失败时的异常信息 */
+  error?: string;
+}

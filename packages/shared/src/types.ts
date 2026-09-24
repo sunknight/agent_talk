@@ -53,10 +53,22 @@ export interface SeatConfig {
   stance: string;
   /** 本席讨论范围声明 */
   scope: string;
-  /** 数据范围：桌内产物 ID / 自带文档说明（外部目录、任务等，以文本引用） */
-  dataScope: string[];
+  /** 数据范围：桌内产物 ID / 自带文档说明（外部目录、任务等，以文本引用）。
+   *  条目为数据范围+披露授权的二元组：纯字符串=旧格式（等价 read，仅供本席理解作答）；
+   *  对象项可声明披露级别——向他方（含问询方）输出的内容按级别约束（read 仅概括 / quote 可摘录与文件定位 / full 可提供原文）。 */
+  dataScope: DataScopeItem[];
   /** 是否已就绪（点开始的前置） */
   ready: boolean;
+}
+
+/** 数据范围条目的披露授权级别：本席数据向桌内他方（user_id 不同的一切主体）输出的粒度上限 */
+export type DisclosureLevel = "read" | "quote" | "full";
+export const DISCLOSURE_LEVELS: readonly DisclosureLevel[] = ["read", "quote", "full"];
+/** 数据范围条目：字符串（旧格式，=read）或 {text, grant} */
+export type DataScopeItem = string | { text: string; grant: DisclosureLevel };
+/** 条目的披露级别（字符串项回落 read） */
+export function disclosureOf(item: DataScopeItem): DisclosureLevel {
+  return typeof item === "string" ? "read" : (DISCLOSURE_LEVELS.includes(item.grant) ? item.grant : "read");
 }
 
 /** 内置立场预设（用户可在此基础上补充；服务器与网关共享展示）。
@@ -371,7 +383,7 @@ export interface SeatConfigPayload {
   stancePreset?: string;
   stance: string;
   scope: string;
-  dataScope: string[];
+  dataScope: DataScopeItem[];
   ready: boolean;
 }
 

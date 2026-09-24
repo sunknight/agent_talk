@@ -8,7 +8,7 @@ import type { PrecheckFn } from "./precheck";
 export { Hub, ApiError } from "./engine";
 export { Store } from "./store";
 export { createHttpServer } from "./api";
-export { deepseekPrecheck } from "./precheck";
+export { deepseekPrecheck, jevPrecheck, resolvePrecheck } from "./precheck";
 export type { PrecheckFn, PrecheckInput, PrecheckOutcome } from "./precheck";
 
 /** 默认数据目录：项目根 roundtable_data/（src 与 dist 同在 packages/server 下，三层上溯即项目根） */

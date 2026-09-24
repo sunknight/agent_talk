@@ -114,6 +114,16 @@ function bearer(req: IncomingMessage): string {
   return m[1].trim();
 }
 
+/** 入桌设定 dataScope：兼容两种条目——纯字符串（旧格式，=read）与 {text, grant}（披露级别，非法 grant 由 engine 422） */
+function parseDataScope(v: unknown): import("@rt/shared").DataScopeItem[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v.map((x) => {
+    if (typeof x === "string") return x;
+    if (x && typeof x === "object") return { text: String((x as Record<string, unknown>).text ?? ""), grant: (x as Record<string, unknown>).grant as import("@rt/shared").DisclosureLevel };
+    return String(x);
+  });
+}
+
 export function createHttpServer(hub: Hub) {
   return createServer(async (req, res) => {
     try {
@@ -181,7 +191,7 @@ export function createHttpServer(hub: Hub) {
             stancePreset: body.stancePreset ? String(body.stancePreset) : undefined,
             stance: String(body.stance ?? ""),
             scope: body.scope !== undefined ? String(body.scope) : undefined,
-            dataScope: Array.isArray(body.dataScope) ? body.dataScope.map(String) : undefined,
+            dataScope: parseDataScope(body.dataScope),
             ready: typeof body.ready === "boolean" ? body.ready : undefined,
           }) });
         }
@@ -401,7 +411,7 @@ export function createHttpServer(hub: Hub) {
             stancePreset: body.stancePreset ? String(body.stancePreset) : undefined,
             stance: String(body.stance ?? ""),
             scope: body.scope !== undefined ? String(body.scope) : undefined,
-            dataScope: Array.isArray(body.dataScope) ? body.dataScope.map(String) : undefined,
+            dataScope: parseDataScope(body.dataScope),
             ready: typeof body.ready === "boolean" ? body.ready : undefined,
           }) });
         }

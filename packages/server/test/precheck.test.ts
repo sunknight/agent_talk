@@ -419,7 +419,7 @@ describe("deepseekPrecheck 单元（fail-open）", () => {
       participants: [],
     });
     expect(out.verdict).toBe("skipped");
-    expect(out.note).toContain("DEEPSEEK_API_KEY");
+    expect(out.note).toContain("未配置");
     if (had !== undefined) process.env.DEEPSEEK_API_KEY = had;
   });
 });
