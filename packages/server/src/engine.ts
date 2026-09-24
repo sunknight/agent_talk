@@ -9,7 +9,7 @@
  */
 import { randomBytes } from "node:crypto";
 import {
-  DISCLOSURE_LEVELS, INJECTION_FLAG, makeEnvelope, newId, resolveCaps, scanInjection, sha256, tableTypeOf, validateEnvelope,
+  DISCLOSURE_LEVELS, INJECTION_FLAG, STYLE_PRESETS, makeEnvelope, newId, resolveCaps, scanInjection, sha256, tableTypeOf, validateEnvelope,
   type ArtifactPublishedPayload, type ArtifactVersion, type AuditEvent, type AuditRecord,
   type ConsensusResultPayload, type DataScopeItem, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
   type HumanInputPayload, type HumanRulingPayload, type MeetingPausedPayload, type MeetingResumedPayload,
@@ -415,11 +415,12 @@ export class Hub {
     return { seatId, token, seat };
   }
 
-  /** 入桌设定：立场（预设+补充）、讨论范围、数据范围（条目可带披露级别）、就绪标记（open 阶段与会议暂停期可反复修改）。
+  /** 入桌设定：立场（预设+补充）、风格（预设+补充，可选）、讨论范围、数据范围（条目可带披露级别）、就绪标记（open 阶段与会议暂停期可反复修改）。
    *  暂停期就绪语义（动设定才重置）：保存时未显式带 ready:true 则置为未就绪——
    *  调整主张中的席位不会被视为「已补充完成」；无需补充的席位不保存即保持就绪。 */
   updateSeatConfig(tableId: string, seat: ServerSeat, p: {
-    stancePreset?: string; stance: string; scope?: string; dataScope?: DataScopeItem[]; ready?: boolean;
+    stancePreset?: string; stance: string; stylePreset?: string; style?: string;
+    scope?: string; dataScope?: DataScopeItem[]; ready?: boolean;
   }): SeatInfo {
     const meta = this.requireTable(tableId);
     if (meta.phase !== "open" && !meta.pause) throw new ApiError(409, "already_started", "会议已开始，席位设定锁定（暂停期可调整）");
@@ -427,6 +428,15 @@ export class Hub {
     const stance = checkField(p.stance, "stance", 8_000);
     const scope = p.scope !== undefined ? checkField(p.scope, "scope", 4_000, 0) : "";
     const stancePreset = p.stancePreset !== undefined ? checkField(p.stancePreset, "stancePreset", 64, 0) : undefined;
+    // 风格：双存快照（与立场同语义）——stylePreset 校验存在且角色匹配，style 为预设文本+补充的合成全文
+    const style = (p.style !== undefined ? checkField(p.style, "style", 4_000, 0) : "") || undefined;
+    const stylePreset = (p.stylePreset !== undefined ? checkField(p.stylePreset, "stylePreset", 64, 0) : "") || undefined;
+    if (stylePreset) {
+      const preset = STYLE_PRESETS.find((x) => x.id === stylePreset);
+      if (!preset) throw new ApiError(422, "bad_style_preset", "stylePreset 不是有效的风格预设（见 GET /api/stances 的 styles）");
+      if (preset.forRole !== seat.role) throw new ApiError(422, "style_preset_role", `风格预设「${preset.label}」不适用于本席角色（${seat.role}）`);
+      if (!style) throw new ApiError(422, "bad_payload", "选用风格预设时必须携带 style 合成全文（预设文本 + 持有人补充）");
+    }
     const dataScope = (p.dataScope ?? []).slice(0, 50).map((x) => {
       if (typeof x === "string") return checkField(x, "dataScope 条目", 500);
       if (!DISCLOSURE_LEVELS.includes(x.grant)) throw new ApiError(422, "bad_payload", "dataScope 授权级别 grant 必须是 read / quote / full");
@@ -436,13 +446,15 @@ export class Hub {
     seat.config = {
       stancePreset,
       stance,
+      stylePreset,
+      style,
       scope,
       dataScope,
       ready,
     };
     this.store.saveSeat(tableId, seat);
     this.sysMsg(tableId, "SEAT_JOINED", { seat, configUpdate: true });
-    this.audit(tableId, seat.seatId, "seat_config", { ready, stancePreset: p.stancePreset, ...(meta.pause ? { paused: true } : {}) });
+    this.audit(tableId, seat.seatId, "seat_config", { ready, stancePreset: p.stancePreset, stylePreset: p.stylePreset, ...(meta.pause ? { paused: true } : {}) });
     return seat;
   }
 
@@ -2269,7 +2281,8 @@ export class Hub {
 
   /** 网页持有人（user token）完成入桌设定：与 agent 通道同一入口（open 阶段可反复修改） */
   seatConfigByUser(userToken: string, tableId: string, p: {
-    stancePreset?: string; stance: string; scope?: string; dataScope?: DataScopeItem[]; ready?: boolean;
+    stancePreset?: string; stance: string; stylePreset?: string; style?: string;
+    scope?: string; dataScope?: DataScopeItem[]; ready?: boolean;
   }): SeatInfo {
     const user = this.requireUser(userToken);
     const seatId = this.store.seatOfUser(tableId, user.userId);

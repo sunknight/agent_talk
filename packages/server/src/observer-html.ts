@@ -781,7 +781,7 @@ function helpBodyHtml(){
     +'<h4>三步开一场圆桌</h4>'
     +'<ul><li><b>① 创建圆桌</b>：列表页「创建圆桌」，先选<b>桌类型</b>（评审 / 协作 / 头脑风暴 / 方案决策 / 问询，决定流程与可选角色），再选<b>我的角色</b>（自建桌 = 你以所选角色直接入席参会，角色任选——评审桌也能当评审方；选「主持人」= 主持人建桌，只定规则、传资料、邀请调度与开局；问询桌可选「问询方」= 你提问，或「主持人」= 由别人凭问询方邀请码来提问），按类型勾选开放邀请的角色，填写主题 / 目标 / 规则等；创建后凭证卡一次性展示席位 token 与各角色邀请码（自建问询桌你即问询方、不占席位，无席位 token）。</li>'
     +'<li><b>② 邀请参与方</b>：把「完整邀请」整体发给参与方，交给其 agent 即可凭邀请码自动入席（角色由邀请码定死，席位不能自封）；主持人建的问询桌另发「问询方」码，由要提问的人在本页凭码就位。</li>'
-    +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人（主持人桌为主持人）点「▶ 开始会议」；问询桌由问询方点「▶ 开始问询」。</li></ul>'
+    +'<li><b>③ 设定并开始</b>：各席位在桌详情完成入桌设定（立场 / 风格 / 讨论范围 / 数据范围 / 就绪），全员就绪后建桌人（主持人桌为主持人）点「▶ 开始会议」；问询桌由问询方点「▶ 开始问询」。</li></ul>'
     +'<h4>会议阶段</h4>'
     +'<p>阶段按桌类型走不同流程：<b>评审 / 方案决策</b>：设定 → 陈述 → 评审 → 回应 → 执行 → 表决 → 结束；<b>协作 / 头脑风暴</b>：设定 → 初稿发布 → 互审补缺 → 缺口认领 → 补齐执行 → 定稿表决 → 结束；<b>问询</b>：设定 → 问答 → 结束。结束自动生成纪要（问询桌为问答对汇总的问询纪要）；僵局时转人工介入，人工裁决可收会或恢复指定阶段；评审/协作类桌的各方回合提交会先经系统预审，需要补充时会被点名。</p>'
     +'<h4>席位角色</h4>'
@@ -794,7 +794,7 @@ function helpBodyHtml(){
     +'<li><b>观察方</b>（observer）：只读旁听，无表决权。</li></ul>'
     +'<h4>暂停与继续</h4>'
     +'<ul><li>进行中的会议可暂停：主持人 / 建桌人 / 系统管理员在桌详情「会议控制」直接暂停；其他席位可「申请暂停」，待其同意后生效（问询桌由问询方控制）；</li>'
-    +'<li>暂停期发言与阶段推进冻结：各方在「会话」输入框补充信息、在「我的席位」调整立场后勾选「重新就绪」（无需补充的席位保持就绪即可）；全员就绪后控制人点「▶ 继续会议」恢复到原阶段，系统管理员可强制继续。</li></ul>'
+    +'<li>暂停期发言与阶段推进冻结：各方在「会话」输入框补充信息、在「我的席位」调整立场与风格后勾选「重新就绪」（无需补充的席位保持就绪即可）；全员就绪后控制人点「▶ 继续会议」恢复到原阶段，系统管理员可强制继续。</li></ul>'
     +'<h4>agent 接入（安装技能 + 注册用户）</h4>'
     +'<p>把下面指令整体复制给你的 agent，它会自动完成接入：</p>'
     +'<pre class="helpbox">'+esc(agentAccessText())+'</pre>'
@@ -1533,10 +1533,10 @@ function renderCreateResult(d,topic){
     +(inq
       ?(hosted
         ?'主持人问询流程：定规则（详情页「桌设定」可随时改）→ 把「问询方」邀请码发给要提问的人（其凭码就位）、「回答方」码发给各 agent → 回答方入席设定并就绪 → 问询方在详情页点「开始问询」→ 提问 → 问完「结束问询」出问询纪要。'
-        :'问询流程：把「回答方」完整邀请发给各 agent → 其入席并完成入桌设定（立场=回答范围、数据范围，就绪）→ 你在详情页点「开始问询」→ 随时提问（可定向某回答席或广播全员作答）→ 问完点「结束问询」自动生成问询纪要（问答对汇总）。')
+        :'问询流程：把「回答方」完整邀请发给各 agent → 其入席并完成入桌设定（立场=回答范围、风格=回答倾向、数据范围，就绪）→ 你在详情页点「开始问询」→ 随时提问（可定向某回答席或广播全员作答）→ 问完点「结束问询」自动生成问询纪要（问答对汇总）。')
       :hosted
       ?'主持人流程：定规则（详情页「桌设定」可随时改）→ 传资料（详情页上传共享文档，全桌可见）→ 把邀请码发给各参与方（角色见上方码标签）→ 各方完成入桌设定 → 你在详情页点「开始会议」。开始后各方回合提交先经系统预审，需要补充时会被点名。'
-      :'进入圆桌详情完成你的入桌设定（立场/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。回合提交先经系统预审，需要补充时会被点名。')
+      :'进入圆桌详情完成你的入桌设定（立场/风格/范围/数据范围/就绪），参与方凭完整邀请入席设定后，全员就绪即可在详情页一键开始会议。回合提交先经系统预审，需要补充时会被点名。')
     +'</div>'
     +'<div class="row" style="margin-top:8px"><button id="ctBack">返回列表</button><span class="sp"></span><button id="ctEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
@@ -1638,7 +1638,7 @@ function renderJoinResult(p,r){
     +'<h3 class="csec">席位 token（只显示这一次，请立即复制）</h3>'
     +'<div class="row"><span class="invite big">'+esc(r.token)+'</span><span class="sp"></span><button id="jrTokCopy">复制凭证（含入桌信息）</button></div>'
     +'<div class="dim" style="margin-top:4px">点「复制凭证」带走完整入桌信息（服务器地址 / 圆桌 ID / token 与 .roundtable 配置写法），交给你的 agent 即可代你参会。关闭本页后无法再查看；之后可在桌详情页随时「重签凭证」。</div>'
-    +'<h3 class="csec">下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。回合提交先经系统预审，需要补充时会被点名。</div>'
+    +'<h3 class="csec">下一步</h3><div class="dim">进入圆桌详情完成入桌设定（立场/风格/范围/数据范围/就绪）；全员就绪后建桌人即可开始会议。回合提交先经系统预审，需要补充时会被点名。</div>'
     +'<div class="row" style="margin-top:8px"><button id="jrBack">返回列表</button><span class="sp"></span><button id="jrEnter" class="primary">进入圆桌</button></div>'
     +'</div>';
   app.innerHTML=h;
@@ -1675,7 +1675,7 @@ function stepsHtml(phase, tt, pause){
    表单元素 id 与原 open 分支一致（cfgPreset/cfgSup/cfgStance/cfgScope/dsWrap/dsChips/dsIn/cfgReady/cfgErr/cfgSave），绑定见 renderDetail */
 function seatCfgFormHtml(cfg, pausedMode){
   cfg=cfg||{};
-  var title=pausedMode?'暂停期调整（立场 / 范围）':(cfg.ready?'修改入桌设定':'入桌设定');
+  var title=pausedMode?'暂停期调整（立场 / 风格 / 范围）':(cfg.ready?'修改入桌设定':'入桌设定');
   var readyLabel=pausedMode
     ?'重新就绪 — 补充/调整完成后声明本席可以继续（不动设定的席位无需任何操作，保持就绪）'
     :'就绪 — 声明本席设定完成（全员就绪后建桌人可开始会议）';
@@ -1684,6 +1684,10 @@ function seatCfgFormHtml(cfg, pausedMode){
     +'<div class="row"><select id="cfgPreset"><option value="">（选择立场预设…）</option></select>'
     +'<input id="cfgSup" placeholder="立场补充说明（附加在预设文本后，可选）" style="flex:1"></div>'
     +'<textarea id="cfgStance" placeholder="立场声明全文（选预设自动填入可再改；保存必填）">'+esc(cfg.stance||'')+'</textarea></div>'
+    +'<div class="frow"><label class="t">风格（可选）</label>'
+    +'<div class="row"><select id="cfgStyle"><option value="">（不设风格 · 按默认）</option></select>'
+    +'<input id="cfgStyleSup" placeholder="风格补充说明（附加在预设文本后，可选）" style="flex:1"></div>'
+    +'<div class="hint" id="cfgStylePrev" style="margin-top:4px">风格预设决定本席 agent 思考与输出的倾向（苛刻/严谨/宽松、偏安全/偏业务/偏体验等），选择后此处展示该风格的完整说明。</div></div>'
     +'<div class="frow"><label class="t">讨论范围</label>'
     +'<input id="cfgScope" value="'+escAttr(cfg.scope||'')+'" placeholder="只讨论…／不讨论…（一句话）">'
     +'<div class="row" style="margin-top:4px">'+SCOPE_PRESETS.map(function(p){ return '<button class="preset" data-scope="'+escAttr(p)+'">'+esc(p)+'</button>'; }).join('')+'</div></div>'
@@ -1985,6 +1989,7 @@ function renderDetail(d){
       +'</div>'
       +'<div class="dim">agent: '+esc(s.agentLabel)+'</div>'
       +'<div class="kv"><span class="k">立场</span><span title="'+escAttr(cfg.stance||'')+'">'+esc((cfg.stance||'').slice(0,60)||'（未填写）')+'</span></div>'
+      +(cfg.style?'<div class="kv"><span class="k">风格</span><span title="'+escAttr(cfg.style)+'">'+esc(cfg.style.slice(0,60))+'</span></div>':'')
       +(admin?'<div class="row" style="margin-top:8px"><button class="admCred sm" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">复制配置</button> '
         +'<button class="admRepl sm danger" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">替代 agent</button></div>':'')
       +'</div>';
@@ -2034,6 +2039,7 @@ function renderDetail(d){
       } else {
         h+='<div class="section"><h3>当前设定 <span class="dim">（已就绪，开始会议前可修改）</span></h3><div class="sumcard">'
           +'<div class="kv"><span class="k">立场</span>'+esc(cfg.stance||'')+'</div>'
+          +(cfg.style?'<div class="kv"><span class="k">风格</span><span style="white-space:pre-line">'+esc(cfg.style)+'</span></div>':'')
           +'<div class="kv"><span class="k">讨论范围</span>'+esc(cfg.scope||'（未填写）')+'</div>'
           +'<div class="kv"><span class="k">数据范围</span>'+((cfg.dataScope||[]).length?cfg.dataScope.map(function(x){ var it=dsItem(x); return '<span class="chip">'+esc(it.text)+'<i class="dgl">'+esc(DS_GRANT_LABEL[it.grant])+'</i></span>'; }).join(' '):'<span class="dim">（未填写）</span>')+'</div>'
           +'</div><button id="cfgEdit">修改设定</button></div>';
@@ -2430,6 +2436,50 @@ function renderDetail(d){
       cfgPreset.onchange=function(){ rebuildStance(); view.dirtyPanel=true; };
       var supEl=document.getElementById('cfgSup'); supEl.oninput=rebuildStance;
 
+      /* 风格预设 + 预览（按本席角色过滤；选中展示该风格完整说明，保存后 agent 按此思考输出。
+         未改动风格控件时保存沿用已存 style 快照（补充文本不回填输入框，避免二次编辑丢失） */
+      var getStyleState=function(){
+        var c=mySeat.config||{};
+        return { stylePreset:c.stylePreset||'', style:c.style||'' };
+      };
+      var cfgStyle=document.getElementById('cfgStyle');
+      if(cfgStyle){
+        var styles=[], stylesLoaded=false, styleDirty=false;
+        var savedStyleCfg=mySeat.config||{};
+        var styleOf=function(id){ for(var k=0;k<styles.length;k++){ if(styles[k].id===id) return styles[k]; } return null; };
+        var composeStyle=function(){
+          var p=styleOf(cfgStyle.value), sup=document.getElementById('cfgStyleSup').value.trim();
+          if(!p) return sup;
+          return p.text+(sup?('；补充：'+sup):'');
+        };
+        var stylePrevDraw=function(){
+          var prev=document.getElementById('cfgStylePrev'); if(!prev) return;
+          if(!styleDirty&&savedStyleCfg.style){ prev.innerHTML='<b>当前风格：</b><span style="white-space:pre-line">'+esc(savedStyleCfg.style)+'</span>'; return; }
+          var p=styleOf(cfgStyle.value), sup=document.getElementById('cfgStyleSup').value.trim();
+          if(!p&&!sup){ prev.textContent='未设定风格：本席 agent 按立场与默认习惯思考输出（可选苛刻/严谨/宽松、偏安全/偏业务/偏体验等倾向）。'; return; }
+          var head=p?('<b>'+esc(p.label)+'</b> '+p.tags.map(function(tg){ return '<span class="badge">'+esc(tg)+'</span>'; }).join(' ')+'<span class="dim"> — '+esc(p.brief)+'</span>')
+            :'<b>自定义风格</b>';
+          prev.innerHTML=head+'<div class="kv" style="margin-top:4px"><span class="k">预览</span><span style="white-space:pre-line">'+esc(composeStyle())+'</span></div>';
+        };
+        api('GET','/api/stances').then(function(sd){
+          styles=(sd.styles||[]).filter(function(x){ return x.forRole===mySeat.role; });
+          stylesLoaded=true;
+          var o='<option value="">（不设风格 · 按默认）</option>';
+          styles.forEach(function(x){ o+='<option value="'+esc(x.id)+'"'+((savedStyleCfg.stylePreset===x.id)?' selected':'')+'>'+esc(x.label)+'（'+x.tags.map(esc).join('·')+'）</option>'; });
+          cfgStyle.innerHTML=o;
+          stylePrevDraw();
+        }).catch(function(){});
+        cfgStyle.onchange=function(){ styleDirty=true; view.dirtyPanel=true; stylePrevDraw(); };
+        document.getElementById('cfgStyleSup').oninput=function(){ styleDirty=true; view.dirtyPanel=true; stylePrevDraw(); };
+        stylePrevDraw();
+        getStyleState=function(){ /* 保存时取风格终值：未动过沿用快照，动了重合成 */
+          return {
+            stylePreset:(styleDirty||stylesLoaded)?(cfgStyle.value||''):(savedStyleCfg.stylePreset||''),
+            style:(styleDirty?composeStyle():(savedStyleCfg.style||''))
+          };
+        };
+      }
+
       /* 讨论范围快捷模板（点击即设定） */
       app.querySelectorAll('button[data-scope]').forEach(function(b){
         b.onclick=function(){ document.getElementById('cfgScope').value=b.getAttribute('data-scope'); view.dirtyPanel=true; };
@@ -2474,9 +2524,12 @@ function renderDetail(d){
         var errEl=document.getElementById('cfgErr');
         if(!stance){ errEl.textContent='立场声明必填'; return; }
         errEl.textContent='';
+        var styleState=getStyleState();
         api('POST','/api/tables/'+view.tableId+'/my/seat-config',{
           stancePreset:cfgPreset.value||undefined,
           stance:stance,
+          stylePreset:styleState.stylePreset||undefined,
+          style:styleState.style||undefined,
           scope:document.getElementById('cfgScope').value.trim(),
           dataScope:view.dsDraft,
           ready:document.getElementById('cfgReady').checked

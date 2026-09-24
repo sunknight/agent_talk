@@ -4,7 +4,7 @@
  * 统一响应：{ok:true,data} / {ok:false,error:{code,message}}
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { STANCE_PRESETS, TABLE_TYPES, type MsgType, type Role } from "@rt/shared";
+import { STANCE_PRESETS, STYLE_PRESETS, TABLE_TYPES, type MsgType, type Role } from "@rt/shared";
 import type { ServerSeat } from "./engine";
 import { ApiError, type Hub } from "./engine";
 import { SKILL_MD } from "./skill-template";
@@ -190,6 +190,8 @@ export function createHttpServer(hub: Hub) {
           return ok(res, { seat: hub.seatConfigByUser(bearer(req), tableId, {
             stancePreset: body.stancePreset ? String(body.stancePreset) : undefined,
             stance: String(body.stance ?? ""),
+            stylePreset: body.stylePreset ? String(body.stylePreset) : undefined,
+            style: body.style !== undefined ? String(body.style) : undefined,
             scope: body.scope !== undefined ? String(body.scope) : undefined,
             dataScope: parseDataScope(body.dataScope),
             ready: typeof body.ready === "boolean" ? body.ready : undefined,
@@ -260,7 +262,7 @@ export function createHttpServer(hub: Hub) {
         return ok(res, hub.endInquiryByUser(bearer(req), seg[2], body.reason !== undefined ? String(body.reason) : undefined));
       }
       if (path === "/api/stances" && method === "GET") {
-        return ok(res, { stances: STANCE_PRESETS });
+        return ok(res, { stances: STANCE_PRESETS, styles: STYLE_PRESETS });
       }
       // 桌类型注册表：开桌先选类型，按类型选可用角色（UI / skill 共享）
       if (path === "/api/table-types" && method === "GET") {
@@ -410,6 +412,8 @@ export function createHttpServer(hub: Hub) {
           return ok(res, { seat: hub.updateSeatConfig(tableId, seatAuth, {
             stancePreset: body.stancePreset ? String(body.stancePreset) : undefined,
             stance: String(body.stance ?? ""),
+            stylePreset: body.stylePreset ? String(body.stylePreset) : undefined,
+            style: body.style !== undefined ? String(body.style) : undefined,
             scope: body.scope !== undefined ? String(body.scope) : undefined,
             dataScope: parseDataScope(body.dataScope),
             ready: typeof body.ready === "boolean" ? body.ready : undefined,

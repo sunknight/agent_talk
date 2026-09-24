@@ -224,6 +224,8 @@ const seatConfigSchema = s({
   properties: {
     stancePreset: str(1, 64),
     stance: str(1, 8_000),
+    stylePreset: str(1, 64),
+    style: str(1, 4_000),
     scope: str(0, 4_000),
     dataScope: {
       type: "array", maxItems: 50,

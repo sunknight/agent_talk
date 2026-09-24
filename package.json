@@ -1,7 +1,7 @@
 {
   "name": "agent-talk",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Agent 圆桌会谈系统 — 多人各带自己的 agent 入桌协作/博弈，安全审批闭环",
   "workspaces": [
     "packages/*"
