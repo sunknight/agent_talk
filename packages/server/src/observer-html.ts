@@ -273,6 +273,17 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .cb-bubble.role-answerer { border-left-color:var(--ok); }
   .cb-bubble.role-asker { border-left-color:var(--acc); }
   .cb-row.mine .cb-bubble { background:#1d2b49; border-top-right-radius:3px; }
+  /* 左右侧切换按钮（席位与立场 / 圆桌示意图节点）：个人会话视图偏好，右侧高亮 */
+  .sideT { cursor:pointer; }
+  .sideT.on { color:var(--acc); border-color:var(--acc); }
+  .rt-tags .sideT { font-size:11px; padding:0 6px; }
+  /* 参与方卡片顶边色补全：回答方（问询桌）/ 问询方 */
+  .vcard.answerer { border-top-color:var(--ok); }
+  .vcard.asker { border-top-color:var(--acc); }
+  .rt-card.answerer { border-top-color:var(--ok); }
+  .rt-card.asker { border-top-color:var(--acc); }
+  .lgd .answerer { color:var(--ok); }
+  .lgd .asker { color:var(--acc); }
   .cb-who { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--dim); margin-bottom:3px; flex-wrap:wrap; }
   .cb-who .rb { font-size:11px; padding:0 6px; }
   .cb-meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--dim); margin-top:4px; }
@@ -357,7 +368,10 @@ var view = { mode:'intro', tableId:null, timer:null, lastDetailJson:'', lastDeta
   listFilter:'all', listTables:[], dirtyPanel:false, cfgEditing:false, dsDraft:[], rtExpanded:false, qaPairs:[],
   /* 会话视图与输入聚合：chatFilter 气泡筛选 / cmpType 当前输入类型 / seatOpen 折叠子区块开合（抗轮询重渲染）/
      chatAtBottom+cbPrevTop 会话滚动贴底与回位 */
-  chatFilter:'all', cmpType:'', seatOpen:{}, chatAtBottom:true, cbPrevTop:0 };
+  chatFilter:'all', cmpType:'', seatOpen:{}, chatAtBottom:true, cbPrevTop:0,
+  /* chatbox 左右侧个人偏好（服务端按用户×圆桌持久化；渲染唯一来源，轮询仅在无保存在途时同步）
+     sidesSaving：保存在途计数（乐观更新后防轮询用旧服务端值回滚） */
+  chatSides:{}, sidesSaving:0 };
 
 /* ---------- 常量映射 ---------- */
 var PHASE_LABEL = { open:'设定中', qa:'问答', statements:'提案陈述', review:'评审', response:'回应评审', execution:'执行修改', convergence:'共识表决', human_intervention:'人工介入', closed:'已结束' };
@@ -660,6 +674,68 @@ function openRequestModal(r,seats,arts){
   document.body.appendChild(m);
   document.getElementById('rqClose').onclick=closeRequestModal;
 }
+/* ---------- 评审项详情弹窗（body 级，不受轮询重渲染影响） ----------
+   rec=ReviewItemRecord（item/fromSeat/ts/artifactId/docId/responses/requests）：意见全文、回应轨迹、派生执行请求及满足版本
+   （满足版本从消息流 ARTIFACT_PUBLISHED.version.requestId(s) 溯源，t.artifacts 只带版本数不带明细） */
+function closeReviewItemModal(){ var m=document.getElementById('riModal'); if(m) m.remove(); }
+function openReviewItemModal(rec,seats,arts,docs,msgs){
+  closeReviewItemModal();
+  var st=reviewItemStatus(rec), it=rec.item||{};
+  var target='—';
+  (arts||[]).forEach(function(a){ if(rec.artifactId&&a.artifactId===rec.artifactId) target='产物：'+a.name; });
+  (docs||[]).forEach(function(dc){ if(rec.docId&&dc.docId===rec.docId) target='资料：'+dc.name; });
+  var body='<div class="row">'+roleBadge(seatRoleOf(seats,rec.fromSeat))+'<b>'+esc(seatName(seats,rec.fromSeat))+'</b>'
+    +'<span class="badge">'+esc(SEV_LABEL[it.severity]||it.severity||'')+'</span>'
+    +'<span class="dim">'+fmtTs(rec.ts)+' · '+esc(it.id||'')+'</span>'
+    +'<span class="sp"></span><span class="badge '+st.cls+'">'+esc(st.label)+'</span></div>'
+    +'<div class="kv" style="margin-top:8px"><span class="k">位置</span>'+esc(it.target||'—')+'</div>'
+    +'<div class="kv"><span class="k">对象</span>'+esc(target)+'</div>'
+    +'<h3 style="margin:14px 0 4px">评审意见</h3><div class="sumcard" style="white-space:pre-wrap">'+esc(it.comment||'')+'</div>';
+  if((rec.responses||[]).length){
+    body+='<h3 style="margin:14px 0 4px">回应轨迹（'+rec.responses.length+' 次）</h3>';
+    rec.responses.forEach(function(rp){
+      var rc=rp.decision==='accept'?'ok':(rp.decision==='reject'?'err':'warn');
+      body+='<div class="sumcard"><div class="row"><span class="badge '+rc+'">'+esc(RESP_LABEL[rp.decision]||rp.decision)+'</span>'
+        +((rp.action&&rp.action.executeBy)?('<span class="dim">'+(rp.action.executeBy==='self'?'自行修改':'委托意见提出方修改')+'</span>'):'')
+        +'</div>'
+        +(rp.reason?('<div style="white-space:pre-wrap;margin-top:4px">'+esc(rp.reason)+'</div>'):'')
+        +'</div>';
+    });
+  } else {
+    body+='<div class="hint" style="margin-top:10px">尚无回应：等待回应方逐条处置（接纳 / 拒绝 / 暂缓 / 转人工）。</div>';
+  }
+  if((rec.requests||[]).length){
+    body+='<h3 style="margin:14px 0 4px">派生执行请求（'+rec.requests.length+' 个）</h3>';
+    rec.requests.forEach(function(r){
+      var rs2=r.status||'pending';
+      var rcls=rs2==='executed'?'ok':(rs2==='rejected'?'err':((rs2==='pending'||rs2==='human')?'warn':''));
+      var selfExe=r.createdBy===(r.req&&r.req.toSeat);
+      var rid=(r.req&&r.req.requestId)||'';
+      var vers=[];
+      (msgs||[]).forEach(function(m){
+        if(m.type!=='ARTIFACT_PUBLISHED') return;
+        var v=m.payload&&m.payload.version;
+        if(v&&(v.requestId===rid||((v.requestIds||[]).indexOf(rid)>=0))) vers.push((m.payload.name||'?')+' v'+v.v);
+      });
+      body+='<div class="sumcard"><div class="row"><span class="mt mt-req">执行请求</span>'
+        +'<b>'+esc(clipStr((r.req&&r.req.title)||'',48))+'</b><span class="sp"></span><span class="badge '+rcls+'">'+esc(REQ_ST_LABEL[rs2]||rs2)+'</span></div>'
+        +'<div class="dim" style="margin-top:4px">'+(selfExe?'认领自办':(esc(seatName(seats,r.createdBy))+' 委托 '+esc(seatName(seats,r.req&&r.req.toSeat))))+' · '+fmtTs(r.createdAt)
+        +(vers.length?(' · 满足版本：'+esc(vers.join('、'))):'')+'</div>'
+        +((r.response&&(r.response.reason||r.response.counterDetail))?'<div class="dim">'+esc(clipStr(r.response.reason||r.response.counterDetail,100))+'</div>':'')
+        +'</div>';
+    });
+  } else {
+    body+='<div class="hint" style="margin-top:10px">无派生执行请求：仅接纳（accept）的意见会派生修改/澄清委托；拒绝、暂缓与转人工的意见不产生。</div>';
+  }
+  var m=document.createElement('div');
+  m.className='dmodal'; m.id='riModal';
+  m.innerHTML='<div class="dbox" style="width:min(760px,94vw)">'
+    +'<div class="dhead"><span class="mt mt-rev">评审项</span><b>'+esc(clipStr(it.comment||'（无意见）',30))+'</b><span style="flex:1"></span><button id="riClose">关闭</button></div>'
+    +'<div class="dbody">'+body+'</div></div>';
+  m.onclick=function(e){ if(e.target===m) closeReviewItemModal(); };
+  document.body.appendChild(m);
+  document.getElementById('riClose').onclick=closeReviewItemModal;
+}
 /* ---------- 问询问答全文弹窗（body 级，不受轮询重渲染影响） ----------
    qa={msg,replies:[…]}：打开时刻快照——完整问题与全部回答（列表卡内是截断文本） */
 function closeQaModal(){ var m=document.getElementById('qaModal'); if(m) m.remove(); }
@@ -808,6 +884,28 @@ var REQD_LABEL={accept:'接纳',reject:'拒绝',counter:'反提案',escalate_hum
 /* 执行请求：状态（RequestStatus）与意图（RequestIntent）中文标签 */
 var REQ_ST_LABEL={pending:'待处置',accepted:'已接纳',executed:'已执行',rejected:'已拒绝',countered:'已反提案',human:'转人工'};
 var REQ_INTENT_LABEL={modify_artifact:'修改产物',clarify:'澄清说明'};
+/* 评审项：回应决定（ResponseItem.decision）中文标签 */
+var RESP_LABEL={accept:'接纳',reject:'拒绝',defer:'暂缓跟进',human:'转人工'};
+/** 评审项全生命周期状态：{cls 徽章色, label 中文}。
+ *  待回应=无回应；最后回应 reject（或最后派生请求 rejected）=已拒绝；defer=暂缓；human=待人工；
+ *  accept 后看派生请求：pending=已接纳·执行中、countered=反提案待回应、executed=通过——
+ *  恰一次回应+至多一个请求且无反提案/转人工史=直接通过，否则=交互后通过（多方交互的判定依据） */
+function reviewItemStatus(rec){
+  var rs=rec.responses||[], reqs=rec.requests||[];
+  var last=rs[rs.length-1];
+  if(!last) return {cls:'warn',label:'待回应'};
+  if(last.decision==='reject') return {cls:'err',label:'已拒绝'};
+  if(last.decision==='defer') return {cls:'',label:'暂缓跟进'};
+  if(last.decision==='human') return {cls:'warn',label:'待人工'};
+  if(!reqs.length) return {cls:'ok',label:'直接通过'};
+  var lastReq=reqs[reqs.length-1];
+  if(lastReq.status==='rejected') return {cls:'err',label:'已拒绝'};
+  if(lastReq.status==='human') return {cls:'warn',label:'待人工'};
+  if(lastReq.status==='countered') return {cls:'warn',label:'反提案待回应'};
+  if(lastReq.status==='pending'||lastReq.status==='accepted') return {cls:'warn',label:'已接纳·执行中'};
+  var interacted=rs.length>1||reqs.length>1||reqs.some(function(r){ return r.status==='countered'||r.status==='human'; });
+  return {cls:'ok',label:interacted?'交互后通过':'直接通过'};
+}
 /** 席位最后一条消息 → 摘要：label 短版（环上节点用），full 长版（title/展开清单用） */
 function lastDelivInfo(m){
   if(!m) return {label:'',full:''};
@@ -826,14 +924,17 @@ function lastDelivInfo(m){
   if(m.type==='SUPPLEMENT') return {label:'补充：'+clipStr(p.text,8), full:'预审点名补充：'+(p.text||'')};
   return {label:MT_LABEL[m.type]||m.type, full:MT_LABEL[m.type]||m.type};
 }
-function roundDiagramHtml(d,seats,turn){
-  if(!seats.length) return '';
+function roundDiagramHtml(d,seats,turn,isAsker){
+  /* 问询桌：问询方以伪席位入环（不占席位；自建问询桌 ownerSeat='asker' 会自然带上建桌人★） */
+  var parts=seats.slice();
+  if(d.asker) parts.unshift({seatId:'asker',name:d.asker.name,role:'asker',config:null,agentLabel:'',joinedAt:0});
+  if(!parts.length) return '';
   var t=d.table;
   var lastOf={};
   (d.messages||[]).forEach(function(m){ if(m.fromSeat&&m.fromSeat!=='server') lastOf[m.fromSeat]=m; });
   var turnId=turn?turn.seatId:null;
   /* 环上优先级：发言权持有者 > 建桌人 > 最近发言（新→旧）> 从未发言（入席序） */
-  var sorted=seats.slice().sort(function(a,b){
+  var sorted=parts.slice().sort(function(a,b){
     var ka=(a.seatId===turnId)?0:((a.seatId===t.ownerSeat)?1:2);
     var kb=(b.seatId===turnId)?0:((b.seatId===t.ownerSeat)?1:2);
     if(ka!==kb) return ka-kb;
@@ -866,10 +967,12 @@ function roundDiagramHtml(d,seats,turn){
   var CY=STAGE_H/2;
   var h='<div class="card"><div class="shead"><b>圆桌示意图</b>'
     +'<span class="dim">'+(folded
-      ?('共 '+seats.length+' 席 · 九宫格方位优先显示发言权/建桌人/最近发言的前 '+(RING_MAX-1)+' 席')
-      :(seats.length+' 席全员就座'))
+      ?('共 '+parts.length+' 方 · 九宫格方位优先显示发言权/建桌人/最近发言的前 '+(RING_MAX-1)+' 方')
+      :(parts.length+' 方全员就座'))
     +'</span><span class="sp"></span>'
-    +'<span class="dim lgd"><i class="proposer">●</i>提案方<i class="reviewer">●</i>评审方<i class="collaborator">●</i>协作者<i class="host">●</i>主持人<i class="observer">●</i>观察方<span>· 思考进度 = 当前发言权</span></span></div>'
+    +'<span class="dim lgd"><i class="proposer">●</i>提案方<i class="reviewer">●</i>评审方<i class="collaborator">●</i>协作者<i class="host">●</i>主持人<i class="observer">●</i>观察方'
+    +(ttOf(t.tableType).flow==='inquiry'?'<i class="answerer">●</i>回答方<i class="asker">●</i>问询方':'')
+    +'<span>· 思考进度 = 当前发言权 · 节点「左/右」= 会话区归属</span></span></div>'
     +'<div class="rt-wrap"><div class="rt-stage" style="height:'+STAGE_H+'px">'
     +'<div class="rt-ell"></div>'
     +'<div class="rt-center"><div class="rt-topic">'+esc(clipStr(t.topic,18))+'</div>'
@@ -887,13 +990,14 @@ function roundDiagramHtml(d,seats,turn){
     var g=GRID[gslots[idx]]||[0,0];
     var x=CX+g[0]*RX, y=CY+g[1]*RY;
     var lm=lastOf[s.seatId], di=lastDelivInfo(lm);
-    var dl=lm?di.label:(t.phase==='open'?(((s.config&&s.config.ready)?'已就绪':'未就绪')):'尚未发言');
+    var dl=lm?di.label:(s.role==='asker'?'尚未提问':(t.phase==='open'?(((s.config&&s.config.ready)?'已就绪':'未就绪')):'尚未发言'));
     var think=s.seatId===turnId;
+    var byline=s.role==='asker'?'网页提问':('agent: '+s.agentLabel);
     h+='<div class="rt-node'+(think?' think':'')+'" style="left:'+Math.round(x)+'px;top:'+Math.round(y)+'px"'
-      +' title="'+escAttr(s.name+'（'+(ROLE_LABEL[s.role]||s.role)+' · agent: '+s.agentLabel+'）'+(lm?('｜最后交付：'+di.full+'（'+fmtTs(lm.ts)+'）'):'（尚未发言）'))+'">'
+      +' title="'+escAttr(s.name+'（'+(ROLE_LABEL[s.role]||s.role)+' · '+byline+'）'+(lm?('｜最后交付：'+di.full+'（'+fmtTs(lm.ts)+'）'):(s.role==='asker'?'（尚未提问）':'（尚未发言）')))+'">'
       +'<div class="rt-card '+esc(s.role)+'">'
       +'<div class="rt-nm">'+esc(s.name)+(s.seatId===t.ownerSeat?' <span class="rt-owner" title="建桌人">★</span>':'')+'</div>'
-      +'<div class="rt-tags">'+roleBadge(s.role)+(think?'<span class="rt-think">● '+turnStageLabel(t.turnProgress)+'</span>':'')+'</div>'
+      +'<div class="rt-tags">'+roleBadge(s.role)+(think?'<span class="rt-think">● '+turnStageLabel(t.turnProgress)+'</span>':'')+sideToggleHtml(s.seatId,d,isAsker)+'</div>'
       +'<div class="rt-dl">'+esc(dl)+'</div>'
       +'</div></div>';
   });
@@ -908,10 +1012,10 @@ function roundDiagramHtml(d,seats,turn){
     h+='<div class="rt-rest">';
     hidden.forEach(function(s){
       var lm=lastOf[s.seatId], di=lastDelivInfo(lm);
-      var dl=lm?(di.label+' · '+fmtTs(lm.ts)):(t.phase==='open'?(((s.config&&s.config.ready)?'已就绪':'未就绪')):'尚未发言');
+      var dl=lm?(di.label+' · '+fmtTs(lm.ts)):(s.role==='asker'?'尚未提问':(t.phase==='open'?(((s.config&&s.config.ready)?'已就绪':'未就绪')):'尚未发言'));
       h+='<div class="row" style="margin:4px 0"><b>'+esc(s.name)+'</b>'+roleBadge(s.role)
         +(s.seatId===t.ownerSeat?'<span class="badge">建桌人</span>':'')
-        +'<span class="dim">'+esc(dl)+'</span></div>';
+        +'<span class="dim">'+esc(dl)+'</span>'+sideToggleHtml(s.seatId,d,isAsker)+'</div>';
     });
     h+='<div class="row" style="margin-top:6px"><button id="rtFold" class="fbtn on">收起其余席位</button></div></div>';
   }
@@ -1644,15 +1748,27 @@ function rerenderDetail(){
 }
 
 /* ---------- 会话视图（chatbox）+ 输入聚合（composer） ----------
-   气泡归属：fromSeat=本席（或 isAsker 的 asker）→ 右侧；server → 居中系统；其余 → 左侧带席位名/角色色。
+   气泡侧别：个人偏好 view.chatSides[fromSeat] 显式覆盖优先；默认 fromSeat=本席（或 isAsker 的 asker）→ 右侧，
+   server → 居中系统，其余 → 左侧带席位名/角色色。偏好入口在「席位与立场」「圆桌示意图」的 左/右 切换按钮。
    composer：按身份与阶段提供 代答/提问/公开补充/私有指令/人工指令 类型组，芯片切换只改 display（不重渲染，草稿保留）。 */
+function chatSideOf(fromSeat,d,isAsker){
+  var s=view.chatSides[fromSeat];
+  if(s==='L'||s==='R') return s;
+  return (fromSeat===d.mySeatId||(isAsker&&fromSeat==='asker'))?'R':'L';
+}
+/** 左右侧切换按钮（席位与立场 / 圆桌示意图共用）：显示当前侧，点击切换并保存（个人偏好，服务端持久化） */
+function sideToggleHtml(sid,d,isAsker){
+  var cur=chatSideOf(sid,d,isAsker);
+  return '<button class="sideT sm'+(cur==='R'?' on':'')+'" data-sid="'+escAttr(sid)+'" data-cur="'+cur
+    +'" title="该方在会话区的左右侧（个人设置，仅自己可见）：点击切换">'+(cur==='R'?'右侧':'左侧')+'⇄</button>';
+}
 function chatboxCardHtml(d,seats,mySeat,isAsker){
   var t=d.table, stage=stageOf(t,seats), turn=t.activeTurn;
   var chips='';
   CHAT_VIEWS.forEach(function(v){
     chips+='<button class="fbtn'+(((view.chatFilter||'all')===v[0])?' on':'')+'" data-cf="'+v[0]+'">'+v[1]+'</button>';
   });
-  var h='<div class="card" id="chatCard"><div class="shead"><b>会话</b><span class="dim">各方发言与系统提示 · 我方右侧 / 其他方左侧 / 系统居中</span><span class="sp"></span>'
+  var h='<div class="card" id="chatCard"><div class="shead"><b>会话</b><span class="dim">各方发言与系统提示 · 左右侧可在席位与立场 / 圆桌示意图中调整</span><span class="sp"></span>'
     +'<div class="tbar" style="margin:0">'+chips+'</div></div><div class="cb-list" id="cbList">';
   var shown=0;
   (d.messages||[]).forEach(function(m){
@@ -1670,11 +1786,12 @@ function chatboxCardHtml(d,seats,mySeat,isAsker){
       return;
     }
     var mine=(m.fromSeat===d.mySeatId)||(isAsker&&m.fromSeat==='asker');
+    var side=chatSideOf(m.fromSeat,d,isAsker);
     var role=mine?(mySeat?mySeat.role:'asker'):seatRoleOf(seats,m.fromSeat);
     var toMe=(m.type==='HUMAN_INPUT'&&p.toSeat===d.mySeatId&&!mine);
     var proxied=(m.flags&&m.flags.indexOf&&m.flags.indexOf('human_proxied')>=0);
     var inject=(m.flags&&m.flags.indexOf&&m.flags.indexOf('injection_suspect')>=0);
-    h+='<div class="cb-row '+(mine?'mine':'other')+'">'
+    h+='<div class="cb-row '+(side==='R'?'mine':'other')+'">'
       +'<div class="cb-bubble role-'+esc(role||'observer')+'">'
       +'<div class="cb-who">'+(mine?'<b>我</b>':'<b>'+esc(seatName(seats,m.fromSeat))+'</b>')+roleBadge(role)
       +'<span class="mt '+(MT_CLS[m.type]||'')+'">'+esc(MT_LABEL[m.type]||m.type)+'</span>'
@@ -1830,10 +1947,22 @@ function renderDetail(d){
   /* 会话视图 chatbox（气泡流 + 输入聚合 composer）：置于席位与立场上方 */
   h+=chatboxCardHtml(d,seats,mySeat,isAsker);
 
-  /* 席位与立场（原「各方观点」精简：最后交付交给会话视图与圆桌示意图，保留立场/就绪/管理员席位操作） */
-  h+='<div class="card"><div class="shead"><b>席位与立场</b><span class="dim">每席立场声明与就绪状态</span><span class="sp"></span>'
-    +(inqFlow?'<span class="rb asker">问询方 · '+esc(view.userName||'')+'</span>':'')
-    +'<span class="dim">'+seats.length+' 席就座</span></div><div class="vcards">';
+  /* 席位与立场（原「各方观点」精简：最后交付交给会话视图与圆桌示意图，保留立场/就绪/管理员席位操作；
+     问询桌补问询方卡片（真实姓名，来自服务端），各卡带 左/右 切换 = chatbox 个人左右侧偏好入口） */
+  h+='<div class="card"><div class="shead"><b>席位与立场</b><span class="dim">每席立场声明与就绪状态 · 「左/右」切换会话区气泡归属</span><span class="sp"></span>'
+    +'<span class="dim">'+seats.length+' 席就座'+(d.asker?'+ 问询方':'')+'</span></div><div class="vcards">';
+  if(d.asker){
+    h+='<div class="vcard asker">'
+      +'<div class="row">'+roleBadge('asker')+'<b>'+esc(d.asker.name)+'</b>'
+      +(isAsker?'<span class="badge">我</span>':'')
+      +(t.ownerSeat==='asker'?'<span class="badge">建桌人</span>':'')
+      +'<span class="sp"></span>'
+      +'<span class="badge ok">已就位</span>'
+      +sideToggleHtml('asker',d,isAsker)
+      +'</div>'
+      +'<div class="dim">不占席位 · 在会话区提问（可定向/广播），回答方在各自声明范围内作答</div>'
+      +'</div>';
+  }
   seats.forEach(function(s){
     var cfg=s.config||{};
     h+='<div class="vcard '+esc(s.role)+'">'
@@ -1842,6 +1971,7 @@ function renderDetail(d){
       +'<span class="sp"></span>'
       +'<span class="badge '+(s.status==='active'?'ok':'warn')+'">'+esc(s.status)+'</span>'
       +(s.role==='host'?'<span class="badge">豁免就绪</span>':'<span class="badge '+(cfg.ready?'ok':'warn')+'">'+(cfg.ready?'已就绪':'未就绪')+'</span>')
+      +sideToggleHtml(s.seatId,d,isAsker)
       +'</div>'
       +'<div class="dim">agent: '+esc(s.agentLabel)+'</div>'
       +'<div class="kv"><span class="k">立场</span><span title="'+escAttr(cfg.stance||'')+'">'+esc((cfg.stance||'').slice(0,60)||'（未填写）')+'</span></div>'
@@ -1859,8 +1989,8 @@ function renderDetail(d){
   h+='</div>';
   /* ==== 右栏（与左栏等宽）：圆桌示意图 + 我的操作与交付 ==== */
   h+='<div class="dcol dside">';
-  /* 圆桌示意图（右栏顶部）：席位环绕 + 最后交付摘要 + 发言权思考中标记（>8 席折叠） */
-  h+=roundDiagramHtml(d,seats,turn);
+  /* 圆桌示意图（右栏顶部）：席位环绕（问询桌含问询方节点）+ 最后交付摘要 + 发言权思考中标记（>8 方折叠） */
+  h+=roundDiagramHtml(d,seats,turn,isAsker);
 
   /* ---- 我的席位面板：按阶段/状态条件渲染 ---- */
   if(mySeat){
@@ -2092,6 +2222,36 @@ function renderDetail(d){
     h+='</div>';
   }
 
+  /* 评审项（全宽通栏，执行请求面板上方：评审项是上游意见单位，执行请求是 accept 派生的下游工单）。
+     每条意见 → 回应 → 派生执行 → 最终结局（直接通过/交互后通过/已拒绝…），点击弹详情。
+     问询桌无评审流程、open 设定阶段尚无意见，均不渲染 */
+  var rits=d.reviewItems||[];
+  if(ttOf(t.tableType).flow!=='inquiry'&&t.phase!=='open'&&rits.length){
+    var rdone=0;
+    rits.forEach(function(rec){ var st=reviewItemStatus(rec); if(st.cls==='ok'||st.cls==='err') rdone++; });
+    h+='<div class="card"><div class="shead"><b>评审项</b><span class="dim">全部评审意见及各自结局：直接通过 = 一轮接纳并执行完成；交互后通过 = 经多轮回应/反提案/转人工后通过 · 点击卡片看详情</span><span class="sp"></span><span class="dim">'+rdone+'/'+rits.length+' 已结</span></div><div class="cards">';
+    rits.forEach(function(rec,ri){
+      var st=reviewItemStatus(rec), it=rec.item||{};
+      var target='';
+      (t.artifacts||[]).forEach(function(a){ if(rec.artifactId&&a.artifactId===rec.artifactId) target='产物：'+clipStr(a.name,16); });
+      (d.documents||[]).forEach(function(dc){ if(rec.docId&&dc.docId===rec.docId) target='资料：'+clipStr(dc.name,16); });
+      var rs=rec.responses||[], last=rs[rs.length-1];
+      var disp=last
+        ?'<div class="dim">处置：'+esc(RESP_LABEL[last.decision]||last.decision)+(last.reason?(' — '+esc(clipStr(last.reason,60))):'')+'</div>'
+        :'<div class="dim">处置：待回应</div>';
+      var reqs=rec.requests||[], lr=reqs[reqs.length-1];
+      var exe=lr
+        ?'<div class="dim">执行：'+((lr.createdBy===(lr.req&&lr.req.toSeat))?'认领自办':('委托 '+esc(seatName(seats,lr.req&&lr.req.toSeat))))+' · '+esc(REQ_ST_LABEL[lr.status]||lr.status)+(reqs.length>1?('（第 '+reqs.length+' 次派生）'):'')+'</div>'
+        :'';
+      h+='<div class="rcard '+st.cls+'" data-vi="'+ri+'" title="点击查看评审项详情">'
+        +'<div class="row"><span class="badge">'+esc(SEV_LABEL[it.severity]||it.severity||'')+'</span><b>'+esc(clipStr(it.comment,36))+'</b><span class="sp"></span><span class="badge '+st.cls+'">'+esc(st.label)+'</span></div>'
+        +'<div class="dim">'+esc(seatName(seats,rec.fromSeat))+' 提出 · '+fmtTs(rec.ts)+(target?(' · '+esc(target)):'')+'</div>'
+        +disp+exe
+        +'</div>';
+    });
+    h+='</div></div>';
+  }
+
   /* 执行请求（全宽通栏，会议纪要上方；同席=认领自办，跨席=委托他席，点击弹详情）。
      设定阶段隐藏（尚无请求）；问询桌流程上不产生执行请求，恒不渲染 */
   if(ttOf(t.tableType).flow!=='inquiry'&&t.phase!=='open'){
@@ -2170,6 +2330,15 @@ function renderDetail(d){
       var ri=parseInt(el.getAttribute('data-ri'),10);
       var reqs=(view.lastDetailData&&view.lastDetailData.requests)||[];
       if(reqs[ri]) openRequestModal(reqs[ri],seats,(t.artifacts||[]));
+    };
+  });
+  /* ---- 绑定：评审项卡片 → 详情弹窗（纯查看，不触发草稿保护） ---- */
+  app.querySelectorAll('.rcard[data-vi]').forEach(function(el){
+    el.onclick=function(){
+      var vi=parseInt(el.getAttribute('data-vi'),10);
+      var dd=view.lastDetailData||{};
+      var rits=dd.reviewItems||[];
+      if(rits[vi]) openReviewItemModal(rits[vi],seats,(t.artifacts||[]),(dd.documents||[]),(dd.messages||[]));
     };
   });
   /* ---- 绑定：问答卡 → 完整问答弹窗（纯查看，不触发草稿保护） ---- */
@@ -2458,6 +2627,33 @@ function renderDetail(d){
     };
   });
 
+  /* ---- 绑定：左右侧切换（席位与立场 / 圆桌示意图 → chatbox 气泡归属；个人偏好，乐观更新 + 服务端保存） ---- */
+  app.querySelectorAll('button.sideT').forEach(function(b){
+    b.onclick=function(){
+      var sid=b.getAttribute('data-sid');
+      var next=b.getAttribute('data-cur')==='L'?'R':'L';
+      var prev=view.chatSides[sid];
+      var tid=view.tableId;
+      view.chatSides[sid]=next;
+      rerenderDetail();
+      view.sidesSaving++;
+      api('POST','/api/tables/'+tid+'/my/chat-sides',{chatSides:view.chatSides})
+        .then(function(r){
+          view.sidesSaving--;
+          if(view.tableId!==tid) return; // 已切到别的桌：丢弃响应
+          view.chatSides=(r&&r.chatSides)||view.chatSides;
+          rerenderDetail();
+        })
+        .catch(function(e){
+          view.sidesSaving--;
+          if(view.tableId!==tid) return;
+          if(prev===undefined) delete view.chatSides[sid]; else view.chatSides[sid]=prev;
+          rerenderDetail();
+          toast('左右侧保存失败：'+e.message);
+        });
+    };
+  });
+
   /* ---- 绑定：公开补充（HUMAN_INPUT） ---- */
   var myInstrSend=document.getElementById('myInstrSend');
   if(myInstrSend) myInstrSend.onclick=function(){
@@ -2603,6 +2799,8 @@ function renderDetail(d){
 
 function loadDetail(){
   return api('GET','/api/observer/tables/'+view.tableId).then(function(d){
+    // 左右侧偏好：以本地为准的服务端同步——保存在途（乐观更新领先服务端）时不回灌，防轮询回滚
+    if(!view.sidesSaving) view.chatSides=(d.chatSides||{});
     // activeTurn.deadline 随时间恒变，比较时归零
     var j=JSON.stringify(d,function(k,v){ return k==='deadline'?0:v; });
     view.lastDetailData=d;
@@ -2619,6 +2817,7 @@ function openTable(id){
   view.mode='detail'; view.tableId=id; view.lastDetailJson=''; view.lastDetailData=null;
   view.dirtyPanel=false; view.cfgEditing=false; view.rtExpanded=false;
   view.chatFilter='all'; view.cmpType=''; view.seatOpen={}; view.chatAtBottom=true; view.cbPrevTop=0;
+  view.chatSides={}; view.sidesSaving=0;
   clearInterval(view.timer);
   var want='#/table/'+id;
   if(location.hash!==want) location.hash=want; // 详情页 URL（刷新/分享/后退可用）；先定好 view 再写 hash，hashchange→syncRoute 幂等不重入

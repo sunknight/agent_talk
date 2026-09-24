@@ -172,6 +172,10 @@ export function createHttpServer(hub: Hub) {
         if (seg[4] === "owner-directive" && !seg[5]) {
           return ok(res, hub.ownerDirectiveByUser(bearer(req), tableId, { text: String(body.text ?? "") }));
         }
+        // 保存会话视图左右侧偏好（个人视图，权限同详情可见性：席位/问询方/systemadmin）
+        if (seg[4] === "chat-sides" && !seg[5]) {
+          return ok(res, { chatSides: hub.setChatSidesByUser(bearer(req), tableId, body.chatSides) });
+        }
         if (seg[4] === "seat-config" && !seg[5]) {
           return ok(res, { seat: hub.seatConfigByUser(bearer(req), tableId, {
             stancePreset: body.stancePreset ? String(body.stancePreset) : undefined,

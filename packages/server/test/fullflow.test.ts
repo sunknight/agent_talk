@@ -249,6 +249,24 @@ describe("评审+协作全流程（M1-6 验收）", () => {
     expect(info.data.phase).toBe("convergence");
   });
 
+  it("review-items 挂接派生执行请求：accept 回链 executed / defer 无请求（任务 0036）", async () => {
+    const r = await call("GET", `/api/tables/${tableId}/review-items`, { token: seatA });
+    expect(r.ok).toBe(true);
+    const items = r.data.items;
+    expect(items.length).toBe(3);
+    const b1 = items.find((x: { item: { id: string } }) => x.item.id === "b1");
+    expect(b1.requests.length).toBe(1);
+    expect(b1.requests[0].req.sourceReviewItemId).toBe("b1");
+    expect(b1.requests[0].req.toSeat).toBe(seatIdB);
+    expect(b1.requests[0].status).toBe("executed");
+    const b2 = items.find((x: { item: { id: string } }) => x.item.id === "b2");
+    expect(b2.requests[0].req.toSeat).toBe(seatIdA); // executeBy=self → 提案人自办
+    expect(b2.requests[0].status).toBe("executed");
+    const c1 = items.find((x: { item: { id: string } }) => x.item.id === "c1");
+    expect(c1.requests.length).toBe(0); // defer 不派生执行请求
+    expect(c1.responses.length).toBe(1);
+  });
+
   it("全员表决 pass → 共识、纪要、closed；纪要含立场/跟进/产物", async () => {
     const early = await call("POST", `/api/tables/${tableId}/messages`, { token: seatC, body: { type: "CONSENSUS_VOTE", payload: { decision: "pass" } } });
     expect(early.status).toBe(409);

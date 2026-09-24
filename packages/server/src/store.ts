@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS login_links (
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);
 CREATE TABLE IF NOT EXISTS user_tokens (
   token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS user_table_prefs (
+  user_id TEXT NOT NULL, table_id TEXT NOT NULL, chat_sides TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (user_id, table_id));
 `;
 
 /** node:sqlite 行类型（.get/.all 返回的原样记录） */
@@ -136,6 +139,10 @@ export class Store extends EventEmitter {
       webTokenInsert: this.db.prepare("INSERT INTO user_tokens (token_hash, user_id, created_at) VALUES (?, ?, ?)"),
       webTokenUserByHash: this.db.prepare("SELECT u.* FROM user_tokens t JOIN users u ON u.user_id = t.user_id WHERE t.token_hash = ?"),
       webTokenDeleteOfUser: this.db.prepare("DELETE FROM user_tokens WHERE user_id = ?"),
+
+      prefChatSidesGet: this.db.prepare("SELECT chat_sides FROM user_table_prefs WHERE user_id = ? AND table_id = ?"),
+      prefChatSidesSet: this.db.prepare("INSERT OR REPLACE INTO user_table_prefs (user_id, table_id, chat_sides) VALUES (?, ?, ?)"),
+      prefDeleteOfTable: this.db.prepare("DELETE FROM user_table_prefs WHERE table_id = ?"),
 
       tableUpsert: this.db.prepare(`INSERT OR REPLACE INTO tables VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       tableGet: this.db.prepare("SELECT * FROM tables WHERE table_id = ?"),
@@ -391,6 +398,23 @@ export class Store extends EventEmitter {
     return (this.st.ownersByUser.all(userId) as Row[]).map((r) => ({ tableId: String(r.table_id), seatId: String(r.seat_id) }));
   }
 
+  // ---------- user_table_prefs（观察端个人视图偏好：chatbox 左右侧） ----------
+  /** 某用户在某桌的左右侧覆盖表 { seatId|'asker': 'L'|'R' }；坏数据容错回空（个人视图偏好不拖垮详情页） */
+  getChatSides(tableId: string, userId: string): Record<string, string> {
+    const r = this.st.prefChatSidesGet.get(userId, tableId) as Row | undefined;
+    if (!r) return {};
+    try {
+      const m = JSON.parse(String(r.chat_sides)) as Record<string, unknown>;
+      if (typeof m !== "object" || m === null || Array.isArray(m)) return {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(m)) if (v === "L" || v === "R") out[k] = v;
+      return out;
+    } catch { return {}; }
+  }
+  setChatSides(tableId: string, userId: string, sides: Record<string, string>) {
+    this.st.prefChatSidesSet.run(userId, tableId, J(sides));
+  }
+
   /** 删除圆桌：连带清理全部关联数据（blob 内容寻址不可变，不随删；GC 见维护项） */
   deleteTable(tableId: string) {
     // 单事务：中途失败整体回滚，不留半删的脏关联数据
@@ -408,6 +432,7 @@ export class Store extends EventEmitter {
       this.db.prepare("DELETE FROM documents WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM directives WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM pause_requests WHERE table_id = ?").run(tableId);
+      this.st.prefDeleteOfTable.run(tableId);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");

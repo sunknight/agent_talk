@@ -1577,7 +1577,7 @@ export class Hub {
     }
   }
 
-  /** 汇总桌内全部评审条目（含提案人全部回应） */
+  /** 汇总桌内全部评审条目（含提案人全部回应 + accept 派生的执行请求回链） */
   collectReviewItems(tableId: string): ReviewItemRecord[] {
     const byId = new Map<string, ReviewItemRecord>();
     const order: ReviewItemRecord[] = [];
@@ -1586,7 +1586,7 @@ export class Hub {
         const pl = m.payload as ReviewCommentPayload;
         for (const item of pl.items) {
           if (byId.has(item.id)) continue;
-          const rec: ReviewItemRecord = { item, fromSeat: m.fromSeat, msgId: m.msgId, ts: m.ts, artifactId: pl.artifactId, docId: pl.docId, responses: [] };
+          const rec: ReviewItemRecord = { item, fromSeat: m.fromSeat, msgId: m.msgId, ts: m.ts, artifactId: pl.artifactId, docId: pl.docId, responses: [], requests: [] };
           byId.set(item.id, rec);
           order.push(rec);
         }
@@ -1597,6 +1597,11 @@ export class Hub {
       for (const it of (m.payload as ResponsePayload).items) {
         byId.get(it.reviewItemId)?.responses.push(it);
       }
+    }
+    // 派生执行请求回链：sourceReviewItemId 命中即挂（store 已按创建时间序返回）
+    for (const r of this.store.getRequests(tableId)) {
+      const rid = r.req.sourceReviewItemId;
+      if (rid) byId.get(rid)?.requests.push(r);
     }
     return order;
   }
@@ -2136,8 +2141,43 @@ export class Hub {
       mySeatId: userId ? this.activeSeatOfUser(tableId, userId) : null,
       /** 问询桌：当前用户是否问询方（建桌人，无席位）——详情页提问区/结束按钮的显示依据 */
       isAsker: userId ? isAsker : false,
+      /** 问询桌已就位的问询方真名（席位与立场/圆桌示意图的问询方卡片来源；非问询桌为 null） */
+      asker: this.askerViewOf(tableId),
+      /** 当前查看用户的 chatbox 左右侧覆盖表 { seatId|'asker': 'L'|'R' }（服务端持久化，跨设备一致） */
+      chatSides: userId ? this.store.getChatSides(tableId, userId) : {},
       pauseRequests: this.pendingPauseViews(tableId),
     };
+  }
+
+  /** 问询方视图信息：问询桌且已凭码就位/自建时给出真实姓名（问询方不占席位，名字存 seat_owners→users） */
+  private askerViewOf(tableId: string): { seatId: string; name: string } | null {
+    const meta = this.requireTable(tableId);
+    if (tableTypeOf(meta.tableType).id !== "inquiry") return null;
+    const askerUserId = this.store.seatOwnerOf(tableId, ASKER_SEAT);
+    if (!askerUserId) return null;
+    const name = this.store.getUser(askerUserId)?.name ?? "问询方";
+    return { seatId: ASKER_SEAT, name };
+  }
+
+  /** 观察端个人视图偏好：保存某用户在某桌的 chatbox 左右侧覆盖表（权限同 observerDetail 可见性）。
+   *  白名单过滤：键仅认本桌 active 席位 ∪ asker（问询桌已就位），值仅认 L/R——退席/换端残留的旧键静默丢弃。 */
+  setChatSidesByUser(userToken: string, tableId: string, sides: unknown): Record<string, string> {
+    const user = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    const isAsker = tableTypeOf(meta.tableType).id === "inquiry" && this.store.seatOwnerOf(tableId, ASKER_SEAT) === user.userId;
+    if (user.role !== "systemadmin" && !this.activeSeatOfUser(tableId, user.userId) && !isAsker) {
+      throw new ApiError(403, "not_participant", "仅可设置自己参与的圆桌的会话视图偏好");
+    }
+    const src = (typeof sides === "object" && sides !== null && !Array.isArray(sides)) ? sides as Record<string, unknown> : {};
+    const valid = new Set(this.store.getSeats(tableId).filter((s) => s.status !== "left").map((s) => s.seatId));
+    if (this.askerViewOf(tableId)) valid.add(ASKER_SEAT);
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(src)) {
+      if (valid.has(k) && (v === "L" || v === "R")) out[k] = v;
+      if (Object.keys(out).length >= 64) break;
+    }
+    this.store.setChatSides(tableId, user.userId, out);
+    return out;
   }
 
   /** 邀请码（仅建桌人）：复制入桌凭证 */

@@ -115,6 +115,26 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     expect(html).toContain("closeRequestModal"); // Esc/背景关闭
   });
 
+  it("页面含评审项面板：全生命周期状态/回应轨迹、卡片可点击、弹窗要素（任务 0036）", async () => {
+    const html = await (await fetch(base + "/")).text();
+    expect(html).toContain("reviewItemStatus"); // 状态分类函数
+    expect(html).toContain("openReviewItemModal"); // 详情弹窗函数
+    expect(html).toContain("riModal"); // body 级弹窗节点
+    expect(html).toContain("closeReviewItemModal"); // 背景/按钮关闭
+    expect(html).toContain("data-vi"); // 卡片索引绑定
+    expect(html).toContain("点击查看评审项详情"); // 卡片 title 提示
+    expect(html).toContain("d.reviewItems"); // 面板数据来源（详情接口的评审项挂接）
+    expect(html).toContain("直接通过"); // 一轮接纳即执行完成
+    expect(html).toContain("交互后通过"); // 多轮回应/反提案/转人工后通过
+    expect(html).toContain("待回应"); // 尚无回应
+    expect(html).toContain("已接纳·执行中"); // accept 后请求待执行
+    expect(html).toContain("反提案待回应"); // 请求被 counter
+    expect(html).toContain("回应轨迹"); // 弹窗回应区标题
+    expect(html).toContain("派生执行请求"); // 弹窗执行区标题
+    expect(html).toContain("满足版本"); // 满足请求的产物版本溯源
+    expect(html).toContain("RESP_LABEL"); // 回应决定中文标签映射
+  });
+
   it("页面含问询桌问答区：问答通栏列表（截断）+ 全文弹窗（任务 0029）", async () => {
     const html = await (await fetch(base + "/")).text();
     expect(html).toContain("openQaModal"); // 全文弹窗函数

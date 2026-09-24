@@ -127,6 +127,8 @@ export interface ReviewItemRecord {
   /** 评审意见针对的资料文档（REVIEW_COMMENT payload.docId，可能缺省） */
   docId?: string;
   responses: ResponseItem[]; // 提案人回应（可能多条，取最后一条为当前立场）
+  /** 该评审项派生的执行请求（sourceReviewItemId 回链；accept 才派生，reject/defer/human 无），时间序 */
+  requests: RequestRecord[];
 }
 
 export type RequestStatus = "pending" | "accepted" | "rejected" | "countered" | "executed" | "human";
