@@ -7,6 +7,7 @@ import type {
   ArtifactPublishPayload, ArtifactFetchPayload, ArtifactLockPayload,
   ConsensusVotePayload, EscalatePayload, HumanInputPayload, HumanRulingPayload,
   TurnReleasePayload, HostPrereviewPayload, SupplementPayload, HistoryPayload,
+  ParallelDispatchPayload,
 } from "./types";
 
 const ajv = new Ajv({ allErrors: true });
@@ -197,6 +198,25 @@ const supplementSchema = s({
   additionalProperties: false,
 });
 
+const parallelDispatchSchema = s({
+  type: "object", required: ["workers"],
+  properties: {
+    workers: { type: "array", minItems: 1, maxItems: 32, uniqueItems: true, items: str(1, 64) },
+    task: str(0, 8_000),
+    visibility: { type: "string", enum: ["open", "blind"] },
+    note: str(0, 2_000),
+    perWorker: {
+      type: "array", minItems: 1, maxItems: 32,
+      items: {
+        type: "object", required: ["seatId", "hint"],
+        properties: { seatId: str(1, 64), hint: str(1, 2_000) },
+        additionalProperties: false,
+      },
+    },
+  },
+  additionalProperties: false,
+});
+
 const tableCreateSchema = s({
   type: "object", required: ["topic", "template", "owner"],
   properties: {
@@ -265,6 +285,7 @@ export const payloadValidators: Partial<Record<string, (p: unknown) => boolean>>
   TURN_RELEASE: turnReleaseSchema,
   HOST_PREREVIEW: hostPrereviewSchema,
   SUPPLEMENT: supplementSchema,
+  PARALLEL_DISPATCH: parallelDispatchSchema,
 };
 
 const envelopeValidator = ajv.compile(envelopeSchema);
@@ -310,6 +331,7 @@ export const is = {
   turnRelease: (p: unknown): p is TurnReleasePayload => !!payloadValidators.TURN_RELEASE!(p),
   hostPrereview: (p: unknown): p is HostPrereviewPayload => !!payloadValidators.HOST_PREREVIEW!(p),
   supplement: (p: unknown): p is SupplementPayload => !!payloadValidators.SUPPLEMENT!(p),
+  parallelDispatch: (p: unknown): p is ParallelDispatchPayload => !!payloadValidators.PARALLEL_DISPATCH!(p),
 };
 
 // 防止 tree-shaking 误判（HistoryPayload 仅作类型导出使用）

@@ -60,6 +60,24 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     expect(html).toContain("RING_MAX=8"); // 超 8 席折叠阈值
   });
 
+  it("页面含执行时序图：纵向 DAG/agent 分列/并行汇聚/进行中跳动/节点详情弹窗（任务 0046）", async () => {
+    const html = await (await fetch(base + "/")).text();
+    expect(html).toContain("执行时序"); // 卡片标题（左栏会话上方）
+    expect(html).toContain("deriveTimeline"); // 消息流 → 时序模型推导
+    expect(html).toContain("timelineCardHtml"); // 渲染函数
+    expect(html).toContain("时间从上到下"); // 纵向时序（时间向下流动）
+    expect(html).toContain("tl-colhead"); // agent 固定列头（sticky）
+    expect(html).toContain("TL_COL_MAX"); // ≤8 每 agent 固定一列、>8 按角色分组阈值
+    expect(html).toContain("TL_ROLE_GROUP_ORDER"); // 按角色分组
+    expect(html).toContain("tl-node"); // 可点击节点卡片（详情弹窗）
+    expect(html).toContain("批次汇聚"); // 并行批次虚拟汇总节点（◇）
+    expect(html).toContain("已执行 "); // 进行中节点已执行时长
+    expect(html).toContain("tlTick"); // 1s 跳动 ticker
+    expect(html).toContain("openTlNodeModal"); // 节点详情弹窗
+    expect(html).toContain("tlPulse"); // 进行中卡脉冲动效
+    expect(html).toContain("tlArrow"); // 节点间箭头（hand-off/fan-out/fan-in）
+  });
+
   it("页面含完整邀请复制：邀请码/席位 token 复制带服务器/桌号/skill 指引", async () => {
     const html = await (await fetch(base + "/")).text();
     expect(html).toContain("inviteText"); // 完整邀请文本构造器

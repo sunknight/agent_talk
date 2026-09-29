@@ -248,9 +248,11 @@ export function createHttpServer(hub: Hub) {
         if (seg[4] === "resume" && !seg[5]) {
           return ok(res, hub.resumeByUser(bearer(req), tableId));
         }
-        // 跳过当前回合发言人（主持人/建桌人；解除预审点名卡死/无响应发言人）
+        // 跳过当前回合发言人（主持人/建桌人；解除预审点名卡死/无响应发言人；并行执行期须带 seatId 指定执行方）
         if (seg[4] === "skip-turn" && !seg[5] && method === "POST") {
-          return ok(res, hub.skipTurnByUser(bearer(req), tableId, body.reason !== undefined ? String(body.reason) : undefined));
+          return ok(res, hub.skipTurnByUser(bearer(req), tableId,
+            body.reason !== undefined ? String(body.reason) : undefined,
+            body.seatId !== undefined && body.seatId !== null && body.seatId !== "" ? String(body.seatId) : undefined));
         }
         // 切换本桌系统预审开关（主持人/建桌人）
         if (seg[4] === "precheck" && !seg[5] && method === "POST") {
@@ -334,10 +336,12 @@ export function createHttpServer(hub: Hub) {
           const body = await readJson(req);
           return ok(res, hub.resumeByAdmin(bearer(req), seg[3], body.force === true));
         }
-        // 跳过当前回合发言人（systemadmin；解除预审点名卡死/无响应发言人）
+        // 跳过当前回合发言人（systemadmin；解除预审点名卡死/无响应发言人；并行执行期须带 seatId）
         if (seg[2] === "tables" && seg[3] && seg[4] === "skip-turn" && method === "POST" && !seg[5]) {
           const body = await readJson(req);
-          return ok(res, hub.skipTurnByAdmin(bearer(req), seg[3], body.reason !== undefined ? String(body.reason) : undefined));
+          return ok(res, hub.skipTurnByAdmin(bearer(req), seg[3],
+            body.reason !== undefined ? String(body.reason) : undefined,
+            body.seatId !== undefined && body.seatId !== null && body.seatId !== "" ? String(body.seatId) : undefined));
         }
         // 切换本桌系统预审开关（systemadmin）
         if (seg[2] === "tables" && seg[3] && seg[4] === "precheck" && method === "POST" && !seg[5]) {
@@ -510,18 +514,18 @@ export function createHttpServer(hub: Hub) {
                 : undefined,
             }));
           }
-          if (method === "GET" && !seg[4]) return ok(res, { artifacts: hub.listArtifacts(tableId) });
+          if (method === "GET" && !seg[4]) return ok(res, { artifacts: hub.listArtifacts(tableId, seatAuth.seatId) });
 
           const artifactId = seg[4];
           if (artifactId && method === "GET" && !seg[5]) {
-            const v = hub.getArtifactVersion(tableId, artifactId, url.searchParams.get("version") ? Number(url.searchParams.get("version")) : undefined);
+            const v = hub.getArtifactVersion(tableId, artifactId, url.searchParams.get("version") ? Number(url.searchParams.get("version")) : undefined, seatAuth.seatId);
             return ok(res, v);
           }
           if (artifactId && seg[5] === "diff" && method === "GET") {
             const from = Number(url.searchParams.get("from") ?? 1) || 1;
             let to = Number(url.searchParams.get("to") ?? 0) || 0;
-            if (!to) to = hub.getArtifactVersion(tableId, artifactId).version.v;
-            return ok(res, hub.diffArtifact(tableId, artifactId, from, to));
+            if (!to) to = hub.getArtifactVersion(tableId, artifactId, undefined, seatAuth.seatId).version.v;
+            return ok(res, hub.diffArtifact(tableId, artifactId, from, to, seatAuth.seatId));
           }
           if (artifactId && seg[5] === "lock" && method === "POST") {
             const body = await readJson(req);

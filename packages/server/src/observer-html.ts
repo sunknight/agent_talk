@@ -1,7 +1,7 @@
 /**
  * 观察端 Web 控制台（单页，零构建）— GET / 下发。
  * 功能：圆桌列表（筛选/我的席位标记）/ 建桌（5 桌类型：评审/协作/头脑风暴/方案决策/问询；我的角色自选——任一角色自建入席或主持人建桌，问询桌可选问询方/主持人；回合提交全桌型过 DeepSeek 预审）/
- *       桌详情（按进度分阶段展示：准备/就绪待开始/进行中/暂停/结束，各模块显隐合理化；圆桌示意图：席位环绕+最后交付摘要+思考中标记、阶段进度/席位/产物/请求/纪要、会议暂停/恢复与暂停申请、
+ *       桌详情（按进度分阶段展示：准备/就绪待开始/进行中/暂停/结束，各模块显隐合理化；圆桌示意图：席位环绕+最后交付摘要+思考中/已断开标记（断开=超5分钟无席位HTTP访问）、阶段进度/席位/产物/请求/纪要、会议暂停/恢复与暂停申请、
  *       问询方操作面板：开始问询/定向与广播提问/结束问询出问询纪要）/
  *       会话视图 chatbox（己方右侧/其他方左侧/系统提示居中，发言/指令/系统筛选，阶段变更分隔条）+ 输入聚合（公开补充/私有指令/人工指令/代答/提问 按阶段切换类型）/
  *       我的席位面板（入桌设定·回填、开始会议·建桌人、暂停期调整、会议控制/申请暂停/凭证恢复折叠子区块）/
@@ -192,6 +192,10 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .rt-node.think .rt-card { border-color:var(--acc); border-top-color:var(--acc); background:#17233c; animation:rtpulse 1.6s infinite; }
   .rt-node.think .rt-nm { color:var(--acc); }
   .rt-think { font-size:11px; color:var(--acc); white-space:nowrap; }
+  /* 已断开席位：灰调虚线卡片（优先于思考中高亮——不再脉冲） */
+  .rt-node.off .rt-card { border-color:var(--line-2); border-style:dashed; background:var(--panel); opacity:.72; }
+  .rt-node.off .rt-nm { color:var(--dim); }
+  .rt-off { font-size:11px; color:var(--err); white-space:nowrap; }
   .rt-node.rt-more { cursor:pointer; }
   .rt-node.rt-more:hover .rt-card { border-color:var(--acc); color:var(--acc); }
   .rt-rest { border-top:1px dashed var(--line); margin-top:10px; padding-top:8px; }
@@ -235,6 +239,7 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .lgd .collaborator { color:var(--vote); }
   .lgd .host { color:#c9a227; }
   .lgd .observer { color:var(--dim); }
+  .lgd .off { color:var(--err); }
   /* 详情页左右分栏：左右等宽 1:1（左=会话与席位档案，右=示意图+我的操作与交付）；窄屏退单列 */
   .dcols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 14px; align-items:start; }
   .dcol { min-width:0; }
@@ -291,6 +296,22 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .cb-meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--dim); margin-top:4px; }
   .cb-sys { align-self:center; max-width:94%; text-align:center; font-size:12px; color:var(--dim); background:var(--panel); border:none; border-radius:99px; padding:3px 14px; overflow-wrap:anywhere; }
   .cb-empty { align-self:center; color:var(--dim); font-size:12px; padding:18px 0; }
+  /* 执行时序图（左栏会话上方）：纵向时序 DAG——时间从上到下，agent 各占一列（列头 sticky，>8 按角色分组） */
+  .tl-scroll { overflow:auto; max-height:420px; border:1px solid var(--line); border-radius:var(--r); background:#141722; }
+  .tl-inner { position:relative; }
+  .tl-grow { position:sticky; top:0; z-index:3; display:flex; align-items:center; height:20px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .tl-gcell { font-size:11px; color:var(--dim); text-align:center; border-right:1px dashed var(--line); overflow:hidden; white-space:nowrap; }
+  .tl-gsp { flex:0 0 24px; background:var(--panel); }
+  .tl-hrow { position:sticky; top:0; z-index:3; display:flex; align-items:center; height:26px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .tl-colhead { display:flex; align-items:center; justify-content:center; gap:5px; font-size:12px; padding:0 4px; overflow:hidden; white-space:nowrap; }
+  .tl-colhead .dot { width:8px; height:8px; border-radius:50%; flex:0 0 8px; }
+  .tl-colhead b { overflow:hidden; text-overflow:ellipsis; }
+  .tl-svg { display:block; }
+  .tl-svg text { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .tl-node { cursor:pointer; }
+  .tl-node:hover rect.tl-box { stroke:var(--acc); }
+  .tl-run rect.tl-box { animation:tlPulse 1.6s ease-in-out infinite; }
+  @keyframes tlPulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
   /* 折叠子区块（我的席位：会议控制/申请暂停/凭证恢复；状态抗轮询重渲染由 view.seatOpen 承载） */
   details.sec { border:1px solid var(--line); border-radius:var(--r); background:var(--panel-2); margin:10px 0 0; }
   details.sec summary { cursor:pointer; padding:8px 12px; font-size:13px; font-weight:600; display:flex; gap:8px; align-items:center; list-style:none; user-select:none; }
@@ -371,6 +392,8 @@ var view = { mode:'intro', tableId:null, timer:null, lastDetailJson:'', lastDeta
   /* 会话视图与输入聚合：chatFilter 气泡筛选 / cmpType 当前输入类型 / seatOpen 折叠子区块开合（抗轮询重渲染）/
      chatAtBottom+cbPrevTop 会话滚动贴底与回位 */
   chatFilter:'all', cmpType:'', seatOpen:{}, chatAtBottom:true, cbPrevTop:0,
+  /* 执行时序图：tlOpen 展开 / tlStick 纵向贴底跟随（同 chatAtBottom 模式，上翻即停）/ tlModel+tlRun 渲染期数据（节点弹窗与 1s ticker 取用） */
+  tlOpen:true, tlStick:true, tlModel:null, tlRun:[], tlTimer:null,
   /* chatbox 左右侧个人偏好（服务端按用户×圆桌持久化；渲染唯一来源，轮询仅在无保存在途时同步）
      sidesSaving：保存在途计数（乐观更新后防轮询用旧服务端值回滚） */
   chatSides:{}, sidesSaving:0 };
@@ -386,8 +409,8 @@ function ttOf(id){ return TT_BY_ID[id] || TT_BY_ID.review; }
 function typeBadge(tt){ return '<span class="rb ttype" title="'+escAttr(ttOf(tt).description||'')+'">'+esc(ttOf(tt).label)+'</span>'; }
 function phaseLabel(tt, ph){ var d = ttOf(tt); return (d.phaseLabels && d.phaseLabels[ph]) || PHASE_LABEL[ph] || ph; }
 var STEP_DEFS = [['open','设定'],['statements','陈述'],['review','评审'],['response','回应'],['execution','执行'],['convergence','表决'],['closed','结束']];
-var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交', MEETING_PAUSED:'会议暂停', MEETING_RESUMED:'继续会议', PAUSE_REQUESTED:'暂停申请', TURN_SKIPPED:'跳过发言' };
-var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st', MEETING_PAUSED:'mt-req', MEETING_RESUMED:'mt-phase', PAUSE_REQUESTED:'mt-human', TURN_SKIPPED:'mt-human' };
+var MT_LABEL = { PHASE_CHANGE:'阶段变更', SEAT_JOINED:'入席/设定', SEAT_LEFT:'退席', ARTIFACT_PUBLISHED:'产物发布', DOC_UPLOADED:'资料上传', MINUTES:'会议纪要', CONSENSUS_RESULT:'表决结果', STATEMENT:'提案陈述', REVIEW_COMMENT:'评审意见', RESPONSE:'回应评审', REQUEST:'执行请求', RESPOND_REQUEST:'请求处置', CONSENSUS_VOTE:'表决', QUESTION:'提问', REPLY:'回答', HUMAN_INPUT:'人工指令', HUMAN_RULING:'人工裁决', ESCALATE:'申请介入', INFO:'系统通知', HOST_PREREVIEW:'预审结果', SUPPLEMENT:'补充提交', MEETING_PAUSED:'会议暂停', MEETING_RESUMED:'继续会议', PAUSE_REQUESTED:'暂停申请', TURN_SKIPPED:'跳过发言', PARALLEL_DISPATCH:'并行调度' };
+var MT_CLS = { PHASE_CHANGE:'mt-phase', SEAT_JOINED:'mt-sys', SEAT_LEFT:'mt-sys', ARTIFACT_PUBLISHED:'mt-sys', DOC_UPLOADED:'mt-sys', INFO:'mt-sys', MINUTES:'mt-min', CONSENSUS_RESULT:'mt-min', STATEMENT:'mt-st', REVIEW_COMMENT:'mt-rev', RESPONSE:'mt-rev', REQUEST:'mt-req', RESPOND_REQUEST:'mt-req', CONSENSUS_VOTE:'mt-vote', QUESTION:'mt-q', REPLY:'mt-q', HUMAN_INPUT:'mt-human', HUMAN_RULING:'mt-human', ESCALATE:'mt-human', HOST_PREREVIEW:'mt-phase', SUPPLEMENT:'mt-st', MEETING_PAUSED:'mt-req', MEETING_RESUMED:'mt-phase', PAUSE_REQUESTED:'mt-human', TURN_SKIPPED:'mt-human', PARALLEL_DISPATCH:'mt-phase' };
 var CHAT_SPEECH={STATEMENT:1,REVIEW_COMMENT:1,RESPONSE:1,SUPPLEMENT:1,CONSENSUS_VOTE:1,ARTIFACT_PUBLISHED:1,REQUEST:1,RESPOND_REQUEST:1,QUESTION:1,REPLY:1};
 var CHAT_HUMAN_MSG={HUMAN_INPUT:1,HUMAN_RULING:1,ESCALATE:1};
 var CHAT_VIEWS=[['all','全部'],['speech','发言'],['human','指令'],['sys','系统']];
@@ -439,6 +462,12 @@ function msgBodyText(m,seats){
     if(p.targetSeatId) body+='　→ 点名 '+(seatName(seats,p.targetSeatId));
   }
   else if(m.type==='SUPPLEMENT') body=(p.text||'');
+  else if(m.type==='PARALLEL_DISPATCH'){
+    body=(p.task?('调度任务：'+p.task):'并行调度')+(p.note?('（备注：'+p.note+'）'):'')
+      +'｜执行方：'+(p.workers||[]).map(function(w){ return seatName(seats,w); }).join('、')
+      +'｜可见性：'+(p.visibility==='blind'?'盲评（批次内互不可见，汇聚后放开）':'公开');
+    if(p.perWorker&&p.perWorker.length) body+='｜定向提示：'+p.perWorker.map(function(x){ return seatName(seats,x.seatId)+'→'+(x.hint||''); }).join('；');
+  }
   else if(m.type==='TURN_SKIPPED') body='跳过 '+(seatName(seats,p.seatId))+' 的发言 by '+(p.byName||'')+(p.reason?('：'+p.reason):'')+'（该席本轮视为已处理）';
   else if(m.type==='MEETING_PAUSED') body='会议暂停 by '+(p.byName||'')+'（'+(ROLE_LABEL[p.byRole]||p.byRole||'')+'）'+(p.via==='request'&&p.requestedByName?('，经 '+p.requestedByName+' 申请'):'')+(p.reason?('：'+p.reason):'')+'；'+(p.note||'');
   else if(m.type==='MEETING_RESUMED') body='继续会议 by '+(p.byName||'')+'，恢复到「'+(PHASE_LABEL[p.phase]||p.phase||'')+'」'+(p.forced?'［强制 · 跳过就绪检查］':'');
@@ -886,6 +915,8 @@ function roleBadge(role){ return '<span class="rb '+esc(role)+'">'+esc(ROLE_LABE
 function seatName(seats,id){ if(id==='asker') return '问询方'; for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].name; } return id; }
 /* 发言权思考进度文案：agent 旁路上报（turnProgress）有值按阶段显示，无上报/旧 skill 回落「思考中」 */
 function turnStageLabel(p){ if(!p) return '思考中'; return p.stage==='preparing'?'准备中':(p.stage==='working'?'处理中':(p.stage==='finalizing'?'即将结束':'思考中')); }
+/* 席位断开判定（服务端派生 online===false 才显示；undefined=旧数据按在线）；闭桌不显示（历史桌全员离线属正常） */
+function seatOff(s,t){ return t.phase!=='closed' && s.online===false; }
 function seatRoleOf(seats,id){ for(var i=0;i<seats.length;i++){ if(seats[i].seatId===id) return seats[i].role; } return ''; }
 
 /* ---------- 圆桌示意图（桌详情顶部） ----------
@@ -946,10 +977,15 @@ function roundDiagramHtml(d,seats,turn,isAsker){
   var lastOf={};
   (d.messages||[]).forEach(function(m){ if(m.fromSeat&&m.fromSeat!=='server') lastOf[m.fromSeat]=m; });
   var turnId=turn?turn.seatId:null;
+  /* 并行执行期：本轮全部未交付执行方同时持权（多节点高亮 + 各自思考进度） */
+  var parTurns=(t.parallelDispatch&&t.activeTurns)||[];
+  var parTurnMap={}; parTurns.forEach(function(x){ parTurnMap[x.seatId]=x; });
+  function wpStageOf(sid){ var w=(t.workerProgress||[]).filter(function(x){ return x.seatId===sid; })[0]; return turnStageLabel(w?{stage:w.stage}:null); }
+  var hasTurn=function(sid){ return sid===turnId||!!parTurnMap[sid]; };
   /* 环上优先级：发言权持有者 > 建桌人 > 最近发言（新→旧）> 从未发言（入席序） */
   var sorted=parts.slice().sort(function(a,b){
-    var ka=(a.seatId===turnId)?0:((a.seatId===t.ownerSeat)?1:2);
-    var kb=(b.seatId===turnId)?0:((b.seatId===t.ownerSeat)?1:2);
+    var ka=hasTurn(a.seatId)?0:((a.seatId===t.ownerSeat)?1:2);
+    var kb=hasTurn(b.seatId)?0:((b.seatId===t.ownerSeat)?1:2);
     if(ka!==kb) return ka-kb;
     if(ka===2){
       var ta=lastOf[a.seatId]?lastOf[a.seatId].ts:0, tb=lastOf[b.seatId]?lastOf[b.seatId].ts:0;
@@ -985,14 +1021,20 @@ function roundDiagramHtml(d,seats,turn,isAsker){
     +'</span><span class="sp"></span>'
     +'<span class="dim lgd"><i class="proposer">●</i>提案方<i class="reviewer">●</i>评审方<i class="collaborator">●</i>协作者<i class="host">●</i>主持人<i class="observer">●</i>观察方'
     +(ttOf(t.tableType).flow==='inquiry'?'<i class="answerer">●</i>回答方<i class="asker">●</i>问询方':'')
-    +'<span>· 思考进度 = 当前发言权 · 节点「左/右」= 会话区归属</span></span></div>'
+    +'<i class="off">◌</i>已断开'
+    +'<span>· 思考进度 = 当前发言权 · ◌已断开 = 超过5分钟无访问 · 节点「左/右」= 会话区归属</span></span></div>'
     +'<div class="rt-wrap"><div class="rt-stage" style="height:'+STAGE_H+'px">'
     +'<div class="rt-ell"></div>'
     +'<div class="rt-center"><div class="rt-topic">'+esc(clipStr(t.topic,18))+'</div>'
     +'<div style="margin:4px 0">'+phaseBadge(t.phase,t.roundNo,t.tableType)+'</div>';
   if(turn){
-    h+='<div class="rt-turn">'+esc(seatName(seats,turn.seatId))+' '+turnStageLabel(t.turnProgress)+'</div>'
+    var tSeat=null; for(var k=0;k<seats.length;k++){ if(seats[k].seatId===turn.seatId) tSeat=seats[k]; }
+    h+='<div class="rt-turn">'+esc(seatName(seats,turn.seatId))+' '+((tSeat&&seatOff(tSeat,t))?'<span class="rt-off">已断开</span>':turnStageLabel(t.turnProgress))+'</div>'
       +'<div class="dim xs">'+esc(clipStr(turn.taskHint,26))+'</div>';
+  }
+  else if(parTurns.length){
+    h+='<div class="rt-turn">并行执行 '+parTurns.length+' 方</div>'
+      +'<div class="dim xs">'+esc(clipStr(parTurns[0].taskHint||'',26))+'</div>';
   }
   else if(t.phase==='closed'){ h+='<div class="dim">会议已结束</div>'; }
   else if(t.pause){ h+='<div style="color:var(--warn)">⏸ 会议已暂停</div>'; }
@@ -1004,13 +1046,15 @@ function roundDiagramHtml(d,seats,turn,isAsker){
     var x=CX+g[0]*RX, y=CY+g[1]*RY;
     var lm=lastOf[s.seatId], di=lastDelivInfo(lm);
     var dl=lm?di.label:(s.role==='asker'?'尚未提问':(t.phase==='open'?(((s.config&&s.config.ready)?'已就绪':'未就绪')):'尚未发言'));
-    var think=s.seatId===turnId;
+    var off=seatOff(s,t);
+    var think=hasTurn(s.seatId)&&!off;
+    var stageLbl=parTurnMap[s.seatId]?wpStageOf(s.seatId):turnStageLabel(t.turnProgress);
     var byline=s.role==='asker'?'网页提问':('agent: '+s.agentLabel);
-    h+='<div class="rt-node'+(think?' think':'')+'" style="left:'+Math.round(x)+'px;top:'+Math.round(y)+'px"'
-      +' title="'+escAttr(s.name+'（'+(ROLE_LABEL[s.role]||s.role)+' · '+byline+'）'+(lm?('｜最后交付：'+di.full+'（'+fmtTs(lm.ts)+'）'):(s.role==='asker'?'（尚未提问）':'（尚未发言）')))+'">'
+    h+='<div class="rt-node'+(off?' off':'')+(think?' think':'')+'" style="left:'+Math.round(x)+'px;top:'+Math.round(y)+'px"'
+      +' title="'+escAttr(s.name+'（'+(ROLE_LABEL[s.role]||s.role)+' · '+byline+'）'+(lm?('｜最后交付：'+di.full+'（'+fmtTs(lm.ts)+'）'):(s.role==='asker'?'（尚未提问）':'（尚未发言）'))+(off?('｜已断开（最后在线 '+fmtTs(s.lastSeenAt||s.joinedAt)+'）'):''))+'">'
       +'<div class="rt-card '+esc(s.role)+'">'
       +'<div class="rt-nm">'+esc(s.name)+(s.seatId===t.ownerSeat?' <span class="rt-owner" title="建桌人">★</span>':'')+'</div>'
-      +'<div class="rt-tags">'+roleBadge(s.role)+(think?'<span class="rt-think">● '+turnStageLabel(t.turnProgress)+'</span>':'')+sideToggleHtml(s.seatId,d,isAsker)+'</div>'
+      +'<div class="rt-tags">'+roleBadge(s.role)+(off?'<span class="rt-off">◌ 已断开</span>':(think?'<span class="rt-think">● '+stageLbl+'</span>':''))+sideToggleHtml(s.seatId,d,isAsker)+'</div>'
       +'<div class="rt-dl">'+esc(dl)+'</div>'
       +'</div></div>';
   });
@@ -1028,6 +1072,7 @@ function roundDiagramHtml(d,seats,turn,isAsker){
       var dl=lm?(di.label+' · '+fmtTs(lm.ts)):(s.role==='asker'?'尚未提问':(t.phase==='open'?(((s.config&&s.config.ready)?'已就绪':'未就绪')):'尚未发言'));
       h+='<div class="row" style="margin:4px 0"><b>'+esc(s.name)+'</b>'+roleBadge(s.role)
         +(s.seatId===t.ownerSeat?'<span class="badge">建桌人</span>':'')
+        +(seatOff(s,t)?'<span class="rt-off">◌ 已断开</span>':'')
         +'<span class="dim">'+esc(dl)+'</span>'+sideToggleHtml(s.seatId,d,isAsker)+'</div>';
     });
     h+='<div class="row" style="margin-top:6px"><button id="rtFold" class="fbtn on">收起其余席位</button></div></div>';
@@ -1036,7 +1081,374 @@ function roundDiagramHtml(d,seats,turn,isAsker){
   return h;
 }
 
-/* ---------- 身份区 / 登录注册 ---------- */
+/* ---------- 回合内并行调度面板（主持人 host 专用：总-分-总） ----------
+   调度期（无活跃批次）：勾选当前阶段可轮换的未发言席位（服务端 t.pendingSpeakers），发起并行批次或点名单个；
+   执行期（活跃批次 t.parallelDispatch）：批次看板（每席 已交付/进行中+思考进度/已跳过 + 逐席跳过），
+   批次全员交付/跳过即汇聚（服务端广播 INFO），回默认顺序轮转。 */
+var PD_PHASES={statements:1,review:1,response:1,convergence:1};
+function parallelCtlHtml(d,seats,t){
+  var h='<div class="card" id="parCtl"><div class="shead"><b>并行调度</b><span class="dim">主持人 · 回合内并行（总-分-总）</span></div>';
+  if(t.pause){ h+='<div class="banner warn" style="margin:8px 0">会议已暂停：并行调度 / 跳过 / 汇聚在继续会议后可用。</div></div>'; return h; }
+  if(!PD_PHASES[t.phase]){ h+='<div class="dim" style="margin:8px 0">当前阶段（'+esc(phaseLabel(t.tableType,t.phase))+'）不支持并行调度：仅陈述/评审/回应/表决等轮换阶段可用。</div></div>'; return h; }
+  var batch=t.parallelDispatch;
+  if(!batch){
+    var cands=(t.pendingSpeakers||[]).map(function(sid){
+      for(var i=0;i<seats.length;i++){ if(seats[i].seatId===sid) return seats[i]; }
+      return null;
+    }).filter(function(s){ return s; });
+    if(!cands.length){ h+='<div class="dim" style="margin:8px 0">本阶段已无可调度的未发言席位（或已轮空）。</div></div>'; return h; }
+    h+='<div class="section"><h3>发起并行批次</h3>'
+      +'<div class="dim" style="margin-bottom:6px">勾选的席位将<b>同时</b>获得发言权各自独立执行本阶段任务（勾 1 个=点名单个），全员交付（或跳过）后汇聚回顺序轮转。</div>'
+      +'<div class="frow"><label class="t">执行方 <b>*</b></label><div class="cchoice">'
+      +cands.map(function(s){
+        return '<label><input type="checkbox" class="pdW" value="'+escAttr(s.seatId)+'"'+(cands.length===1?' checked':'')+'> '+esc(s.name)+' '+roleBadge(s.role)+'</label>';
+      }).join('')
+      +'</div></div>'
+      +'<div class="frow"><label class="t">调度任务（选填）</label><textarea id="pdTask" placeholder="叠加在本阶段任务之上的额外指引（如统一评审口径/各自负责的题目），随发言权下发"></textarea></div>'
+      +'<div class="frow"><label class="t">结果互见</label><div class="cchoice">'
+      +'<label><input type="radio" name="pdVis" value="open" checked> 公开——交付即广播（收集/头脑风暴场景）</label>'
+      +'<label><input type="radio" name="pdVis" value="blind"> 盲评——批次成员互不可见，汇聚后放开（独立评审/考试防干扰）</label>'
+      +'</div></div>'
+      +'<div class="frow"><label class="t">调度备注（选填）</label><input id="pdNote" placeholder="验收口径 / 补充说明，随任务广播"></div>'
+      +'<div class="ferr" id="pdErr"></div>'
+      +'<div class="row"><button id="pdSend" class="primary">▶ 发起并行批次</button>'
+      +'<span class="dim">批次汇聚后可再调度剩余席位或让流程按原顺序轮转推进</span></div></div>';
+  } else {
+    var wp={}; (t.workerProgress||[]).forEach(function(x){ wp[x.seatId]=x.stage; });
+    var skipMap={};
+    (d.messages||[]).forEach(function(m){
+      if(m.type==='TURN_SKIPPED'&&m.payload&&m.payload.phase===batch.phase&&m.payload.roundNo===batch.roundNo) skipMap[m.payload.seatId]=1;
+    });
+    h+='<div class="section"><h3>第 '+batch.roundNo+' 轮 · '+esc(phaseLabel(t.tableType,batch.phase))+' · 批次看板</h3>'
+      +'<div class="dim" style="margin-bottom:6px">'+(batch.task?('任务：'+esc(batch.task.slice(0,120))+'｜'):'')+'可见性：'+(batch.visibility==='blind'?'盲评（批次内互不可见，汇聚后放开）':'公开')+'</div>';
+    batch.workers.forEach(function(sid){
+      var nm=seatName(seats,sid);
+      var st,skipBtn='';
+      if(batch.submitted.indexOf(sid)>=0) st='<span class="badge ok">已交付</span>';
+      else if(skipMap[sid]) st='<span class="badge">已跳过</span>';
+      else { st='<span class="badge warn">进行中'+(wp[sid]?(' · '+({preparing:'准备中',working:'处理中',finalizing:'即将提交'}[wp[sid]]||wp[sid])):'')+'）</span>';
+        skipBtn=' <button class="pdSkip sm" data-sid="'+escAttr(sid)+'" data-name="'+escAttr(nm)+'">跳过</button>'; }
+      h+='<div class="kv"><span class="k">'+esc(nm)+'</span>'+st+skipBtn+'</div>';
+    });
+    h+='<div class="dim" style="margin-top:6px">全员交付（或跳过）后批次汇聚、结果汇总为整体，回默认顺序轮转；滞留席位可逐个跳过。</div></div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+/* ---------- 执行时序图（左栏会话上方）：纵向时序 DAG——时间从上到下 ----------
+   布局：每 agent 一列（固定 x 坐标，列头 sticky；>8 个 agent 按角色分组加组头条），节点=列上的卡片
+   （任务+时长+简要结果，点击弹详情），卡片间画箭头链（串行 hand-off）；并行批次=分派卡 fan-out 到
+   多列并列成员卡、全员交付/跳过后 fan-in 到「批次汇聚 ◇」虚拟汇总卡；进行中卡脉冲+已执行时长每秒跳动。
+   数据：纯客户端从消息流推导（发言权不落库，先例 deriveTimeline 自身）——
+   已完成节点 start=同阶段上一推进事件时刻（上一交付/预审/跳过/阶段变更），并行批次成员 start=分派时刻，
+   批次全员交付/跳过即汇聚（回合内并行扩展：总-分-总，无独立收束消息）。 */
+var TL_SPEECH={STATEMENT:1,REVIEW_COMMENT:1,RESPONSE:1,SUPPLEMENT:1,CONSENSUS_VOTE:1,QUESTION:1,REPLY:1,REQUEST:1,RESPOND_REQUEST:1,HUMAN_INPUT:1,ESCALATE:1};
+var TL_TASK={statements:'交付陈述',review:'评审意见',response:'回应评审',execution:'处置请求',convergence:'共识表决',qa:'回答',human_intervention:'人工介入'};
+var TL_COL_MAX=8, TL_MIN_COL_W=126, TL_CARD_H=56, TL_VGAP=14, TL_SEP_H=26, TL_MS_H=32, TL_RAIL_W=24, TL_HEAD_H=26, TL_GROUP_H=20;
+var TL_ROLE_COLOR={proposer:'#4f8cff',reviewer:'#3fb68b',collaborator:'#b07ce8',host:'#c9a227',observer:'#a2abc0',answerer:'#3fb68b',asker:'#4f8cff'};
+var TL_ROLE_GROUP_ORDER=['proposer','reviewer','collaborator','answerer','asker','host','observer'];
+function fmtDur(ms){
+  if(!(ms>=0)) ms=0;
+  var s=Math.floor(ms/1000);
+  if(s<60) return s+' 秒';
+  var m=Math.floor(s/60);
+  if(m<60) return (s%60?(m+' 分 '+s%60+' 秒'):(m+' 分钟'));
+  return Math.floor(m/60)+' 小时 '+((m%60)?((m%60)+' 分'):'');
+}
+function fmtClock(ts){ var d=new Date(ts); function p(n){return n<10?'0'+n:''+n;} return p(d.getHours())+':'+p(d.getMinutes()); }
+/** 消息流 → 时序模型：节点（已完成/跳过/进行中）/ 轴标记（预审/暂停/纪要）/ 阶段带（纵向渲染的分行依据） */
+function deriveTimeline(d,seats,t){
+  var msgs=(d.messages||[]);
+  var lanes=seats.map(function(s){ return {seatId:s.seatId,name:s.name,role:s.role}; });
+  if(d.asker) lanes.unshift({seatId:'asker',name:d.asker.name,role:'asker'});
+  var nodes=[],marks=[],bands=[];
+  var started=false,phase='open',floor=0,grp=null,batchNo=0;
+  function closeGrp(atTs){
+    if(!grp) return;
+    if(grp.done+grp.skip>0) marks.push({ts:(grp.endTs||atTs),kind:'milestone',label:'批次汇聚 · '+grp.done+' 方交付'+(grp.skip?(' · '+grp.skip+' 跳过'):''),grp:grp});
+    grp=null;
+  }
+  msgs.forEach(function(m){
+    var p=m.payload||{};
+    if(m.type==='PHASE_CHANGE'){
+      closeGrp(m.ts); /* 批次未走完即换阶段（跳过收尾）：按已交付部分汇聚 */
+      if(!started&&p.to!=='open') started=true;
+      if(p.to!=='open') bands.push({phase:p.to,ts:m.ts});
+      if(started) marks.push({ts:m.ts,kind:'phase',label:phaseLabel(t.tableType,p.to)});
+      phase=p.to; floor=m.ts; return;
+    }
+    if(!started) return; /* 设定期不入图 */
+    if(m.type==='HOST_PREREVIEW'){ marks.push({ts:m.ts,kind:'precheck',label:(PRV_LABEL[p.verdict]||'预审')}); floor=m.ts; return; }
+    if(m.type==='TURN_SKIPPED'){
+      var skipGrp=(grp&&grp.workers.indexOf(p.seatId)>=0)?grp:null;
+      if(skipGrp){ skipGrp.delivered[p.seatId]=1; skipGrp.skip++; skipGrp.endTs=Math.max(skipGrp.endTs||0,m.ts); }
+      nodes.push({kind:'skip',seatId:p.seatId,start:(skipGrp?skipGrp.dispatchTs:floor),end:m.ts,type:m.type,msg:m,phase:(p.phase||phase),grp:skipGrp});
+      floor=m.ts;
+      if(grp&&grp.done+grp.skip>=grp.workers.length) closeGrp(m.ts);
+      return;
+    }
+    if(m.type==='MEETING_PAUSED'||m.type==='MEETING_RESUMED'||m.type==='PAUSE_REQUESTED'){
+      marks.push({ts:m.ts,kind:'pause',label:(m.type==='MEETING_PAUSED'?'暂停':(m.type==='MEETING_RESUMED'?'继续':'申请暂停'))});
+      floor=m.ts; return;
+    }
+    if(m.type==='MINUTES'||m.type==='CONSENSUS_RESULT'){ marks.push({ts:m.ts,kind:'note',label:(m.type==='MINUTES'?'纪要':'表决结果')}); return; }
+    if(m.type==='PARALLEL_DISPATCH'){
+      batchNo++;
+      nodes.push({kind:'done',seatId:m.fromSeat,start:floor,end:m.ts,type:m.type,msg:m,phase:phase});
+      grp={ord:batchNo,dispatchTs:m.ts,workers:(p.workers||[]).slice(),delivered:{},endTs:null,done:0,skip:0,task:(p.task||''),blind:(p.visibility==='blind')};
+      floor=m.ts; return;
+    }
+    if(TL_SPEECH[m.type]&&m.fromSeat&&m.fromSeat!=='server'){
+      var inGrp=(grp&&grp.workers.indexOf(m.fromSeat)>=0&&!grp.delivered[m.fromSeat])?grp:null;
+      nodes.push({kind:'done',seatId:m.fromSeat,start:(inGrp?inGrp.dispatchTs:floor),end:m.ts,type:m.type,msg:m,phase:phase,grp:inGrp});
+      if(inGrp){ inGrp.delivered[m.fromSeat]=1; inGrp.done++; inGrp.endTs=Math.max(inGrp.endTs||0,m.ts); }
+      floor=m.ts;
+      if(grp&&grp.done+grp.skip>=grp.workers.length) closeGrp(m.ts);
+    }
+    /* 其余系统回显（入席/产物/资料等）不占泳道也不推进 floor */
+  });
+  var now=Date.now();
+  /* 进行中节点：活跃并行批次=未交付成员各自一条（start=分派时刻，grp 关联供 fan-out 连线）；否则单发言权 */
+  if(t.phase!=='closed'&&!t.pause){
+    var pd=t.parallelDispatch;
+    if(pd&&(t.activeTurns||[]).length){
+      var pdTs=null;
+      msgs.forEach(function(m){ if(m.type==='PARALLEL_DISPATCH'&&m.msgId===pd.msgId) pdTs=m.ts; });
+      var pdGrp=(grp&&pdTs&&grp.dispatchTs===pdTs)?grp:null;
+      (t.activeTurns||[]).forEach(function(g){
+        var wp=(t.workerProgress||[]).filter(function(x){ return x.seatId===g.seatId; })[0];
+        nodes.push({kind:'run',seatId:g.seatId,start:(pdTs||floor),end:null,type:'STATEMENT',phase:t.phase,batch:true,grp:pdGrp,stage:(wp?wp.stage:null)});
+      });
+    } else if(t.activeTurn){
+      nodes.push({kind:'run',seatId:t.activeTurn.seatId,start:floor,end:null,type:'STATEMENT',phase:t.phase,stage:(t.turnProgress&&t.turnProgress.stage)});
+    }
+  }
+  /* 纵向渲染不做时间比例尺：节点按完成顺序分行堆叠，时长写在卡片内（参考用户给的 DAG 截图形态） */
+  return { lanes:lanes,nodes:nodes,marks:marks,bands:bands,started:started,now:now };
+}
+function timelineCardHtml(d,seats,t){
+  /* 可用画布宽：从已渲染的左栏测（首轮渲染前无 DOM 用 640 兜底，后续轮询自然校正） */
+  var avail=640, dm=document.querySelector('.dcol.dmain');
+  if(dm&&dm.clientWidth) avail=Math.max(320,dm.clientWidth-36);
+  var m=deriveTimeline(d,seats,t);
+  if(!m.started) return '';
+  view.tlModel=m;
+  view.tlRun=[];
+  var lanes=m.lanes, n=lanes.length;
+  var grouped=n>TL_COL_MAX; /* agent 多时按角色分组列（组内连续 + 组头条） */
+  var laneIdx={}; lanes.forEach(function(l,i){ laneIdx[l.seatId]=i; });
+  var groups=[];
+  if(grouped){
+    var seen={},rest=[];
+    TL_ROLE_GROUP_ORDER.forEach(function(r){
+      var idxs=[]; lanes.forEach(function(l,i){ if(l.role===r) idxs.push(i); });
+      if(idxs.length){ groups.push({role:r,idxs:idxs}); seen[r]=1; }
+    });
+    lanes.forEach(function(l,i){ if(!seen[l.role]) rest.push(i); });
+    if(rest.length) groups.push({role:'',idxs:rest});
+  } else groups.push({role:'',idxs:lanes.map(function(l,i){ return i; })});
+  var colW=Math.max(TL_MIN_COL_W,Math.floor((avail-TL_RAIL_W)/n));
+  var W=TL_RAIL_W+n*colW, cardW=colW-14;
+  function colX(i){ return TL_RAIL_W+i*colW; }
+  function colCx(i){ return TL_RAIL_W+i*colW+colW/2; }
+  var runN=m.nodes.filter(function(nd){ return nd.kind==='run'; }).length;
+  var h='<div class="card" id="tlCard"><div class="shead"><b>执行时序</b><span class="dim">时间从上到下 · 点击节点看详情</span><span class="sp"></span>'
+    +'<span class="dim xs">◇ 批次汇聚 · ◉ 预审 · ⏸ 暂停</span>'
+    +'<button id="tlFold" class="fbtn'+(view.tlOpen===false?'':' on')+'">'+(view.tlOpen===false?'展开':'收起')+'</button></div>';
+  if(view.tlOpen===false){
+    var lastDone=m.nodes.filter(function(nd){ return nd.kind!=='run'; }).pop();
+    h+='<div class="dim" style="margin-top:8px">'
+      +(lastDone?('已完成 '+m.nodes.filter(function(nd){ return nd.kind==='done'; }).length+' 步 · 最近：'+esc(seatName(seats,lastDone.seatId))+' '+esc(MT_LABEL[lastDone.type]||lastDone.type)+'（'+fmtTs(lastDone.end)+'）'):'尚无执行记录')
+      +(runN?(' · 进行中 '+runN+' 方'):'')+' · 点「展开」查看时序图</div></div>';
+    return h;
+  }
+  /* 渲染序列：节点按事件序分行；阶段变更插通栏分隔行；批次闭合插「批次汇聚」虚拟汇总卡 */
+  var items=[],curPhase=null,emitted={},openG=null,bandIdx=0;
+  function pushMs(g){ if(!g||emitted[g.ord]) return; emitted[g.ord]=1; items.push({kind:'ms',grp:g}); openG=null; }
+  m.nodes.forEach(function(nd,ni){
+    var ph=nd.phase||'review';
+    if(ph!==curPhase){
+      pushMs(openG); /* 批次未走完即换阶段：按已交付部分先汇聚 */
+      var bb=null;
+      for(var bi=bandIdx;bi<m.bands.length;bi++){ if(m.bands[bi].phase===ph){ bb=m.bands[bi]; bandIdx=bi+1; break; } }
+      items.push({kind:'ph',phase:ph,ts:bb?bb.ts:null});
+      curPhase=ph;
+    }
+    items.push({kind:nd.kind,nd:nd,ni:ni});
+    if(nd.grp){ openG=nd.grp;
+      if(nd.grp.done+nd.grp.skip>=nd.grp.workers.length) pushMs(nd.grp);
+    }
+  });
+  pushMs(openG);
+  if(!items.length){
+    h+='<div class="dim" style="margin-top:8px">会议已开始，尚无执行记录。</div></div>';
+    return h;
+  }
+  /* 逐项分行（y 堆叠） */
+  var y=8, ii;
+  for(ii=0;ii<items.length;ii++){
+    items[ii].y=y;
+    y+=(items[ii].kind==='ph')?TL_SEP_H:((items[ii].kind==='ms')?(TL_MS_H+TL_VGAP):(TL_CARD_H+TL_VGAP));
+  }
+  var H=y+2;
+  /* 表头（HTML，sticky 抗纵向滚动；组头条 + agent 列头）+ SVG 画布 */
+  h+='<div class="tl-scroll" id="tlScroll"><div class="tl-inner" style="width:'+W+'px">';
+  if(grouped){
+    h+='<div class="tl-grow"><div class="tl-gsp"></div>';
+    groups.forEach(function(g){
+      h+='<div class="tl-gcell" style="width:'+(g.idxs.length*colW)+'px">'+esc((ROLE_LABEL[g.role]||g.role||'其他')+' · '+g.idxs.length)+'</div>';
+    });
+    h+='</div>';
+  }
+  h+='<div class="tl-hrow"'+(grouped?(' style="top:'+TL_GROUP_H+'px"'):'')+'><div class="tl-gsp" style="flex:0 0 '+TL_RAIL_W+'px"></div>';
+  lanes.forEach(function(l){
+    h+='<div class="tl-colhead" style="width:'+colW+'px" title="'+escAttr(l.name+'（'+(ROLE_LABEL[l.role]||l.role)+'）')+'">'
+      +'<span class="dot" style="background:'+(TL_ROLE_COLOR[l.role]||'#a2abc0')+'"></span><b>'+esc(clipStr(l.name,9))+'</b></div>';
+  });
+  h+='</div><svg class="tl-svg" width="'+W+'" height="'+H+'" font-size="11" xmlns="http://www.w3.org/2000/svg">'
+    +'<defs><marker id="tlArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5a6786"/></marker></defs>';
+  /* 列生命线（细虚线竖线：agent 固定 x 坐标的纵向轨道） */
+  for(var li=0;li<n;li++){
+    h+='<line x1="'+colCx(li)+'" y1="0" x2="'+colCx(li)+'" y2="'+H+'" stroke="#252a38" stroke-dasharray="2 4"/>';
+  }
+  /* 阶段分隔行：通栏虚线 + 居中标签 */
+  items.forEach(function(it){
+    if(it.kind!=='ph') return;
+    var ly=it.y+TL_SEP_H-9;
+    h+='<line x1="'+TL_RAIL_W+'" y1="'+ly+'" x2="'+W+'" y2="'+ly+'" stroke="#2a2f3d" stroke-dasharray="3 4"/>'
+      +'<text x="'+((W+TL_RAIL_W)/2)+'" y="'+(ly-4)+'" text-anchor="middle" fill="#a2abc0">'+esc('— '+phaseLabel(t.tableType,it.phase)+(it.ts?(' · '+fmtClock(it.ts)):'')+' —')+'</text>';
+  });
+  /* 箭头链（画在卡片下层）：串行 hand-off 相邻相连；并行=分派 fan-out / 成员 fan-in 汇聚卡 / 汇聚卡续链 */
+  function msMid(it){
+    var g=it.grp,mn=1e9,mx=-1e9;
+    g.workers.forEach(function(sid){ var ix=laneIdx[sid]; if(ix!=null){ mn=Math.min(mn,colCx(ix)); mx=Math.max(mx,colCx(ix)); } });
+    if(mx<0) mn=mx=TL_RAIL_W;
+    return { x:(mn+mx)/2, y:it.y+TL_MS_H/2 };
+  }
+  function arrow(x1,y1,x2,y2){
+    h+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="#5a6786" stroke-width="1.2" opacity=".65" marker-end="url(#tlArrow)"/>';
+  }
+  var src=null;
+  items.forEach(function(it,ix){
+    if(it.kind==='ph'){ src=null; return; }
+    if(it.kind==='ms'){
+      var mid=msMid(it);
+      for(var k=ix-1;k>=0;k--){
+        var pk=items[k];
+        if(pk.kind!=='done'&&pk.kind!=='skip') continue;
+        if(pk.nd&&pk.nd.grp===it.grp&&laneIdx[pk.nd.seatId]!=null) arrow(colCx(laneIdx[pk.nd.seatId]),pk.y+TL_CARD_H,mid.x,it.y,false);
+      }
+      src={x:mid.x,y:it.y+TL_MS_H};
+      return;
+    }
+    var nd=it.nd, cx=(laneIdx[nd.seatId]!=null)?colCx(laneIdx[nd.seatId]):null;
+    if(cx==null) return;
+    if(nd.type==='PARALLEL_DISPATCH'){
+      if(src) arrow(src.x,src.y,cx,it.y);
+      for(var j2=ix+1;j2<items.length;j2++){
+        var pj=items[j2];
+        if(pj.kind==='ph'||pj.kind==='ms') continue;
+        if(pj.nd&&pj.nd.grp&&pj.nd.grp.dispatchTs===nd.end&&laneIdx[pj.nd.seatId]!=null) arrow(cx,it.y+TL_CARD_H,colCx(laneIdx[pj.nd.seatId]),pj.y);
+      }
+      src=null;
+      return;
+    }
+    if(nd.grp){ src=null; return; } /* 批次成员：入箭头来自分派、出箭头去汇聚，不接常规链 */
+    if(src) arrow(src.x,src.y,cx,it.y);
+    src={x:cx,y:it.y+TL_CARD_H};
+  });
+  /* 节点卡片（agent 名在列头，卡内=任务+时长+简要结果+时刻） */
+  items.forEach(function(it){
+    if(it.kind==='ph') return;
+    if(it.kind==='ms'){
+      var g=it.grp, mid=msMid(it), cw=Math.min(230,W-TL_RAIL_W-8);
+      var dur=(g.endTs&&g.dispatchTs)?fmtDur(g.endTs-g.dispatchTs):'';
+      var lab='◇ 第 '+g.ord+' 批汇聚 · '+g.done+' 方交付'+(g.skip?(' · '+g.skip+' 跳过'):'')+(dur?(' · 总时长 '+dur):'');
+      h+='<g class="tl-ms"><rect x="'+(mid.x-cw/2)+'" y="'+it.y+'" width="'+cw+'" height="'+TL_MS_H+'" rx="6" fill="rgba(232,200,119,.07)" stroke="#e8c877" stroke-dasharray="5 3" opacity=".95"/>'
+        +'<title>'+esc('并行批次虚拟汇总节点：'+lab+(g.task?('\n批次任务：'+clipStr(g.task,120)):''))+'</title>'
+        +'<text x="'+mid.x+'" y="'+(it.y+TL_MS_H/2+4)+'" text-anchor="middle" fill="#e8c877">'+esc(clipStr(lab,Math.floor(cw/11)))+'</text></g>';
+      return;
+    }
+    var nd=it.nd, ni=it.ni;
+    var ix2=laneIdx[nd.seatId];
+    if(ix2==null) return;
+    var cx0=colX(ix2)+7, cy=it.y;
+    var col=TL_ROLE_COLOR[seatRoleOf(seats,nd.seatId)]||'#4f8cff';
+    if(it.kind==='run'){
+      var rid=view.tlRun.length;
+      var runTask=nd.batch?'并行交付':(TL_TASK[nd.phase]||'执行中');
+      view.tlRun.push({txtId:'tlrt'+rid,start:nd.start,task:runTask,stage:(nd.stage?turnStageLabel({stage:nd.stage}):'')});
+      h+='<g class="tl-run"><rect class="tl-box" x="'+cx0+'" y="'+cy+'" width="'+cardW+'" height="'+TL_CARD_H+'" rx="6" fill="rgba(79,140,255,.08)" stroke="#4f8cff" stroke-dasharray="5 3"/>'
+        +'<rect x="'+cx0+'" y="'+cy+'" width="3" height="'+TL_CARD_H+'" fill="'+col+'"/>'
+        +'<title>'+esc(seatName(seats,nd.seatId)+' 正在'+runTask+' · 思考进度 '+(nd.stage?turnStageLabel({stage:nd.stage}):'思考中'))+'</title>'
+        +'<text id="tlrt'+rid+'" x="'+(cx0+10)+'" y="'+(cy+20)+'" fill="#4f8cff" font-weight="600">'+esc(runTask+' · 已执行 '+fmtDur(m.now-nd.start)+(nd.stage?(' · '+turnStageLabel({stage:nd.stage})):''))+'</text>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+39)+'" fill="#a2abc0">尚未交付 · 已执行时长每秒跳动</text></g>';
+    } else {
+      var brief=(nd.msg?msgBodyText(nd.msg,seats):'');
+      var task=(it.kind==='skip'?'跳过发言':(MT_LABEL[nd.type]||TL_TASK[nd.phase]||'执行'));
+      var dur2=(nd.end!=null&&nd.start!=null)?fmtDur(nd.end-nd.start):'';
+      var clipN=Math.max(8,Math.floor((cardW-16)/11.5));
+      h+='<g class="tl-node" data-tln="'+ni+'">'
+        +'<rect class="tl-box" x="'+cx0+'" y="'+cy+'" width="'+cardW+'" height="'+TL_CARD_H+'" rx="6" fill="#1c2231" stroke="'+(it.kind==='skip'?'#4a5266':'#2a2f3d')+'"'+(it.kind==='skip'?' stroke-dasharray="4 3"':'')+'/>'
+        +'<rect x="'+cx0+'" y="'+cy+'" width="3" height="'+TL_CARD_H+'" fill="'+col+'"/>'
+        +'<title>'+esc(seatName(seats,nd.seatId)+' · '+task+(brief?('\n'+clipStr(brief,200)):''))+'</title>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+20)+'" font-weight="600" fill="'+(it.kind==='skip'?'#a2abc0':'#e6e9f0')+'">'+esc(task)+'</text>'
+        +'<text x="'+(cx0+cardW-8)+'" y="'+(cy+20)+'" text-anchor="end" fill="'+col+'">'+esc(dur2)+'</text>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+38)+'" fill="#a2abc0">'+esc(clipStr(brief,clipN))+'</text>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+50)+'" font-size="9.5" fill="#6b7690">'+esc((nd.end!=null?fmtTs(nd.end):'')+(nd.msg?(' · #'+nd.msg.seq):''))+'</text>'
+        +'</g>';
+    }
+  });
+  /* 左缘轨道小标记：预审 ◉ / 暂停 ⏸ / 纪要·表决 ▤（按时间插入对应行侧） */
+  m.marks.forEach(function(mk){
+    if(mk.kind==='milestone'||mk.kind==='phase') return;
+    var ry=null;
+    for(var k=0;k<items.length;k++){
+      var pk=items[k];
+      if((pk.kind==='done'||pk.kind==='skip')&&pk.nd&&pk.nd.end!=null&&pk.nd.end>=mk.ts){ ry=pk.y; break; }
+    }
+    if(ry==null){ var lastIt=items[items.length-1]; ry=lastIt?lastIt.y:(H-10); }
+    var glyph=mk.kind==='precheck'?'◉':(mk.kind==='pause'?'⏸':'▤');
+    var fill=mk.kind==='pause'?'#e0a23c':'#6b7690';
+    h+='<text x="'+(TL_RAIL_W/2)+'" y="'+(ry+15)+'" text-anchor="middle" fill="'+fill+'" font-size="10"><title>'+esc(mk.label+' · '+fmtClock(mk.ts))+'</title>'+glyph+'</text>';
+  });
+  h+='</svg></div></div>';
+  h+='<div class="dim xs" style="margin-top:6px">时间从上到下 · agent 各占一列'+(grouped?'（'+n+' 席 · 已按角色分组）':'')+' · 点击节点看详情 · ◇=批次汇聚</div></div>';
+  return h;
+}
+function closeTlModal(){ var mm=document.getElementById('tlModal'); if(mm) mm.remove(); }
+function openTlNodeModal(nd,seats){
+  closeTlModal();
+  var dd=view.lastDetailData||{}; var t=dd.table||{};
+  var lab=(nd.kind==='skip'?'跳过发言':(MT_LABEL[nd.type]||TL_TASK[nd.phase]||'执行'));
+  var dur=(nd.end!=null&&nd.start!=null)?fmtDur(nd.end-nd.start):'—';
+  var body='<div class="row">'+roleBadge(seatRoleOf(seats,nd.seatId))+'<b>'+esc(seatName(seats,nd.seatId))+'</b>'
+    +'<span class="badge phase">'+esc(phaseLabel(t.tableType,nd.phase||'review'))+'</span>'
+    +(nd.grp?('<span class="badge">第 '+nd.grp.ord+' 批并行</span>'):'')
+    +'<span class="dim">'+(nd.start!=null?fmtTs(nd.start):'')+(nd.end!=null?(' → '+fmtTs(nd.end)):'')+' · 用时 '+dur+'</span></div>';
+  if(nd.grp&&nd.grp.task) body+='<div class="kv"><span class="k">批次任务</span>'+esc(clipStr(nd.grp.task,160))+(nd.grp.blind?'（盲评：成员互不可见）':'')+'</div>';
+  if(nd.msg){
+    body+='<div class="sumcard" style="white-space:pre-wrap;margin-top:8px;max-height:46vh;overflow:auto">'+esc(msgBodyText(nd.msg,seats))+'</div>'
+      +'<div class="dim xs" style="margin-top:6px">会议记录 #'+nd.msg.seq+' · '+fmtTs(nd.msg.ts)+'</div>';
+  } else body+='<div class="sumcard dim" style="margin-top:8px">进行中节点尚无交付内容。</div>';
+  var mm=document.createElement('div');
+  mm.className='dmodal'; mm.id='tlModal';
+  mm.innerHTML='<div class="dbox" style="width:min(720px,94vw)">'
+    +'<div class="dhead"><b>'+esc(lab)+'</b><span style="flex:1"></span><button id="tlClose">关闭</button></div>'
+    +'<div class="dbody">'+body+'</div></div>';
+  mm.onclick=function(e){ if(e.target===mm) closeTlModal(); };
+  document.body.appendChild(mm);
+  document.getElementById('tlClose').onclick=closeTlModal;
+}
+/** 进行中节点 1s 跳动：只改运行卡的文字（按 id 定位），不重建 DOM；轮询重渲染后 id 重建自然接管 */
+function tlTick(){
+  if(view.mode!=='detail') return;
+  (view.tlRun||[]).forEach(function(r){
+    var txt=document.getElementById(r.txtId);
+    if(txt) txt.textContent=r.task+' · 已执行 '+fmtDur(Date.now()-r.start)+(r.stage?(' · '+r.stage):'');
+  });
+}
 function refreshWho(){
   var who=document.getElementById('whoArea'), la=document.getElementById('loginArea');
   closeAcctMenu();
@@ -1432,7 +1844,7 @@ function renderCreateForm(){
     }
     var d=dfltRole(tt);
     var opts=tt.roles.map(function(r){ return {v:r,t:(ROLE_LABEL[r]||r),d:'自建：我以'+(ROLE_LABEL[r]||r)+'身份入席直接参会'+(r===d?'（常用）':'')}; });
-    opts.push({v:'host',t:'主持人',d:'主持人建桌：我只管规则/资料/邀请与调度，不参与评审协作'});
+    opts.push({v:'host',t:'主持人',d:'主持人建桌：我只管规则/资料/邀请与调度（可回合内并行调度），不参与评审协作'});
     return opts;
   }
   function ctInvitable(){
@@ -1476,7 +1888,7 @@ function renderCreateForm(){
       ?'你将成为问询方（不占席位）：回答方就绪后你在本页开始问询、随时提问、结束时自动出问询纪要'
       :hosted
       ?(inq?'你将成为主持人（host）：只管规则/资料/邀请，问询方凭码就位后开始问询'
-           :'你将成为主持人（host）：只管建桌/规则/资料/邀请与调度，不参与评审协作')
+           :'你将成为主持人（host）：只管建桌/规则/资料/邀请与调度（会议中可把同身份席位并行派出），不参与评审协作')
       :'你将以'+(ROLE_LABEL[role]||role)+'席位入席参会';
     document.getElementById('ctSeatTitle').textContent = inq&&!hosted
       ?'问询方信息（不占席位，仅作显示名）'
@@ -1842,7 +2254,9 @@ function chatboxCardHtml(d,seats,mySeat,isAsker){
   var types=[];
   if(mySeat&&t.phase!=='closed') types.push(['supp','公开补充'],['priv','私有指令'],['hi','人工指令']);
   if(isAsker&&t.phase==='qa'&&!t.pause) types.unshift(['ask','提问']);
-  if(mySeat&&stage==='running'&&turn&&turn.seatId===d.mySeatId&&!t.pause) types.unshift(['proxy','代答']);
+  /* 代答：单席位发言权轮到本席，或活跃并行批次含本席（网页直接交付本阶段回合） */
+  var parMine=!!(t.parallelDispatch&&t.parallelDispatch.workers.indexOf(d.mySeatId)>=0&&(t.activeTurns||[]).some(function(x){ return x.seatId===d.mySeatId; }));
+  if(mySeat&&stage==='running'&&!t.pause&&((turn&&turn.seatId===d.mySeatId)||parMine)) types.unshift(['proxy',parMine?'交付本轮（并行批次）':'代答']);
   if(types.length){
     var cur=view.cmpType, hit=false, ti;
     for(ti=0;ti<types.length;ti++){ if(types[ti][0]===cur) hit=true; }
@@ -1855,7 +2269,8 @@ function chatboxCardHtml(d,seats,mySeat,isAsker){
       var g=x[0];
       h+='<div class="cmp-grp" data-grp="'+g+'"'+(g===cur?'':' style="display:none"')+'>';
       if(g==='proxy'){
-        h+='<h3>替我回答本轮（人工代答）</h3><div class="dim">'+esc(turn.taskHint||'')+'</div>'
+        var pxTurn=turn||((t.activeTurns||[]).filter(function(x){ return x.seatId===d.mySeatId; })[0]||null);
+        h+='<h3>'+(parMine?'交付本轮（并行任务）':'替我回答本轮（人工代答）')+'</h3><div class="dim">'+esc((pxTurn&&pxTurn.taskHint)||'')+'</div>'
           +'<div class="row" style="margin-top:6px"><select id="pxType"></select>'
           +'<select id="pxDecision" style="display:none"></select>'
           +'<select id="pxSeverity" style="display:none"><option>must</option><option selected>should</option><option>nice</option></select>'
@@ -1973,18 +2388,23 @@ function renderDetail(d){
   } else if(turn){
     h+='发言权：<b>'+esc(seatName(seats,turn.seatId))+'</b> —— '+esc(turn.taskHint||'');
     if(turn.pendingRequest) h+='<div class="dim">待处理请求：'+esc(turn.pendingRequest.title)+'</div>';
+  } else if(t.parallelDispatch&&(t.activeTurns||[]).length){
+    h+='并行批次（'+esc(phaseLabel(t.tableType,t.parallelDispatch.phase))+'）：<b>'+esc((t.activeTurns||[]).map(function(x){ return seatName(seats,x.seatId); }).join('、'))+'</b> 同时工作中 —— 各自交付本阶段回合消息，全员交付（或跳过）后汇聚回顺序轮转。';
   } else if(t.phase==='closed'){ h+='<span class="badge ok">会议已结束</span>'+(d.minutes?' <span class="dim">纪要已生成（见下方纪要区）</span>':''); }
   else if(t.phase==='human_intervention'){ h+='<span class="dim">等待人工介入（可在「会话」输入框以席位身份发送人工指令）</span>'; }
   else if(t.phase==='open'){
     if(stage==='ready') h+='<span class="badge ok">全员就绪</span> <span class="dim">等待'+(inqFlow?'问询方':'建桌人')+'在右侧面板点「▶ '+(inqFlow?'开始问询':'开始会议')+'」</span>';
     else{
-      h+='<span class="badge warn">准备中</span> <span class="dim">设定阶段：各席完成入桌设定并就绪'+(rolesOk?'':'（'+(flow==='collab'?'角色不齐备：还需协作者凭邀请码入席（至少 2 位）':'角色不齐备：还需提案方/评审方凭邀请码入席')+'）')+'</span>';
+      h+='<span class="badge warn">准备中</span> <span class="dim">设定阶段：各席完成入桌设定并就绪'+(rolesOk?'':'（'+rolesGap+'）')+'</span>';
       h+='<div class="dim" style="margin-top:4px">就绪进度：'+needSeats.filter(function(s){ return s.config&&s.config.ready; }).length+' / '+needSeats.length
         +(needSeats.length?(' — 未就绪：'+needSeats.filter(function(s){ return !(s.config&&s.config.ready); }).map(function(s){ return esc(s.name); }).join('、')):'')+'</div>';
     }
   }
   else { h+='<span class="dim">当前无发言权持有者（等待事件推进或人工介入）</span>'; }
   h+='</div></div></div>';
+
+  /* 执行时序图（左栏会话上方）：会议开始后按时间展示各方执行节点（并行并列+收口里程碑+进行中跳动） */
+  h+=timelineCardHtml(d,seats,t);
 
   /* 会话视图 chatbox（气泡流 + 输入聚合 composer）：置于席位与立场上方 */
   h+=chatboxCardHtml(d,seats,mySeat,isAsker);
@@ -2012,6 +2432,7 @@ function renderDetail(d){
       +(s.seatId===t.ownerSeat?'<span class="badge">建桌人</span>':'')
       +'<span class="sp"></span>'
       +'<span class="badge '+(s.status==='active'?'ok':'warn')+'">'+esc(s.status)+'</span>'
+      +(seatOff(s,t)?'<span class="badge err">已断开</span>':'')
       +(s.role==='host'?'<span class="badge">豁免就绪</span>':'<span class="badge '+(cfg.ready?'ok':'warn')+'">'+(cfg.ready?'已就绪':'未就绪')+'</span>')
       +sideToggleHtml(s.seatId,d,isAsker)
       +'</div>'
@@ -2037,6 +2458,11 @@ function renderDetail(d){
   h+='<div class="dcol dside">';
   /* 圆桌示意图（右栏顶部）：席位环绕（问询桌含问询方节点）+ 最后交付摘要 + 发言权思考中标记（>8 方折叠） */
   h+=roundDiagramHtml(d,seats,turn,isAsker);
+
+  /* 回合内并行调度面板（主持人 host 专属）：轮换阶段发起批次（或点名单个）；活跃批次看板+逐席跳过 */
+  if(mySeat&&mySeat.role==='host'&&stage!=='ended'&&PD_PHASES[t.phase]){
+    h+=parallelCtlHtml(d,seats,t);
+  }
 
   /* ---- 我的席位面板：按阶段/状态条件渲染 ---- */
   if(mySeat){
@@ -2107,6 +2533,11 @@ function renderDetail(d){
         }
       } else if(turn&&turn.seatId===d.mySeatId){
         h+='<div class="section dim" style="margin-top:10px">发言权在本席 —— 可在左侧「会话」输入框选「代答」替 agent 回答本轮（'+esc(turn.taskHint||'')+'）。</div>';
+      } else if(t.parallelDispatch&&(t.activeTurns||[]).some(function(x){ return x.seatId===d.mySeatId; })){
+        h+='<div class="section dim" style="margin-top:10px">本席位在并行批次中 —— 可在左侧「会话」输入框选「交付本轮（并行批次）」直接交付本阶段回合（agent 也会自行交付，先到先计入）。</div>';
+      } else if(t.parallelDispatch){
+        var parNames=(t.activeTurns||[]).map(function(x){ return esc(seatName(seats,x.seatId)); }).join('、');
+        h+='<div class="section dim" style="margin-top:10px">'+(t.parallelDispatch.workers.indexOf(d.mySeatId)>=0?'本批次已交付：等待其他成员交付与批次汇聚。':'并行批次执行中：'+(parNames||'无')+' 正在工作中。')+'</div>';
       } else {
         h+='<div class="section dim" style="margin-top:10px">'+(turn?('当前发言权：'+esc(seatName(seats,turn.seatId))+'。轮到本席时，「会话」输入框会出现「代答」。'):'等待会议推进。')+'</div>';
       }
@@ -2349,6 +2780,23 @@ function renderDetail(d){
   if(rtMore) rtMore.onclick=function(){ view.rtExpanded=!view.rtExpanded; rerenderDetail(); };
   var rtFold=document.getElementById('rtFold');
   if(rtFold) rtFold.onclick=function(){ view.rtExpanded=false; rerenderDetail(); };
+  /* ---- 绑定：执行时序图（折叠/节点详情弹窗/横向贴右——上翻阅读则保持原位，同会话贴底模式） ---- */
+  var tlFoldBtn=document.getElementById('tlFold');
+  if(tlFoldBtn) tlFoldBtn.onclick=function(){ view.tlOpen=(view.tlOpen===false); rerenderDetail(); };
+  app.querySelectorAll('.tl-node').forEach(function(el){
+    el.onclick=function(){
+      var ni=parseInt(el.getAttribute('data-tln'),10);
+      var nd=(view.tlModel&&view.tlModel.nodes[ni]);
+      if(nd) openTlNodeModal(nd,seats);
+    };
+  });
+  var tlScroll=document.getElementById('tlScroll');
+  if(tlScroll){
+    if(view.tlStick!==false) tlScroll.scrollTop=tlScroll.scrollHeight; /* 纵向时序：贴底跟随最新（上翻即停） */
+    tlScroll.addEventListener('scroll',function(){
+      view.tlStick=(tlScroll.scrollTop+tlScroll.clientHeight>=tlScroll.scrollHeight-24);
+    });
+  }
   /* ---- 绑定：会话视图筛选芯片（纯视图操作） ---- */
   app.querySelectorAll('button[data-cf]').forEach(function(b){
     b.onclick=function(){ view.chatFilter=b.getAttribute('data-cf')||'all'; rerenderDetail(); };
@@ -2632,6 +3080,32 @@ function renderDetail(d){
       .then(function(){ toast('问询已结束，纪要已生成'); view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ document.getElementById('inqErr').textContent='结束失败：'+e.message; });
   };
+
+  /* ---- 绑定：回合内并行调度面板（主持人 host） ---- */
+  var pdSend=document.getElementById('pdSend');
+  if(pdSend){
+    pdSend.onclick=function(){
+      var errEl=document.getElementById('pdErr'); errEl.textContent='';
+      var ws=[]; document.querySelectorAll('.pdW:checked').forEach(function(c){ ws.push(c.value); });
+      if(!ws.length){ errEl.textContent='至少勾选 1 个席位'; return; }
+      var vis=document.querySelector('input[name="pdVis"]:checked');
+      var payload={ workers:ws, visibility:(vis?vis.value:'open') };
+      var task=document.getElementById('pdTask').value.trim(); if(task) payload.task=task;
+      var note=document.getElementById('pdNote').value.trim(); if(note) payload.note=note;
+      api('POST','/api/tables/'+view.tableId+'/my/message',{type:'PARALLEL_DISPATCH',payload:payload})
+        .then(function(){ toast(ws.length>1?('并行批次已发起：'+ws.length+' 方同时执行'):('已点名 '+ws.length+' 个席位执行')); view.dirtyPanel=false; loadDetail(); })
+        .catch(function(e){ errEl.textContent='发起失败：'+e.message; });
+    };
+  }
+  document.querySelectorAll('.pdSkip').forEach(function(b){
+    b.onclick=function(){
+      var nm=b.getAttribute('data-name')||'该席位';
+      if(!window.confirm('跳过 '+nm+' 在本批次的交付？该席本批次视为已处理（不可恢复）。')) return;
+      api('POST','/api/tables/'+view.tableId+'/my/skip-turn',{seatId:b.getAttribute('data-sid'),reason:'主持人跳过本批次交付'})
+        .then(function(){ toast('已跳过 '+nm+' 的本批次交付'); view.dirtyPanel=false; loadDetail(); })
+        .catch(function(e){ toast('跳过失败：'+e.message); });
+    };
+  });
 
   /* ---- 绑定：代答（会议中持发言权） ---- */
   var pxType=document.getElementById('pxType');
@@ -2954,6 +3428,8 @@ function openTable(id){
   view.dirtyPanel=false; view.cfgEditing=false; view.rtExpanded=false;
   view.chatFilter='all'; view.cmpType=''; view.seatOpen={}; view.chatAtBottom=true; view.cbPrevTop=0;
   view.chatSides={}; view.sidesSaving=0;
+  view.tlOpen=true; view.tlStick=true; view.tlModel=null; view.tlRun=[];
+  if(!view.tlTimer) view.tlTimer=setInterval(tlTick,1000); /* 执行时序图：进行中节点每秒跳动（mode 守卫，全局一次） */
   clearInterval(view.timer);
   var want='#/table/'+id;
   if(location.hash!==want) location.hash=want; // 详情页 URL（刷新/分享/后退可用）；先定好 view 再写 hash，hashchange→syncRoute 幂等不重入

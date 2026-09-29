@@ -49,6 +49,14 @@ export interface SeatInfo {
 /** 席位公开投影（他席视角）：config 剥掉立场/风格四字段——立场/风格仅本席与系统观察员可见（见 engine.seatPublicView） */
 export type PublicSeat = Omit<SeatInfo, "config"> & { config: Omit<SeatConfig, "stancePreset" | "stance" | "stylePreset" | "style"> };
 
+/** tableInfo 投影席位的派生字段（不落库，序列化时计算）：
+ *  online = 席位心跳在线（≤5 分钟内有过席位 HTTP 访问，观察端「已断开」显示依据；left 恒 false）；
+ *  lastSeenAt = 最后一次席位 HTTP 访问时间（touchSeat 刷新）。旧端读取时字段可缺省（undefined 按在线处理）。 */
+export interface SeatDerived {
+  online?: boolean;
+  lastSeenAt?: number;
+}
+
 export interface SeatConfig {
   /** 选用的立场预设 ID（见 STANCE_PRESETS），可为空（纯自定义） */
   stancePreset?: string;
@@ -511,6 +519,8 @@ export type MsgType =
   | "DOC_UPLOADED"
   // 收敛
   | "CONSENSUS_VOTE" | "CONSENSUS_RESULT" | "MINUTES"
+  // 回合内并行调度（hosted 桌主持人专属：把轮换阶段中未发言的同身份席位同时派出或点名单个）
+  | "PARALLEL_DISPATCH"
   // 会议暂停（服务器专属系统消息，席位不可直发）
   | "MEETING_PAUSED" | "MEETING_RESUMED" | "PAUSE_REQUESTED"
   // 人工
@@ -565,11 +575,19 @@ export interface TableInfoPayload {
   rules: string;
   ownerSeat: string;
   roundNo: number; deadlockCount: number;
-  seats: (SeatInfo | PublicSeat)[];
+  seats: ((SeatInfo | PublicSeat) & SeatDerived)[];
   artifacts: { artifactId: string; name: string; ownerSeat: string; latestVersion: number; lockedBy: string | null }[];
   activeTurn: TurnGrantPayload | null;
+  /** 全量发言权（顺序轮转 0/1 条；活跃并行批次 = 批次未交付成员各 1 条。多权并存时 activeTurn 为 null） */
+  activeTurns: TurnGrantPayload[];
   /** 当前发言权席位的思考进度（旁路上报投影，与 activeTurn 轮次匹配才非空；旧 skill 不上报时为 null） */
   turnProgress: { stage: TurnProgressStage; updatedAt: number } | null;
+  /** 活跃并行批次中各成员的思考进度（旁路上报投影，按 (席位,阶段,轮次) 匹配；无批次时恒空数组） */
+  workerProgress: { seatId: string; stage: TurnProgressStage; updatedAt: number }[];
+  /** 活跃并行批次（host 调度后未汇聚完）；无批次为 null */
+  parallelDispatch: ParallelDispatchState | null;
+  /** 当前阶段可并行调度的未发言席位（host 调度面板勾选依据；非轮换阶段为空数组） */
+  pendingSpeakers: string[];
   /** hosted 桌的预审调度层状态（self 桌恒为 idle） */
   precheck: PrecheckState;
   /** 会议暂停叠加态（进行中可暂停；恢复后清空，phase 始终保留原阶段） */
@@ -591,6 +609,24 @@ export interface PauseInfo {
   requestedBySeat?: string;
   requestedByName?: string;
   requestedByRole?: string;
+}
+
+/** PARALLEL_END 载荷已随第 2 轮设计移除（回合汇聚即收，无独立收束动作） */
+
+/** 活跃并行批次投影（TableInfoPayload.parallelDispatch）：事件溯源推导，批次汇聚后回 null */
+export interface ParallelDispatchState {
+  /** 触发调度的 PARALLEL_DISPATCH 消息 */
+  msgId: string;
+  phase: Phase;
+  roundNo: number;
+  /** 批次成员 */
+  workers: string[];
+  visibility: "open" | "blind";
+  /** 调度任务说明（叠加在本阶段任务之上） */
+  task: string;
+  note: string;
+  /** 已交付成员（本阶段回合消息已提交） */
+  submitted: string[];
 }
 
 /** 预审调度层状态：预审进行中 / 点名补充指令挂起 / 空闲 */
@@ -665,6 +701,23 @@ export interface TurnGrantPayload {
 }
 export interface TurnReleasePayload { reason?: string; pass?: boolean; }
 export interface PhaseChangePayload { from: Phase; to: Phase; reason: string; }
+
+// ---------- 回合内并行调度（hosted 桌轮换阶段） ----------
+
+/** PARALLEL_DISPATCH 载荷（主持人发，轮换阶段）：把当前阶段未发言的可轮换席位同时派出（≥2 并行）或点名单个；
+ *  批次全员交付/被跳过即汇聚（总-分-总），回默认顺序轮转 */
+export interface ParallelDispatchPayload {
+  /** 本批次执行方席位（须为当前阶段未发言的可轮换席位；至少 1 席） */
+  workers: string[];
+  /** 调度任务说明（叠加在本阶段任务之上的额外指引，可选） */
+  task?: string;
+  /** 结果互见：open=交付即广播（缺省）；blind=批次成员互不可见，批次汇聚后放开 */
+  visibility?: "open" | "blind";
+  /** 调度备注（补充说明/验收口径等） */
+  note?: string;
+  /** 每席定向提示（如不同题目、差异化要求） */
+  perWorker?: { seatId: string; hint: string }[];
+}
 
 /** TURN_SKIPPED 载荷（服务器专属系统消息）：控制人（建桌人/主持人/系统管理员，问询桌含问询方）
  *  跳过当前回合发言人——该席本轮该任务视为已处理（预审点名=按原提交放行；qa=该席对该问题弃答） */
@@ -933,6 +986,8 @@ export type AuditEvent =
   | "turn_skipped" | "precheck_toggle"
   /** 管理台（systemadmin）事件 */
   | "admin_set_role" | "admin_set_disabled" | "admin_reissue_user_token" | "admin_close" | "admin_human" | "admin_delete_table"
+  /** 回合内并行调度：host 发起批次 / 批次汇聚（全员交付或跳过） */
+  | "parallel_dispatch" | "parallel_batch_done"
   /** 网页登录链接：agent 生成 / 持有人兑换（一次性 + 短时效；只记元信息不记 token） */
   | "login_link_created" | "login_link_exchanged";
 

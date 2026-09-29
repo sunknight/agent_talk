@@ -13,7 +13,7 @@ import {
   type ArtifactPublishedPayload, type ArtifactVersion, type AuditEvent, type AuditRecord,
   type ConsensusResultPayload, type DataScopeItem, type DocUploadedPayload, type DocVisibility, type HostPrereviewPayload,
   type HumanInputPayload, type HumanRulingPayload, type MeetingPausedPayload, type MeetingResumedPayload,
-  type MsgType, type OwnerDirectiveView, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type Phase, type PhaseChangePayload,
+  type MsgType, type OwnerDirectiveView, type ParallelDispatchPayload, type PauseInfo, type PauseRequestedPayload, type PauseRequestView, type ParallelDispatchState, type Phase, type PhaseChangePayload,
   type PrecheckState, type PublicSeat, type QuestionPayload, type ReplyPayload, type RequestPayload, type RequestResponsePayload, type ResponsePayload,
   type ReviewCommentPayload, type Role, type SeatDocumentMeta, type SeatInfo, type SupplementPayload,
   type TableChange, type TableChangesPayload, type TableDocumentMeta, type TableType, type TableTypeDef,
@@ -32,26 +32,38 @@ export class ApiError extends Error {
 export type ServerSeat = SeatInfo & { lastSeenAt?: number };
 
 const SEAT_ABSENT_MS = 120_000;
+/** 观察端「已断开」显示阈值：席位连续无 HTTP 访问超此值判离线。比 SEAT_ABSENT_MS（死锁规避）长——
+ *  容忍持发言权的旧 skill agent 认真思考期间数分钟不发请求 */
+const SEAT_OFFLINE_MS = 5 * 60_000;
+/** observerDetail 网页保活节流：详情页 5s 一轮询，至多 10s 写一次心跳，避免 SQLite 写放大 */
+const OBSERVER_TOUCH_THROTTLE_MS = 10_000;
 const RATE_WINDOW_MS = 10_000;
 const RATE_MAX = 8;
 /** 资料文档上限：单份 ≤5MB（与产物一致）；每席 20 份 / 每桌 100 份防滥用 */
 const DOC_MAX_BYTES = 5 * 1024 * 1024;
 const DOCS_PER_SEAT = 20;
 const DOCS_PER_TABLE = 100;
-/** turn 消费型消息：必须持有当前发言权才能发（发出后过预审调度层，全桌型一致；问询桌 qa 阶段无此类消息，天然不预审） */
+/** turn 消费型消息：必须持有当前发言权才能发（发出后过预审调度层；问询桌 qa 阶段无此类消息，天然不预审）。
+ *  PARALLEL_DISPATCH 是 host 的调度控制消息，不消费发言权（与 TURN_SKIPPED 同类的控制通道） */
 const TURN_BOUND: Partial<Record<MsgType, boolean>> = {
   STATEMENT: true, REVIEW_COMMENT: true, RESPONSE: true, RESPOND_REQUEST: true, CONSENSUS_VOTE: true,
   SUPPLEMENT: true,
 };
-/** 各阶段接受的会议消息（通用类型另见 COMMON_TYPES） */
+/** 各阶段接受的会议消息（通用类型另见 COMMON_TYPES）；PARALLEL_DISPATCH=host 回合内并行调度（轮换阶段可用） */
 const PHASE_ALLOWS: Partial<Record<Phase, MsgType[]>> = {
   open: [],
-  statements: ["STATEMENT", "SUPPLEMENT"],
-  review: ["REVIEW_COMMENT", "REQUEST", "SUPPLEMENT"],
-  response: ["RESPONSE", "REQUEST", "SUPPLEMENT"],
+  statements: ["STATEMENT", "SUPPLEMENT", "PARALLEL_DISPATCH"],
+  review: ["REVIEW_COMMENT", "REQUEST", "SUPPLEMENT", "PARALLEL_DISPATCH"],
+  response: ["RESPONSE", "REQUEST", "SUPPLEMENT", "PARALLEL_DISPATCH"],
   execution: ["RESPOND_REQUEST", "REQUEST", "SUPPLEMENT"],
-  convergence: ["CONSENSUS_VOTE", "SUPPLEMENT"],
+  convergence: ["CONSENSUS_VOTE", "SUPPLEMENT", "PARALLEL_DISPATCH"],
   human_intervention: [],
+};
+/** 可并行调度的轮换阶段（同身份席位顺序轮转处；qa=问询方驱动、execution=请求驱动，不参与） */
+const DISPATCHABLE_PHASES: Phase[] = ["statements", "review", "response", "convergence"];
+/** 各轮换阶段的回合提交消息（并行批次的「已交付」判定口径） */
+const PHASE_SUBMIT_TYPE: Partial<Record<Phase, MsgType>> = {
+  statements: "STATEMENT", review: "REVIEW_COMMENT", response: "RESPONSE", convergence: "CONSENSUS_VOTE",
 };
 /** 任何活跃阶段都允许的通用类型（HUMAN_RULING 不在其中：仅人工介入阶段 + 人工通道可发，见 postMessage） */
 const COMMON_TYPES: MsgType[] = ["QUESTION", "REPLY", "HUMAN_INPUT", "ESCALATE"];
@@ -115,7 +127,7 @@ export class Hub {
   /** 预审进行中的桌（临界区：预审结论落地前不授出发言权；全桌型一致） */
   private precheckInFlight = new Set<string>();
   /** 思考进度旁路记录：tableId → 最近一次上报（不落库、不进消息流，仅观察端展示态） */
-  private turnProgress = new Map<string, { seatId: string; phase: Phase; roundNo: number; stage: TurnProgressStage; ts: number }>();
+  private turnProgress = new Map<string, Map<string, { phase: Phase; roundNo: number; stage: TurnProgressStage; ts: number }>>();
   /** 预审器（PRECHECK_PROVIDER 选择：deepseek 缺省 / jev 分层；测试可注入） */
   private readonly precheck: PrecheckFn;
 
@@ -629,48 +641,79 @@ export class Hub {
    *  引擎内部消费（就绪判定/角色统计）只读 ready/role/scope，不受剥离影响 */
   tableInfo(tableId: string, viewer?: { seatId?: string | null; admin?: boolean }): TableInfoPayload {
     const meta = this.requireTable(tableId);
-    const seats = this.store.getSeats(tableId).map((s) =>
-      viewer && (viewer.admin || (viewer.seatId && s.seatId === viewer.seatId)) ? s : this.seatPublicView(s));
-    const artifacts = this.store.getArtifacts(tableId).map((a) => ({
-      artifactId: a.artifactId, name: a.name, ownerSeat: a.ownerSeat,
-      latestVersion: a.versions.length, lockedBy: a.lockedBy,
-    }));
-    const activeTurn = this.computeTurn(tableId);
+    const seats = this.store.getSeats(tableId).map((s) => {
+      const view = viewer && (viewer.admin || (viewer.seatId && s.seatId === viewer.seatId)) ? s : this.seatPublicView(s);
+      return { ...view, online: this.seatOnline(s), lastSeenAt: (s as ServerSeat).lastSeenAt ?? s.joinedAt };
+    });
+    const artifacts = this.store.getArtifacts(tableId)
+      .filter((a) => !this.blindHiddenArtifact(tableId, a.artifactId, viewer?.seatId ?? null))
+      .map((a) => ({
+        artifactId: a.artifactId, name: a.name, ownerSeat: a.ownerSeat,
+        latestVersion: a.versions.length, lockedBy: a.lockedBy,
+      }));
+    const activeTurns = this.computeTurns(tableId);
+    // activeTurn 保留单席位语义（旧客户端/观察端单权展示沿用）；多权并存（活跃并行批次）时为 null、全量看 activeTurns
+    const activeTurn = activeTurns.length === 1 ? activeTurns[0] : null;
+    const dispatch = this.activeDispatchOf(tableId);
+    const dispatchState: ParallelDispatchState | null = dispatch ? {
+      msgId: dispatch.msgId, phase: dispatch.phase, roundNo: dispatch.roundNo,
+      workers: dispatch.workers, visibility: dispatch.visibility, task: dispatch.task, note: dispatch.note,
+      submitted: [...dispatch.submitted],
+    } : null;
     return {
       tableId, topic: meta.topic, template: meta.template, phase: meta.phase, mode: meta.mode,
       tableType: meta.tableType,
       precheckEnabled: meta.precheckEnabled !== false,
       goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, ownerSeat: meta.ownerSeat,
       roundNo: meta.roundNo, deadlockCount: meta.deadlockCount, seats, artifacts,
-      activeTurn,
+      activeTurn, activeTurns,
       turnProgress: this.turnProgressOf(tableId, activeTurn),
+      workerProgress: this.workerProgressOf(tableId, activeTurns),
+      parallelDispatch: dispatchState,
+      pendingSpeakers: this.pendingSpeakersOf(tableId).map((s) => s.seatId),
       precheck: this.precheckState(tableId),
       pause: (meta.pause ?? null) as PauseInfo | null,
     };
   }
 
   /** 思考进度旁路上报（agent 本回合工作中不定时调用）：只收枚举；仅当前发言权持有者可记录，
-   *  记录按 (seatId, phase, roundNo) 与 activeTurn 匹配才投影——turn 消费/轮转后自然失效，旧 skill 不上报则恒为 null */
+   *  记录按 (seatId, phase, roundNo) 与本席发言权匹配才投影——turn 消费/轮转后自然失效，旧 skill 不上报则恒 null。
+   *  按席位分桶存储（并行桌多席同时工作中各自留痕，单席位桌同桶退化为一席） */
   reportTurnProgress(tableId: string, seat: ServerSeat, stageRaw: string): { recorded: boolean } {
     this.requireTable(tableId);
     const stage = TURN_PROGRESS_STAGES.find((s) => s === stageRaw);
     if (!stage) throw new ApiError(422, "bad_payload", `stage 必须是 ${TURN_PROGRESS_STAGES.join(" / ")} 之一`);
     this.touchSeat(seat, tableId);
-    const turn = this.computeTurn(tableId);
-    if (!turn || turn.seatId !== seat.seatId) return { recorded: false };
-    const prev = this.turnProgress.get(tableId);
-    if (prev && prev.seatId === seat.seatId && prev.phase === turn.phase && prev.roundNo === turn.roundNo
+    const turns = this.computeTurns(tableId);
+    const mine = turns.find((t) => t.seatId === seat.seatId);
+    if (!mine) return { recorded: false };
+    const bySeat = this.turnProgress.get(tableId) ?? new Map<string, { phase: Phase; roundNo: number; stage: TurnProgressStage; ts: number }>();
+    const prev = bySeat.get(seat.seatId);
+    if (prev && prev.phase === mine.phase && prev.roundNo === mine.roundNo
       && Date.now() - prev.ts < TURN_PROGRESS_THROTTLE_MS) return { recorded: false };
-    this.turnProgress.set(tableId, { seatId: seat.seatId, phase: turn.phase, roundNo: turn.roundNo, stage, ts: Date.now() });
+    bySeat.set(seat.seatId, { phase: mine.phase, roundNo: mine.roundNo, stage, ts: Date.now() });
+    this.turnProgress.set(tableId, bySeat);
     return { recorded: true };
   }
 
   /** 进度投影：与当前发言权（席位+阶段+轮次）匹配才输出，否则 null（观察端回落「思考中」） */
   private turnProgressOf(tableId: string, turn: TurnGrantPayload | null): { stage: TurnProgressStage; updatedAt: number } | null {
-    const rec = this.turnProgress.get(tableId);
-    if (!turn || !rec) return null;
-    if (rec.seatId !== turn.seatId || rec.phase !== turn.phase || rec.roundNo !== turn.roundNo) return null;
+    if (!turn) return null;
+    const rec = this.turnProgress.get(tableId)?.get(turn.seatId);
+    if (!rec || rec.phase !== turn.phase || rec.roundNo !== turn.roundNo) return null;
     return { stage: rec.stage, updatedAt: rec.ts };
+  }
+
+  /** 并行进度投影：parallel 阶段各执行方（与各自发言权的 阶段+轮次 匹配）的思考进度数组 */
+  private workerProgressOf(tableId: string, turns: TurnGrantPayload[]): { seatId: string; stage: TurnProgressStage; updatedAt: number }[] {
+    const bySeat = this.turnProgress.get(tableId);
+    if (!bySeat) return [];
+    const out: { seatId: string; stage: TurnProgressStage; updatedAt: number }[] = [];
+    for (const t of turns) {
+      const rec = bySeat.get(t.seatId);
+      if (rec && rec.phase === t.phase && rec.roundNo === t.roundNo) out.push({ seatId: t.seatId, stage: rec.stage, updatedAt: rec.ts });
+    }
+    return out;
   }
 
   /** 预审调度层状态投影（全桌型一致；问询桌无回合提交，恒为 idle） */
@@ -691,6 +734,13 @@ export class Hub {
     return seat.status === "active" && Date.now() - last <= SEAT_ABSENT_MS;
   }
 
+  /** 席位在线判定（观察端「已断开」显示）：left 恒离线；其余按 SEAT_OFFLINE_MS 心跳新鲜度 */
+  private seatOnline(seat: SeatInfo): boolean {
+    if (seat.status === "left") return false;
+    const last = (seat as ServerSeat).lastSeenAt ?? seat.joinedAt;
+    return Date.now() - last <= SEAT_OFFLINE_MS;
+  }
+
   async poll(tableId: string, seat: ServerSeat, since: number, waitMs: number): Promise<PollResult> {
     this.requireTable(tableId);
     this.touchSeat(seat, tableId);
@@ -698,10 +748,10 @@ export class Hub {
     const safeWait = Number.isFinite(waitMs) ? Math.max(0, waitMs) : 0;
     const deadline = Date.now() + safeWait;
     for (;;) {
-      const messages = this.store.getMessagesSince(tableId, since);
+      const messages = this.visibleMessagesFor(tableId, this.store.getMessagesSince(tableId, since), seat.seatId);
       const ownerDirectives = this.pendingOwnerDirectives(tableId, seat.seatId);
       const table = this.tableInfo(tableId, { seatId: seat.seatId });
-      const yourTurn = table.activeTurn && table.activeTurn.seatId === seat.seatId ? table.activeTurn : null;
+      const yourTurn = table.activeTurns.find((t) => t.seatId === seat.seatId) ?? null;
       const myTask = this.myTaskOf(table, seat, yourTurn);
       if (messages.length > 0 || ownerDirectives.length > 0 || Date.now() >= deadline) {
         return {
@@ -725,14 +775,14 @@ export class Hub {
     return {
       table: this.tableInfo(tableId, { seatId: seat.seatId }),
       documents: this.listDocuments(tableId, seat.seatId) as SeatDocumentMeta[],
-      changes: this.changesOf(tableId, since),
+      changes: this.changesOf(tableId, since, seat.seatId),
       ownerDirectives: this.pendingOwnerDirectives(tableId, seat.seatId),
       now: Date.now(),
     };
   }
 
-  private changesOf(tableId: string, since: number): TableChange[] {
-    return this.store.getMessagesSince(tableId, since).map((m) => this.toChange(m));
+  private changesOf(tableId: string, since: number, viewerSeatId?: string | null): TableChange[] {
+    return this.visibleMessagesFor(tableId, this.store.getMessagesSince(tableId, since), viewerSeatId ?? null).map((m) => this.toChange(m));
   }
 
   private toChange(m: StoredMsg): TableChange {
@@ -822,6 +872,19 @@ export class Hub {
       }
       return "已就绪，等待建桌人开始会议";
     }
+    // 活跃并行批次的待办提示（成员已交付/主持人等待汇聚）
+    const batch = table.parallelDispatch;
+    if (batch) {
+      if (seat.role === "host" || table.ownerSeat === seat.seatId) {
+        return `并行批次执行中：${batch.submitted.length}/${batch.workers.length} 方已交付，等待全员汇聚（滞留方可逐席跳过；汇聚后回默认顺序轮转）`;
+      }
+      if (batch.workers.includes(seat.seatId) && !batch.submitted.includes(seat.seatId)) {
+        return yourTurn ? yourTurn.taskHint : "本席位在并行批次中：按任务独立交付本阶段回合消息";
+      }
+      if (batch.workers.includes(seat.seatId)) {
+        return "本批次已交付：等待其他成员交付与批次汇聚";
+      }
+    }
     return yourTurn ? yourTurn.taskHint : null;
   }
 
@@ -866,9 +929,9 @@ export class Hub {
 
     this.checkPhaseRules(meta, seat, type, payload, extraFlags);
     if (TURN_BOUND[type]) {
-      const turn = this.computeTurn(tableId);
-      if (!turn || turn.seatId !== seat.seatId) {
-        throw new ApiError(409, "not_your_turn", `当前发言权：${turn ? turn.seatId : "无（阶段未就绪）"}；消息类型 ${type} 需持有发言权`);
+      const turns = this.computeTurns(tableId);
+      if (!turns.some((t) => t.seatId === seat.seatId)) {
+        throw new ApiError(409, "not_your_turn", `当前发言权：${turns.map((t) => t.seatId).join("、") || "无（阶段未就绪）"}；消息类型 ${type} 需持有发言权`);
       }
     }
     // 点名期：发言权在被点名席，且回合型消息只接受其 SUPPLEMENT 提交（讨论类消息不受限；全桌型一致）
@@ -882,6 +945,8 @@ export class Hub {
     if (respondPlan) for (const sp of respondPlan) this.precheckRequestResponse(tableId, seat, sp);
     if (type === "SUPPLEMENT") this.precheckSupplement(tableId, seat, payload as SupplementPayload);
 
+    // 活跃并行批次快照（入库前）：本条回合提交若使批次汇聚，落库后广播（见副作用段）
+    const batchBefore = TURN_BOUND[type] && PHASE_SUBMIT_TYPE[meta.phase] === type ? this.activeDispatchOf(tableId) : null;
     // 注入扫描：命中不拦截，但打警示标记供端侧（skill/人）处置；extraFlags（如网页人工代答）一并合入
     const injectionHits = scanInjection(payload);
     const flags = injectionHits.length > 0
@@ -897,6 +962,16 @@ export class Hub {
     if (type === "RESPONSE") this.deriveRequests(tableId, seat, payload as ResponsePayload);
     if (respondPlan) for (const sp of respondPlan) this.applyRequestResponse(tableId, sp);
     if (type === "SUPPLEMENT") this.closeDirective(tableId, payload as SupplementPayload);
+    if (type === "PARALLEL_DISPATCH") {
+      this.audit(tableId, seat.seatId, "parallel_dispatch", {
+        phase: meta.phase, roundNo: meta.roundNo, workers: (payload as ParallelDispatchPayload).workers,
+        visibility: (payload as ParallelDispatchPayload).visibility === "blind" ? "blind" : "open",
+      });
+    }
+    // 批次汇聚（总）：本条回合提交使活跃并行批次全员交付/跳过 → 广播汇聚结果
+    if (batchBefore && batchBefore.workers.includes(seat.seatId) && !this.activeDispatchOf(tableId)) {
+      this.announceBatchDone(tableId, batchBefore, seat.seatId);
+    }
     if (type === "ESCALATE") this.enterHumanMode(tableId, `席位 ${seat.name} 申请人工介入：${String((payload as { reason?: string }).reason ?? "")}`);
     if (type === "HUMAN_INPUT") this.audit(tableId, seat.seatId, "human_input", { toSeat: (payload as { toSeat?: string }).toSeat ?? "all" });
     if (type === "HUMAN_RULING") this.applyRuling(tableId, payload as HumanRulingPayload);
@@ -904,8 +979,10 @@ export class Hub {
 
     // 预审调度层（全桌型一致，self/hosted 均过）：消费发言权的回合提交，在原调度推导/阶段推进之前过一道预审；
     // pass/skipped → 照常 maybeAdvance；redirect → 落点名指令并压住推进，等被点名席 SUPPLEMENT。
-    // 两个豁免：本桌预审已关闭（meta.precheckEnabled，控制人可随时切换）；人工代答（human_proxied，持有人亲手写的回合内容不经系统预审）。
-    if (TURN_BOUND[type] && meta.precheckEnabled !== false && !(extraFlags ?? []).includes("human_proxied")) {
+    // 三个豁免：本桌预审已关闭（meta.precheckEnabled，控制人可随时切换）；人工代答（human_proxied，持有人亲手写的回合内容不经系统预审）；
+    // 活跃并行批次成员的回合提交不经系统预审（调度方汇聚时人工把关；且预审单飞锁与批次并发提交天然冲突）。
+    const inActiveBatch = !!batchBefore && batchBefore.workers.includes(seat.seatId);
+    if (TURN_BOUND[type] && !inActiveBatch && meta.precheckEnabled !== false && !(extraFlags ?? []).includes("human_proxied")) {
       await this.runPrecheck(tableId, seat, msg);
       return msg;
     }
@@ -1164,6 +1241,28 @@ export class Hub {
         if (doc.visibility !== "shared") throw new ApiError(403, "doc_private", "评审意见不能指向他席私有文档（只可评审共享资料）");
       }
     }
+    // 回合内并行调度（PARALLEL_DISPATCH）：仅主持人（host）在轮换阶段可发；
+    // 同一时间只允许一个活跃批次；workers 须为当前阶段未发言的可轮换席位（同身份集合子集，单人=点名单个）
+    if (type === "PARALLEL_DISPATCH") {
+      if (role !== "host") {
+        throw new ApiError(403, "role", "并行调度仅主持人（host）可发（建并行调度能力请用主持人建桌）");
+      }
+      if (!DISPATCHABLE_PHASES.includes(meta.phase)) {
+        throw new ApiError(409, "wrong_phase", `阶段 ${meta.phase} 不接受并行调度（仅陈述/评审/回应/表决等轮换阶段可用）`);
+      }
+      if (this.activeDispatchOf(meta.tableId)) {
+        throw new ApiError(409, "dispatch_active", "已有并行批次在执行中：等本批次汇聚（或逐席跳过）后再发起新调度");
+      }
+      const dp = payload as ParallelDispatchPayload;
+      const pendingIds = new Set(this.pendingSpeakersOf(meta.tableId).map((s) => s.seatId));
+      const badWorker = dp.workers.find((w) => !pendingIds.has(w));
+      if (badWorker) {
+        const s = this.store.getSeat(meta.tableId, badWorker);
+        throw new ApiError(422, "bad_workers", `workers 含当前阶段不可调度的席位：${s?.name ?? badWorker}（须为本阶段未发言的可轮换席位）`);
+      }
+      const badHint = (dp.perWorker ?? []).find((x) => !dp.workers.includes(x.seatId));
+      if (badHint) throw new ApiError(422, "bad_per_worker", `perWorker 定向提示目标不在本批次 workers 名单内：${badHint.seatId}`);
+    }
   }
 
   private checkRate(tableId: string, seat: ServerSeat) {
@@ -1384,6 +1483,195 @@ export class Hub {
       default:
         return null;
     }
+  }
+
+  // ================= 回合内并行调度（hosted 桌轮换阶段：总-分-总） =================
+
+  /**
+   * 当前阶段可轮换席位的未发言清单（顺序轮转的「还剩谁」）：
+   * computeTurn 取第一个做顺序发言权；PARALLEL_DISPATCH 校验 workers ⊆ 本清单；
+   * 也是 host 调度面板的勾选依据（TableInfoPayload.pendingSpeakers）。非轮换阶段为空。
+   */
+  pendingSpeakersOf(tableId: string): ServerSeat[] {
+    const meta = this.requireTable(tableId);
+    if (!DISPATCHABLE_PHASES.includes(meta.phase)) return [];
+    const seats = this.activeSeats(tableId);
+    const msgs = this.store.getMessages(tableId);
+    const def = tableTypeOf(meta.tableType);
+    const proposer = seats.find((s) => s.role === "proposer");
+
+    switch (meta.phase) {
+      case "statements": {
+        const skipped = this.skippedOf(tableId, "statements", meta.roundNo);
+        if (def.flow === "collab") {
+          const artifacts = this.store.getArtifacts(tableId);
+          return seats.filter((s) => s.role === "collaborator" && !skipped.has(s.seatId)
+            && (!msgs.some((m) => m.type === "STATEMENT" && m.fromSeat === s.seatId)
+              || !artifacts.some((a) => a.ownerSeat === s.seatId)));
+        }
+        return proposer && !skipped.has(proposer.seatId) ? [proposer] : [];
+      }
+
+      case "review": {
+        const speakers = def.flow === "collab"
+          ? seats.filter((s) => s.role === "collaborator")
+          : seats.filter((s) => s.role === "reviewer");
+        const startIdx = this.phaseStartSeq(tableId, "review", meta.roundNo);
+        const spoken = new Set<string>(), done = new Set<string>();
+        for (const m of msgs) {
+          if (m.seq <= startIdx || m.type !== "REVIEW_COMMENT") continue;
+          spoken.add(m.fromSeat);
+          if ((m.payload as ReviewCommentPayload).done) done.add(m.fromSeat);
+        }
+        for (const s of this.skippedOf(tableId, "review", meta.roundNo)) spoken.add(s);
+        return speakers.filter((s) => !spoken.has(s.seatId) && !done.has(s.seatId));
+      }
+
+      case "response": {
+        if (def.flow === "collab") {
+          return this.collabPendingResponses(tableId).map((x) => x.seat);
+        }
+        return proposer && !this.skippedOf(tableId, "response", meta.roundNo).has(proposer.seatId) ? [proposer] : [];
+      }
+
+      case "convergence": {
+        const startIdx = this.phaseStartSeq(tableId, "convergence", null);
+        const voted = new Set(msgs.filter((m) => m.seq > startIdx && m.type === "CONSENSUS_VOTE").map((m) => m.fromSeat));
+        for (const s of this.skippedOf(tableId, "convergence", meta.roundNo)) voted.add(s);
+        return seats.filter((s) => s.caps.canVote && !voted.has(s.seatId));
+      }
+
+      default:
+        return [];
+    }
+  }
+
+  /**
+   * 活跃并行批次（事件溯源）：当前 (phase, roundNo) 内最后一条 PARALLEL_DISPATCH 且未汇聚完——
+   * 有成员未交付本阶段回合消息且未被跳过即活跃；批次汇聚（或阶段/轮次推进）自然失效。
+   * 阶段推进必发 PHASE_CHANGE，故「最后一条 PHASE_CHANGE 之后的 PARALLEL_DISPATCH」即当前批次候选。
+   */
+  activeDispatchOf(tableId: string): {
+    msgId: string; phase: Phase; roundNo: number; dispatchSeq: number; dispatchTs: number;
+    task: string; note: string; workers: string[]; visibility: "open" | "blind";
+    perWorker: Map<string, string>; submitted: Set<string>; skipped: Set<string>;
+  } | null {
+    const meta = this.requireTable(tableId);
+    if (!DISPATCHABLE_PHASES.includes(meta.phase)) return null;
+    if (meta.pause) return null;
+    const msgs = this.store.getMessages(tableId);
+    let phaseStart = 0, dispatch: StoredMsg | undefined;
+    for (const m of msgs) {
+      if (m.type === "PHASE_CHANGE") { phaseStart = m.seq; dispatch = undefined; continue; }
+      if (m.seq > phaseStart && m.type === "PARALLEL_DISPATCH") dispatch = m;
+    }
+    if (!dispatch) return null;
+    const p = dispatch.payload as ParallelDispatchPayload;
+    const submitType = PHASE_SUBMIT_TYPE[meta.phase]!;
+    const submitted = new Set<string>();
+    for (const m of msgs) {
+      if (m.seq <= dispatch.seq || m.type !== submitType || !p.workers.includes(m.fromSeat)) continue;
+      submitted.add(m.fromSeat);
+    }
+    const skipped = this.skippedOf(tableId, meta.phase, meta.roundNo);
+    const pending = p.workers.filter((w) => !submitted.has(w) && !skipped.has(w));
+    if (pending.length === 0) return null; // 批次已汇聚：回默认顺序轮转
+    return {
+      msgId: dispatch.msgId, phase: meta.phase, roundNo: meta.roundNo,
+      dispatchSeq: dispatch.seq, dispatchTs: dispatch.ts,
+      task: p.task ?? "", note: p.note ?? "", workers: p.workers,
+      visibility: p.visibility === "blind" ? "blind" : "open",
+      perWorker: new Map((p.perWorker ?? []).map((x) => [x.seatId, x.hint])),
+      submitted, skipped,
+    };
+  }
+
+  /** 批次成员发言权 taskHint：本阶段任务口径 + 调度任务/备注/定向提示 + 可见性说明 */
+  private batchGrantHint(tableId: string, seat: ServerSeat, d: NonNullable<ReturnType<Hub["activeDispatchOf"]>>): string {
+    const meta = this.requireTable(tableId);
+    const def = tableTypeOf(meta.tableType);
+    const phaseTask = meta.phase === "statements"
+      ? (def.flow === "collab"
+        ? `${def.phaseLabels.statements ?? "初稿发布"}：先 POST /api/tables/:id/artifacts 发布你负责部分的初稿产物，再发 STATEMENT 概述（分工/覆盖范围/已知缺口）`
+        : "陈述提案：先 POST /api/tables/:id/artifacts 发布产物 v1，再发 STATEMENT 概述")
+      : meta.phase === "review"
+        ? `第 ${meta.roundNo} 轮${def.flow === "collab" ? (def.phaseLabels.review ?? "互审") : "评审"}：REVIEW_COMMENT 逐条给意见（severity: must/should/nice），全部给完可 done:true`
+        : meta.phase === "response"
+          ? (def.flow === "collab"
+            ? `${def.phaseLabels.response ?? "缺口认领"}：RESPONSE items 认领补齐（accept，action.executeBy: self 自己改 / reviewerSeat 请意见提出席改）/ defer / reject / human`
+            : "逐条回应评审：RESPONSE items[].decision=accept/reject（accept 可带 action.executeBy：self 自己改 / reviewerSeat 请意见提出席改）")
+          : "共识表决：CONSENSUS_VOTE decision: pass / conditional_pass / reject";
+    const hint = d.perWorker.get(seat.seatId);
+    return `【并行批次 ${d.workers.length} 方同时执行】${phaseTask}`
+      + (d.task ? `｜调度任务：${d.task.slice(0, 500)}` : "")
+      + (d.note ? `（调度备注：${d.note.slice(0, 200)}）` : "")
+      + (hint ? `｜本席定向提示：${hint.slice(0, 300)}` : "")
+      + (d.visibility === "blind"
+        ? "｜本批次为盲评：你的交付对本批次其他成员不可见，批次汇聚后放开，期间看不到他席交付属正常"
+        : "｜本批次交付即广播，他席已交付内容可即时查阅")
+      + "；批次全员交付（或被跳过）后汇聚回默认顺序轮转";
+  }
+
+  /**
+   * 全量发言权推导（事件溯源）：默认顺序轮转 0/1 条（原 computeTurn 逻辑）；
+   * 活跃并行批次 = 批次未交付成员各 1 条（同时持有、各自消费）。
+   * poll 的 yourTurn / postMessage 的 turn 门禁 / 观察端多节点高亮都以此为准。
+   */
+  computeTurns(tableId: string): TurnGrantPayload[] {
+    const meta = this.requireTable(tableId);
+    if (meta.pause) return [];
+    // 预审点名挂起：发言权归被点名席（批次让位于点名指令——并行批次成员的提交本就不经预审，正常不会出现）
+    const d = this.activeDispatchOf(tableId);
+    if (!d) {
+      const t = this.computeTurn(tableId);
+      return t ? [t] : [];
+    }
+    const seats = this.activeSeats(tableId);
+    const out: TurnGrantPayload[] = [];
+    for (const sid of d.workers) {
+      if (d.submitted.has(sid) || d.skipped.has(sid)) continue;
+      const s = seats.find((x) => x.seatId === sid);
+      if (!s) continue; // 退席视同已处理（汇聚判定同口径）
+      out.push({
+        seatId: sid, phase: meta.phase, roundNo: meta.roundNo,
+        deadline: Date.now() + meta.turnTimeoutMs,
+        taskHint: this.batchGrantHint(tableId, s, d),
+      });
+    }
+    return out;
+  }
+
+  /** 批次汇聚广播（总）：全员交付/跳过时由 postMessage 在回合提交落库后触发 */
+  private announceBatchDone(tableId: string, d: NonNullable<ReturnType<Hub["activeDispatchOf"]>>, bySeatId: string) {
+    const seatName = (sid: string) => this.store.getSeat(tableId, sid)?.name ?? sid;
+    const done = d.workers.filter((w) => d.submitted.has(w));
+    this.sysMsg(tableId, "INFO", {
+      text: `并行批次已汇聚：${done.length}/${d.workers.length} 方交付${d.visibility === "blind" ? "（盲评解除，批次内交付现对各方可见）" : ""}——${done.map((w) => seatName(w)).join("、") || "（全部被跳过）"}；流程回默认顺序轮转`,
+      level: "info",
+    });
+    this.audit(tableId, bySeatId, "parallel_batch_done", { msgId: d.msgId, workers: d.workers, submitted: [...done] });
+  }
+
+  /** 盲评批次消息过滤：批次其他成员的本阶段回合提交对批次内 viewer 不可见（批次汇聚后推导自然失效即放开；
+   *  调度方/非批次席位不受限）。viewer 为 null（无视角/管理员）时原样返回 */
+  private visibleMessagesFor(tableId: string, msgs: StoredMsg[], viewerSeatId: string | null): StoredMsg[] {
+    const d = this.activeDispatchOf(tableId);
+    if (!d || d.visibility !== "blind" || !viewerSeatId || !d.workers.includes(viewerSeatId)) return msgs;
+    const submitType = PHASE_SUBMIT_TYPE[this.requireTable(tableId).phase];
+    if (!submitType) return msgs;
+    return msgs.filter((m) => !(m.type === submitType && m.seq > d.dispatchSeq
+      && d.workers.includes(m.fromSeat) && m.fromSeat !== viewerSeatId));
+  }
+
+  /** 盲评批次产物过滤：批次其他成员在批次窗口内新发/更新的产物对批次内 viewer 隐藏
+   *  （最新版本时间 ≥ 批次分派时间即视为本批次产物；此前已放开的产物不受影响） */
+  private blindHiddenArtifact(tableId: string, artifactId: string, viewerSeatId: string | null): boolean {
+    const d = this.activeDispatchOf(tableId);
+    if (!d || d.visibility !== "blind" || !viewerSeatId || !d.workers.includes(viewerSeatId)) return false;
+    const art = this.store.getArtifact(tableId, artifactId);
+    if (!art || !d.workers.includes(art.ownerSeat) || art.ownerSeat === viewerSeatId) return false;
+    const latestTs = art.versions[art.versions.length - 1]?.ts ?? 0;
+    return latestTs >= d.dispatchTs;
   }
 
   /**
@@ -1759,15 +2047,20 @@ export class Hub {
     return published;
   }
 
-  listArtifacts(tableId: string) {
-    return this.store.getArtifacts(tableId).map((a) => ({
-      artifactId: a.artifactId, name: a.name, format: a.format, ownerSeat: a.ownerSeat,
-      latestVersion: a.versions.length, lockedBy: a.lockedBy,
-      versions: a.versions.map((v) => ({ v: v.v, changeNote: v.changeNote, publishedBy: v.publishedBy, ts: v.ts, size: v.size, requestId: v.requestId })),
-    }));
+  listArtifacts(tableId: string, viewerSeatId?: string | null) {
+    return this.store.getArtifacts(tableId)
+      .filter((a) => !this.blindHiddenArtifact(tableId, a.artifactId, viewerSeatId ?? null))
+      .map((a) => ({
+        artifactId: a.artifactId, name: a.name, format: a.format, ownerSeat: a.ownerSeat,
+        latestVersion: a.versions.length, lockedBy: a.lockedBy,
+        versions: a.versions.map((v) => ({ v: v.v, changeNote: v.changeNote, publishedBy: v.publishedBy, ts: v.ts, size: v.size, requestId: v.requestId })),
+      }));
   }
 
-  getArtifactVersion(tableId: string, artifactId: string, version?: number) {
+  getArtifactVersion(tableId: string, artifactId: string, version?: number, viewerSeatId?: string | null) {
+    if (this.blindHiddenArtifact(tableId, artifactId, viewerSeatId ?? null)) {
+      throw new ApiError(403, "artifact_blind", "盲评轮进行中：本轮其他执行方的产物在轮结束前不可见");
+    }
     const rec = this.store.getArtifact(tableId, artifactId);
     if (!rec) throw new ApiError(404, "no_artifact", "产物不存在");
     const v = rec.versions[version ? version - 1 : rec.versions.length - 1];
@@ -1789,7 +2082,10 @@ export class Hub {
     return v;
   }
 
-  diffArtifact(tableId: string, artifactId: string, from: number, to: number) {
+  diffArtifact(tableId: string, artifactId: string, from: number, to: number, viewerSeatId?: string | null) {
+    if (this.blindHiddenArtifact(tableId, artifactId, viewerSeatId ?? null)) {
+      throw new ApiError(403, "artifact_blind", "盲评轮进行中：本轮其他执行方的产物在轮结束前不可见");
+    }
     const rec = this.store.getArtifact(tableId, artifactId);
     if (!rec) throw new ApiError(404, "no_artifact", "产物不存在");
     const a = rec.versions[from - 1], b = rec.versions[to - 1];
@@ -2145,7 +2441,7 @@ export class Hub {
    * 其余=该席本轮该任务视为已处理（qa 对该问题弃答 / statements-review-response-convergence 计入已处理 / execution 请求置 rejected）。
    * 落 TURN_SKIPPED 系统消息（事件溯源，崩溃后推导一致），全程审计。
    */
-  private doSkipTurn(tableId: string, by: { seatId: string; name: string; role: string }, reason?: string) {
+  private doSkipTurn(tableId: string, by: { seatId: string; name: string; role: string }, reason?: string, targetSeat?: string) {
     const meta = this.requireTable(tableId);
     if (meta.pause) throw new ApiError(409, "meeting_paused", "会议暂停中：请先继续会议再跳过发言人");
     if (!PAUSABLE_PHASES.includes(meta.phase)) {
@@ -2182,7 +2478,27 @@ export class Hub {
       return { skipped: true, seatId: directive.toSeat, via: "directive" as const };
     }
 
-    // ② 当前发言权持有者（含 qa 的待答问题）
+    // ② 活跃并行批次：多席同时持权，须指定 seatId 跳过指定成员（该席本批次任务视为已处理；
+    //    TURN_SKIPPED 按 (phase,roundNo) 落标记，同时被本阶段完成判定与批次汇聚判定消费）
+    const batch = this.activeDispatchOf(tableId);
+    if (meta.phase !== "qa" && batch) {
+      const pending = batch.workers.filter((w) => !batch.submitted.has(w) && !batch.skipped.has(w));
+      const target = targetSeat ? pending.find((w) => w === targetSeat) : (pending.length === 1 ? pending[0] : null);
+      if (!target) {
+        throw new ApiError(422, "bad_target", "并行批次跳过须指定 seatId（本批次未交付的成员；多人待交付时不可省略）");
+      }
+      emitSkip(target);
+      this.sysMsg(tableId, "INFO", {
+        text: `${by.name} 跳过了 ${seatName(target)} 在本并行批次的交付，该席本批次视为已处理。`,
+        level: "info",
+      });
+      this.audit(tableId, by.seatId, "turn_skipped", { target, phase: meta.phase, roundNo: meta.roundNo, reason: reasonClean ?? "" });
+      if (!this.activeDispatchOf(tableId)) this.announceBatchDone(tableId, batch, by.seatId);
+      this.maybeAdvance(tableId);
+      return { skipped: true, seatId: target, via: "turn" as const };
+    }
+
+    // ③ 当前发言权持有者（含 qa 的待答问题）
     const turn = this.computeTurn(tableId);
     if (turn) {
       if (meta.phase === "execution") {
@@ -2214,7 +2530,7 @@ export class Hub {
       return { skipped: true, seatId: turn.seatId, via: "turn" as const, ...(turn.toMsgId ? { toMsgId: turn.toMsgId } : {}) };
     }
 
-    // ③ execution 无发言权（目标席不新鲜）但仍有挂起请求：按 rejected 收口
+    // ④ execution 无发言权（目标席不新鲜）但仍有挂起请求：按 rejected 收口
     if (meta.phase === "execution") {
       const target = this.store.getRequests(tableId).find((r) => r.status === "pending");
       if (target) {
@@ -2234,10 +2550,10 @@ export class Hub {
     throw new ApiError(409, "nothing_to_skip", "当前没有可跳过的发言人（无挂起点名、无发言权持有者、无待处理执行请求）");
   }
 
-  /** 网页持有人通道：主持人/建桌人（问询桌为问询方）跳过当前发言人 */
-  skipTurnByUser(userToken: string, tableId: string, reason?: string) {
+  /** 网页持有人通道：主持人/建桌人（问询桌为问询方）跳过当前发言人；并行执行期可指定 seatId 跳过指定执行方 */
+  skipTurnByUser(userToken: string, tableId: string, reason?: string, targetSeat?: string) {
     const { by } = this.controllerOf(userToken, tableId);
-    return this.doSkipTurn(tableId, by, reason);
+    return this.doSkipTurn(tableId, by, reason, targetSeat);
   }
 
   /** 切换本桌系统预审开关（控制人）：只影响之后的回合提交；在飞预审自然完成，已挂起点名仍需 SUPPLEMENT 或跳过处理 */
@@ -2267,10 +2583,10 @@ export class Hub {
     return this.doSetPrecheck(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, enabled);
   }
 
-  /** 管理台：systemadmin 跳过当前发言人 */
-  skipTurnByAdmin(adminToken: string, tableId: string, reason?: string) {
+  /** 管理台：systemadmin 跳过当前发言人（并行执行期可指定 seatId） */
+  skipTurnByAdmin(adminToken: string, tableId: string, reason?: string, targetSeat?: string) {
     const admin = this.requireAdmin(adminToken);
-    return this.doSkipTurn(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, reason);
+    return this.doSkipTurn(tableId, { seatId: "-", name: admin.name, role: "systemadmin" }, reason, targetSeat);
   }
 
   /** 待同意的暂停申请投影（观察端「暂停申请」卡数据源） */
@@ -2334,14 +2650,21 @@ export class Hub {
       throw new ApiError(403, "not_participant", "仅可查看自己参与的圆桌（你在本桌没有席位）");
     }
     const mySeatId = userId ? this.activeSeatOfUser(tableId, userId) : null;
+    // 网页查看也是席位持有人的 HTTP 访问：刷新本人席位心跳（保活「已断开」判定；节流防写放大）
+    if (mySeatId) {
+      const mine = this.store.getSeat(tableId, mySeatId) as ServerSeat | null;
+      if (mine && Date.now() - (mine.lastSeenAt ?? 0) >= OBSERVER_TOUCH_THROTTLE_MS) this.touchSeat(mine, tableId);
+    }
+    // 盲评过滤视角：普通用户按本席视角（本轮其他执行方的交付不可见）；systemadmin 全量
+    const viewSeatId = role === "systemadmin" ? null : mySeatId;
     return {
       table: this.tableInfo(tableId, { seatId: mySeatId, admin: role === "systemadmin" }),
       documents: this.listDocuments(tableId),
       requests: this.store.getRequests(tableId),
       reviewItems: this.collectReviewItems(tableId),
-      messages: this.store.getMessages(tableId),
+      messages: this.visibleMessagesFor(tableId, this.store.getMessages(tableId), viewSeatId),
       minutes: this.store.getMessages(tableId).filter((m) => m.type === "MINUTES").at(-1)?.payload ?? null,
-      recentChanges: this.changesOf(tableId, 0).slice(-50),
+      recentChanges: this.changesOf(tableId, 0, viewSeatId).slice(-50),
       meta: { createdAt: meta.createdAt, closedAt: meta.closedAt ?? null, goals: meta.goals, deliverables: meta.deliverables, rules: meta.rules, rolePlan: meta.rolePlan },
       mySeatId,
       /** 问询桌：当前用户是否问询方（建桌人，无席位）——详情页提问区/结束按钮的显示依据 */
