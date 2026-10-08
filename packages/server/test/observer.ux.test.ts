@@ -255,3 +255,32 @@ describe("观察页 UX：身份角色与 my 通道", () => {
     expect(again.error.code).toBe("already_started");
   });
 });
+
+describe("观察页：建桌入口各模式帮助 modal（任务 0049）", () => {
+  it("页面含模式帮助数据与弹窗：7 桌型全覆盖，含说明/使用方式/最佳实践三段与卡片「?」按钮", async () => {
+    const html = await (await fetch(base + "/")).text();
+    // 模式帮助数据 + 弹窗函数 + 卡片「?」按钮（preventDefault 不触发选卡）
+    expect(html).toContain("MODE_HELP");
+    expect(html).toContain("openModeHelp"); // 模式帮助弹窗
+    expect(html).toContain("modeHelpModal"); // body 级弹层（不受轮询重渲染影响）
+    expect(html).toContain('class="mh-q"'); // 桌类型卡片「?」按钮
+    expect(html).toContain("MODE_HELP_FOOT"); // 弹窗底部通用提示（我的角色/开放邀请）
+    // 七种桌型的帮助内容各就位（模式说明 + 最佳实践要点）
+    for (const [id, mark] of [
+      ["review", "must/should/nice 意见"],
+      ["decision", "方案陈述 → 方案评估"],
+      ["collab", "互审补缺、认领必达"],
+      ["brainstorm", "点子提交 → 互评补充"],
+      ["inquiry", "人问 agent 答"],
+      ["dispatch", "多人指挥 agent 干活"],
+      ["relay", "负面清单务必写全"],
+    ] as const) {
+      expect(html).toContain(id + ": {");
+      expect(html).toContain(mark);
+    }
+    // 弹窗三段结构：模式说明 / 使用方式 / 最佳实践
+    expect(html).toContain("模式说明");
+    expect(html).toContain("使用方式");
+    expect(html).toContain("最佳实践");
+  });
+});

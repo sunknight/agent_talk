@@ -47,6 +47,30 @@ export interface PauseRequestRecord {
   approvedAt?: number;
 }
 
+/** 指挥桌工作指令：director 网页下达 → worker 领单执行的状态机记录（对应消息流 DIRECTIVE/DIRECTIVE_RESULT/DIRECTIVE_CLARIFY） */
+export interface WorkDirectiveRecord {
+  directiveId: string;
+  tableId: string;
+  /** 下达时的 DIRECTIVE 消息（时间序游标） */
+  msgId: string;
+  bySeat: string;
+  byName: string;
+  title?: string;
+  text: string;
+  status: "pending" | "executing" | "done" | "failed" | "need_clarify" | "rejected";
+  /** 领单 worker 席位（executing 起锁定，防多 worker 抢单） */
+  claimedBy?: string;
+  /** worker 回执说明：done 详情（可含外部产物链接）/ failed 原因 / rejected 理由 */
+  resultNote?: string;
+  /** need_clarify 时 worker 的反问 */
+  clarifyQ?: string;
+  /** director 对反问的答复（答复后回 pending） */
+  clarifyA?: string;
+  createdAt: number;
+  statusAt?: number;
+  statusBy?: string;
+}
+
 /** 持有人私有指令：网页持有人（user token）→ 本席 agent 的高可信离线指令。
  *  不进消息流（观察端/管理台读不到），仅本席席位 token 经 poll 拉取、ack 确认送达。 */
 export interface OwnerDirectiveRecord {
@@ -59,6 +83,35 @@ export interface OwnerDirectiveRecord {
   createdAt: number;
   /** agent ack 时间；缺省 = 待送达（poll 持续重复下发） */
   deliveredAt?: number;
+}
+
+/** 对接桌数据索要：receiver 索要 → provider agent 回执/持有人审批的状态机记录（对应消息流 DATA_REQUEST/DATA_RESULT/DATA_GRANT）。
+ *  状态机：pending →(provider 席位) granted_auto | rejected_auto | human_pending；human_pending →(provider 持有人网页) granted | partial | rejected */
+export interface DataRequestRecord {
+  reqId: string;
+  tableId: string;
+  /** 发起时的 DATA_REQUEST 消息（时间序游标） */
+  msgId: string;
+  /** 索要发起方席位（receiver） */
+  fromSeat: string;
+  fromName: string;
+  /** 定向提供方席位（provider） */
+  toSeat: string;
+  title?: string;
+  text: string;
+  status: "pending" | "granted_auto" | "rejected_auto" | "human_pending" | "granted" | "partial" | "rejected";
+  /** provider 席位回执说明：granted_auto=提供了什么；rejected_auto=排除理由+替代方案；human_pending=转人工的判断依据与建议给法 */
+  resultNote?: string;
+  resultBy?: string;
+  resultAt?: number;
+  /** provider 持有人审批说明：granted=放行口径；partial=替代方案；rejected=拒绝理由（partial/rejected 必有） */
+  grantNote?: string;
+  grantBy?: string;
+  grantAt?: number;
+  /** 放行关联的资料文档（按索要状态控制 receiver 可下载） */
+  docIds?: string[];
+  createdAt: number;
+  statusAt?: number;
 }
 
 /** 预审点名补充指令：HOST_PREREVIEW redirect 落成的调度指令（同一时刻一桌至多一条 pending） */

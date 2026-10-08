@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { sha256, tableTypeOf, type AuditRecord, type Envelope, type PauseInfo, type SeatInfo, type TableSummary } from "@rt/shared";
-import type { ArtifactRecord, DirectiveRecord, ModelCallLogRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta } from "./model";
+import type { ArtifactRecord, DataRequestRecord, DirectiveRecord, ModelCallLogRecord, OwnerDirectiveRecord, PauseRequestRecord, RequestRecord, StoredArtifactVersion, StoredMsg, TableDocumentRecord, TableMeta, WorkDirectiveRecord } from "./model";
 
 const SCHEMA_VERSION = 1;
 
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS artifact_versions (
 CREATE TABLE IF NOT EXISTS documents (
   table_id TEXT NOT NULL, doc_id TEXT NOT NULL, name TEXT NOT NULL, purpose TEXT NOT NULL,
   visibility TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
-  uploaded_by TEXT NOT NULL, uploaded_at INTEGER NOT NULL,
+  uploaded_by TEXT NOT NULL, uploaded_at INTEGER NOT NULL, req_id TEXT,
   PRIMARY KEY (table_id, doc_id));
 CREATE TABLE IF NOT EXISTS audit (
   id TEXT PRIMARY KEY, ts INTEGER NOT NULL, table_id TEXT NOT NULL, seat_id TEXT NOT NULL,
@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS pause_requests (
 CREATE TABLE IF NOT EXISTS owner_directives (
   table_id TEXT NOT NULL, directive_id TEXT NOT NULL, seat_id TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (table_id, directive_id));
+CREATE TABLE IF NOT EXISTS work_directives (
+  table_id TEXT NOT NULL, directive_id TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (table_id, directive_id));
+CREATE TABLE IF NOT EXISTS data_requests (
+  table_id TEXT NOT NULL, req_id TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (table_id, req_id));
 CREATE TABLE IF NOT EXISTS login_links (
   token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);
@@ -188,13 +194,19 @@ export class Store extends EventEmitter {
       reqUpsert: this.db.prepare("INSERT OR REPLACE INTO requests (table_id, request_id, data) VALUES (?, ?, ?)"),
       reqsOfTable: this.db.prepare("SELECT * FROM requests WHERE table_id = ? ORDER BY rowid"),
 
+      wdUpsert: this.db.prepare("INSERT OR REPLACE INTO work_directives (table_id, directive_id, data) VALUES (?, ?, ?)"),
+      wdsOfTable: this.db.prepare("SELECT * FROM work_directives WHERE table_id = ? ORDER BY rowid"),
+
+      drUpsert: this.db.prepare("INSERT OR REPLACE INTO data_requests (table_id, req_id, data) VALUES (?, ?, ?)"),
+      drsOfTable: this.db.prepare("SELECT * FROM data_requests WHERE table_id = ? ORDER BY rowid"),
+
       artUpsert: this.db.prepare("INSERT OR REPLACE INTO artifacts (table_id, artifact_id, name, format, owner_seat, locked_by, locked_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
       verUpsert: this.db.prepare("INSERT OR REPLACE INTO artifact_versions (table_id, artifact_id, v, sha256, size, change_note, published_by, ts, diff_from_prev, request_id, request_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
       artGet: this.db.prepare("SELECT * FROM artifacts WHERE table_id = ? AND artifact_id = ?"),
       artAll: this.db.prepare("SELECT * FROM artifacts WHERE table_id = ? ORDER BY rowid"),
       verAll: this.db.prepare("SELECT * FROM artifact_versions WHERE table_id = ? ORDER BY artifact_id, v"),
 
-      docUpsert: this.db.prepare("INSERT OR REPLACE INTO documents (table_id, doc_id, name, purpose, visibility, size, sha256, uploaded_by, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+      docUpsert: this.db.prepare("INSERT OR REPLACE INTO documents (table_id, doc_id, name, purpose, visibility, size, sha256, uploaded_by, uploaded_at, req_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
       docAll: this.db.prepare("SELECT * FROM documents WHERE table_id = ? ORDER BY rowid"),
       docGet: this.db.prepare("SELECT * FROM documents WHERE table_id = ? AND doc_id = ?"),
 
@@ -245,6 +257,9 @@ export class Store extends EventEmitter {
     } catch { /* duplicate column：已是新 schema */ }
     try {
       this.db.exec("ALTER TABLE tables ADD COLUMN precheck_enabled INTEGER NOT NULL DEFAULT 1");
+    } catch { /* duplicate column：已是新 schema */ }
+    try {
+      this.db.exec("ALTER TABLE documents ADD COLUMN req_id TEXT");
     } catch { /* duplicate column：已是新 schema */ }
   }
 
@@ -448,6 +463,8 @@ export class Store extends EventEmitter {
       this.db.prepare("DELETE FROM documents WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM directives WHERE table_id = ?").run(tableId);
       this.db.prepare("DELETE FROM pause_requests WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM work_directives WHERE table_id = ?").run(tableId);
+      this.db.prepare("DELETE FROM data_requests WHERE table_id = ?").run(tableId);
       this.st.prefDeleteOfTable.run(tableId);
       this.st.modelCallDeleteOfTable.run(tableId);
       this.db.exec("COMMIT");
@@ -606,6 +623,28 @@ export class Store extends EventEmitter {
     return (this.st.pauseReqsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as PauseRequestRecord);
   }
 
+  // ---------- work_directives（指挥桌工作指令：多人下指令 → agent 领单执行的状态机记录） ----------
+  saveWorkDirective(rec: WorkDirectiveRecord) {
+    this.st.wdUpsert.run(rec.tableId, rec.directiveId, J(rec));
+  }
+  getWorkDirectives(tableId: string): WorkDirectiveRecord[] {
+    return (this.st.wdsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as WorkDirectiveRecord);
+  }
+  getWorkDirective(tableId: string, directiveId: string): WorkDirectiveRecord | null {
+    return this.getWorkDirectives(tableId).find((d) => d.directiveId === directiveId) ?? null;
+  }
+
+  // ---------- data_requests（对接桌数据索要：接收方索要 → 提供方回执/持有人审批的状态机记录） ----------
+  saveDataRequest(rec: DataRequestRecord) {
+    this.st.drUpsert.run(rec.tableId, rec.reqId, J(rec));
+  }
+  getDataRequests(tableId: string): DataRequestRecord[] {
+    return (this.st.drsOfTable.all(tableId) as Row[]).map((r) => JSON.parse(String(r.data)) as DataRequestRecord);
+  }
+  getDataRequest(tableId: string, reqId: string): DataRequestRecord | null {
+    return this.getDataRequests(tableId).find((d) => d.reqId === reqId) ?? null;
+  }
+
   // ---------- owner_directives（持有人私有指令：不进消息流，仅本席席位 token 可读） ----------
   /** 新增即发 "message" 事件：唤醒该桌长轮询（poll 把待送达指令当返回条件之一） */
   addOwnerDirective(rec: OwnerDirectiveRecord) {
@@ -708,13 +747,14 @@ export class Store extends EventEmitter {
 
   // ---------- documents（资料文档：上传阅资料/投屏） ----------
   saveDocument(tableId: string, rec: TableDocumentRecord) {
-    this.st.docUpsert.run(tableId, rec.docId, rec.name, rec.purpose, rec.visibility, rec.size, rec.sha256, rec.uploadedBy, rec.uploadedAt);
+    this.st.docUpsert.run(tableId, rec.docId, rec.name, rec.purpose, rec.visibility, rec.size, rec.sha256, rec.uploadedBy, rec.uploadedAt, rec.reqId ?? null);
   }
   private rowDoc(r: Row): TableDocumentRecord {
     return {
       docId: String(r.doc_id), name: String(r.name), purpose: String(r.purpose),
       visibility: String(r.visibility) as TableDocumentRecord["visibility"], size: Number(r.size),
       sha256: String(r.sha256), uploadedBy: String(r.uploaded_by), uploadedAt: Number(r.uploaded_at),
+      ...(r.req_id !== null && r.req_id !== undefined ? { reqId: String(r.req_id) } : {}),
     };
   }
   getDocuments(tableId: string): TableDocumentRecord[] {

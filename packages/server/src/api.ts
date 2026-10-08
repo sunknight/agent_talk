@@ -223,6 +223,7 @@ export function createHttpServer(hub: Hub) {
             purpose: String(body.purpose ?? ""),
             visibility: body.visibility !== undefined ? String(body.visibility) : undefined,
             contentBase64: String(body.contentBase64 ?? ""),
+            reqId: body.reqId !== undefined && body.reqId !== null && body.reqId !== "" ? String(body.reqId) : undefined,
           }) });
         }
         // 凭证重签（恢复参会 recover / agent 替代 replace）
@@ -258,6 +259,34 @@ export function createHttpServer(hub: Hub) {
         if (seg[4] === "precheck" && !seg[5] && method === "POST") {
           return ok(res, hub.setPrecheckByUser(bearer(req), tableId, body.enabled === true));
         }
+        // ---------- 对接桌通道（user token） ----------
+        // 接收方持有人网页直发数据索要（receiver 席位归属）
+        if (seg[4] === "data-request" && !seg[5]) {
+          return ok(res, { message: hub.sendDataRequestByUser(bearer(req), tableId, {
+            reqId: String(body.reqId ?? ""),
+            title: body.title !== undefined && body.title !== null ? String(body.title) : undefined,
+            text: String(body.text ?? ""),
+            toSeat: String(body.toSeat ?? ""),
+          }) });
+        }
+        // 提供方持有人审批放行（human_pending → granted/partial/rejected；provider 席位归属）
+        if (seg[4] === "data-requests" && seg[5] && seg[6] === "ruling" && !seg[7]) {
+          if (body.decision !== "granted" && body.decision !== "partial" && body.decision !== "rejected") {
+            throw new ApiError(422, "bad_payload", "decision 必须是 granted / partial / rejected");
+          }
+          return ok(res, { message: hub.ruleDataRequestByUser(bearer(req), tableId, {
+            reqId: seg[5],
+            decision: body.decision,
+            note: body.note !== undefined && body.note !== null ? String(body.note) : undefined,
+          }) });
+        }
+        // 结束对接：接收方=确认接收（可带缺接收）；提供方/建桌人=强制收口（必附 reason）；open=撤桌
+        if (seg[4] === "finish-relay" && !seg[5]) {
+          return ok(res, hub.finishRelayByUser(bearer(req), tableId, {
+            reason: body.reason !== undefined && body.reason !== null ? String(body.reason) : undefined,
+            waived: body.waived !== undefined && body.waived !== null ? String(body.waived) : undefined,
+          }));
+        }
       }
       // ---------- 问询桌问询方通道（user token，建桌人专属） ----------
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "ask" && method === "POST" && !seg[4]) {
@@ -270,6 +299,21 @@ export function createHttpServer(hub: Hub) {
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "end-inquiry" && method === "POST" && !seg[4]) {
         const body = await readJson(req);
         return ok(res, hub.endInquiryByUser(bearer(req), seg[2], body.reason !== undefined ? String(body.reason) : undefined));
+      }
+      // ---------- 指挥桌指挥方通道（user token，director 席位专属） ----------
+      if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "directives" && method === "POST" && !seg[4]) {
+        const body = await readJson(req);
+        return ok(res, hub.sendDirectiveByUser(bearer(req), seg[2], {
+          title: body.title !== undefined && body.title !== null ? String(body.title) : undefined,
+          text: String(body.text ?? ""),
+        }));
+      }
+      if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "directives" && seg[4] === "clarify" && method === "POST" && !seg[5]) {
+        const body = await readJson(req);
+        return ok(res, { message: hub.clarifyDirectiveByUser(bearer(req), seg[2], {
+          directiveId: String(body.directiveId ?? ""),
+          answer: String(body.answer ?? ""),
+        }) });
       }
       if (path === "/api/stances" && method === "GET") {
         return ok(res, { stances: STANCE_PRESETS, styles: STYLE_PRESETS });
@@ -424,7 +468,7 @@ export function createHttpServer(hub: Hub) {
           return ok(res, hub.joinTable(bearer(req), tableId, {
             inviteCode: String(body.inviteCode ?? ""),
             seatName: String(body.seatName ?? ""),
-            role: body.role as "proposer" | "reviewer" | "observer" | "collaborator" | "answerer" | "asker",
+            role: body.role as "proposer" | "reviewer" | "observer" | "collaborator" | "answerer" | "asker" | "worker" | "director",
             agentLabel: String(body.agentLabel ?? "unknown"),
             capsOverride: body.capsOverride as Record<string, boolean> | undefined,
           }));
@@ -533,7 +577,7 @@ export function createHttpServer(hub: Hub) {
           }
         }
 
-        // ---------- 资料文档（上传阅资料 / 投屏；shared 全桌可下载，private 仅本席） ----------
+        // ---------- 资料文档（上传阅资料 / 投屏；shared 全桌可下载，private 仅本席；对接桌可带 reqId 关联索要） ----------
         if (sub === "documents") {
           if (method === "POST" && !seg[4]) {
             const body = await readJson(req);
@@ -542,6 +586,7 @@ export function createHttpServer(hub: Hub) {
               purpose: String(body.purpose ?? ""),
               visibility: body.visibility !== undefined ? String(body.visibility) : undefined,
               contentBase64: String(body.contentBase64 ?? ""),
+              reqId: body.reqId !== undefined && body.reqId !== null && body.reqId !== "" ? String(body.reqId) : undefined,
             }) });
           }
           if (method === "GET" && !seg[4]) return ok(res, { documents: hub.listDocuments(tableId, seatAuth.seatId) });

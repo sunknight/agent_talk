@@ -1,0 +1,293 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Agent 圆桌 · 协作共创流程（协作 / 头脑风暴）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "setup",
+        "label": "开局设定",
+        "focus": [
+          "create",
+          "join",
+          "start"
+        ],
+        "note": "协作桌型 ≥2 席（含建桌人）；入席声明分工，全员就绪后建桌人点开始。"
+      },
+      {
+        "id": "cocreate",
+        "label": "共创主循环",
+        "focus": [
+          "draft",
+          "crossreview",
+          "claim",
+          "request",
+          "execute"
+        ],
+        "note": "各自初稿、互审提缺口、认领派生 requestId 请求并补齐。"
+      },
+      {
+        "id": "converge",
+        "label": "收敛与人工介入",
+        "focus": [
+          "vote",
+          "minutes",
+          "intervene"
+        ],
+        "note": "全员表决定稿；reject 回互审开下一轮，连续未收敛升级人工裁决。"
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "humans",
+      "label": "参与人（人）"
+    },
+    {
+      "id": "collab",
+      "label": "协作者 agents（多席）"
+    },
+    {
+      "id": "server",
+      "label": "服务器 · 状态机"
+    }
+  ],
+  "groups": [
+    {
+      "id": "human_gate",
+      "label": "人工介入通道",
+      "lane": "humans",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "security"
+    },
+    {
+      "id": "server_work",
+      "label": "溯源与纪要",
+      "lane": "server",
+      "fromCol": 3,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "create",
+    "join",
+    "start",
+    "draft",
+    "crossreview",
+    "claim",
+    "request",
+    "execute",
+    "vote",
+    "minutes"
+  ],
+  "nodes": [
+    {
+      "id": "create",
+      "lane": "humans",
+      "col": 0,
+      "type": "frontend",
+      "label": "建桌邀请",
+      "sublabel": "协作桌型 · ≥2 席",
+      "width": 132
+    },
+    {
+      "id": "join",
+      "lane": "collab",
+      "col": 0,
+      "type": "backend",
+      "label": "入席 · 声明分工",
+      "sublabel": "立场·范围·数据 · 就绪",
+      "width": 132
+    },
+    {
+      "id": "start",
+      "lane": "humans",
+      "col": 1,
+      "type": "frontend",
+      "label": "点开始",
+      "sublabel": "建桌人 · 全员就绪后",
+      "width": 128
+    },
+    {
+      "id": "draft",
+      "lane": "collab",
+      "col": 1,
+      "type": "backend",
+      "label": "各自初稿",
+      "sublabel": "版本化产物 + 陈述",
+      "width": 128
+    },
+    {
+      "id": "crossreview",
+      "lane": "collab",
+      "col": 2,
+      "type": "backend",
+      "label": "互审补缺",
+      "sublabel": "must / should / nice",
+      "width": 132
+    },
+    {
+      "id": "claim",
+      "lane": "collab",
+      "col": 3,
+      "type": "backend",
+      "label": "缺口认领",
+      "sublabel": "accept·defer·reject·human",
+      "width": 132
+    },
+    {
+      "id": "request",
+      "lane": "server",
+      "col": 3,
+      "type": "messagebus",
+      "label": "派生执行请求",
+      "sublabel": "requestId 溯源 · 被请求方",
+      "width": 132
+    },
+    {
+      "id": "execute",
+      "lane": "collab",
+      "col": 4,
+      "type": "backend",
+      "label": "补齐执行",
+      "sublabel": "发布带 requestId 新版本",
+      "width": 132
+    },
+    {
+      "id": "intervene",
+      "lane": "humans",
+      "col": 4,
+      "type": "security",
+      "label": "人工介入",
+      "sublabel": "恢复指定阶段 · 强制收会",
+      "width": 132
+    },
+    {
+      "id": "vote",
+      "lane": "collab",
+      "col": 5,
+      "type": "backend",
+      "label": "定稿表决",
+      "sublabel": "pass / conditional_pass / reject",
+      "width": 176
+    },
+    {
+      "id": "minutes",
+      "lane": "server",
+      "col": 5,
+      "type": "database",
+      "label": "会议纪要",
+      "sublabel": "共识达成 · 自动生成",
+      "width": 148
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-create-join",
+      "from": "create",
+      "to": "join",
+      "label": "邀请码 · 各协作者"
+    },
+    {
+      "id": "e-join-start",
+      "from": "join",
+      "to": "start",
+      "label": "全员就绪"
+    },
+    {
+      "id": "e-start-draft",
+      "from": "start",
+      "to": "draft",
+      "label": "开始共创",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-draft-review",
+      "from": "draft",
+      "to": "crossreview",
+      "label": "初稿齐备 · 自动进"
+    },
+    {
+      "id": "e-review-claim",
+      "from": "crossreview",
+      "to": "claim",
+      "label": "缺口给完 · 自动进"
+    },
+    {
+      "id": "e-claim-request",
+      "from": "claim",
+      "to": "request",
+      "label": "accept",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-request-execute",
+      "from": "request",
+      "to": "execute",
+      "label": "派发"
+    },
+    {
+      "id": "e-execute-vote",
+      "from": "execute",
+      "to": "vote",
+      "label": "请求全部关闭"
+    },
+    {
+      "id": "e-vote-minutes",
+      "from": "vote",
+      "to": "minutes",
+      "label": "共识达成",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-vote-review",
+      "from": "vote",
+      "to": "crossreview",
+      "label": "reject · 开下一轮",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "e-vote-intervene",
+      "from": "vote",
+      "to": "intervene",
+      "label": "连续未收敛",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "推进与溯源",
+      "items": [
+        "初稿齐备自动进互审、缺口给完自动进认领，阶段推进由状态机判定",
+        "互审对他席逐条提缺口（must / should / nice），也可对自己部分提求助缺口",
+        "被请求方发布带 requestId 新版本后关闭请求；一次修订可批量关闭多个请求"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "认领归属与四态",
+      "items": [
+        "意见指向产物归产物 owner、指向资料归上传者、无指向归建桌人统稿",
+        "accept 可自己补或请意见提出席帮改；defer / reject / human 均留处置痕迹"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "人在环与交付",
+      "items": [
+        "reject 未达轮次上限回互审开下一轮；连续未收敛由人工恢复指定阶段或强制收会",
+        "共识达成自动生成纪要：立场、处置、跟进清单、表决与终稿版本"
+      ]
+    }
+  ]
+}

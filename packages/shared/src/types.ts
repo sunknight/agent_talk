@@ -2,7 +2,7 @@
 
 // ---------- 席位与能力 ----------
 
-export type Role = "proposer" | "reviewer" | "observer" | "host" | "collaborator" | "answerer" | "asker";
+export type Role = "proposer" | "reviewer" | "observer" | "host" | "collaborator" | "answerer" | "asker" | "worker" | "director" | "provider" | "receiver";
 
 /** 能力声明：双端强制（请求方网关拒发越权请求，执行方网关拒绝越权执行） */
 export interface Caps {
@@ -32,6 +32,14 @@ export const ROLE_PRESETS: Record<Role, Caps> = {
   answerer: { canPublish: true, canModifyOwn: true, canExecuteRequests: true, canSendRequests: true, canVote: true, canUploadDocs: true },
   /** 问询方（主持人建问询桌时凭码加入的角色）：不占席位，提问/开始/结束问询走网页 user token 通道，无席位能力 */
   asker: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: false },
+  /** 执行方（指挥桌）：领取指挥方指令并执行（可操作外部系统如 Figma），逐单回执结果；可发布产物/上传资料支撑回执 */
+  worker: { canPublish: true, canModifyOwn: true, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: true },
+  /** 指挥方（指挥桌）：人类成员占席位但不签发 seat token，下达指令/答复澄清走网页 user token 通道，无席位能力 */
+  director: { canPublish: false, canModifyOwn: false, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: false },
+  /** 提供方（对接桌）：打包对接单、按入桌声明的规则处置索要（规则内自动放行/明确排除拒绝/超规则转持有人审批），可上传数据文件 */
+  provider: { canPublish: true, canModifyOwn: true, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: true },
+  /** 接收方（对接桌）：核验对接单完整性并发起数据索要（DATA_REQUEST），可发布核验报告产物；文件通道单向（提供方→接收方），不可上传 */
+  receiver: { canPublish: true, canModifyOwn: true, canExecuteRequests: false, canSendRequests: false, canVote: false, canUploadDocs: false },
 };
 
 export interface SeatInfo {
@@ -162,6 +170,20 @@ export const STANCE_PRESETS: { id: string; label: string; forRole: Role | "any";
     forTypes: ["inquiry"],
     text: "我方是回答方，仅在本席声明的讨论范围与数据范围内作答：范围内给出准确、有依据的答案；超出范围的提问明确说明不在声明范围内、不作答，并建议可行的问询方向。",
   },
+  {
+    id: "relay-provider",
+    label: "对接提供方",
+    forRole: "provider",
+    forTypes: ["relay"],
+    text: "我方是对接提供方：按声明规则打包对接信息（结论层/过程层/原始层分级披露，负面清单显式化）。索要处置三条路——声明规则内的数据自动放行（granted_auto，补对接单版本或关联文件）；规则明确排除的拒绝并给替代方案（rejected_auto）；超出或模糊的转持有人审批（human_pending），不擅自放行规则外数据。",
+  },
+  {
+    id: "relay-receiver",
+    label: "对接接收方",
+    forRole: "receiver",
+    forTypes: ["relay"],
+    text: "我方是对接接收方：对照对接 checklist 核验对接单完整性，缺失与未知项逐条定向索要（DATA_REQUEST，发起前索要清单经持有人过目）；已拒绝（rejected/rejected_auto）的类别不再追问；全部处置完毕后提示持有人确认接收（可带缺接收）。",
+  },
 ];
 
 /** 内置风格预设（与立场预设正交：立场=我是谁/负责什么，风格=怎么想/怎么说）。
@@ -172,7 +194,7 @@ export interface StylePreset {
   label: string;
   /** 风格标签（苛刻/严谨/宽松、偏安全/偏业务/偏体验等），卡片展示用 */
   tags: string[];
-  forRole: Exclude<Role, "host" | "observer" | "asker">;
+  forRole: Exclude<Role, "host" | "observer" | "asker" | "worker" | "director">;
   /** 一句话简介（卡片） */
   brief: string;
   /** 提示词全文（确认后合成进 SeatConfig.style） */
@@ -411,6 +433,8 @@ export const STYLE_PRESETS: StylePreset[] = [
 export type Phase =
   | "open" // 建桌、入席
   | "qa" // 问答（问询桌专用：问询方提问、回答方作答的循环，无轮次推进）
+  | "working" // 工作中（指挥桌专用：指挥方下指令、执行方领单执行的常驻态，无轮次推进）
+  | "transfer" // 对接中（对接桌专用：提供方发对接单、接收方核验索要、索要-回执-审批循环的常驻态，无轮次推进）
   | "statements" // 提案人陈述并发布产物 v1（协作流：各协作者依次发布负责部分初稿）
   | "review" // 评审人结构化评审（协作流：协作者互审补缺）
   | "response" // 提案人逐条回应（协作流：意见归属方逐条处置缺口）
@@ -422,10 +446,10 @@ export type Phase =
 // ---------- 桌类型 ----------
 
 /** 桌类型：开桌时选定，决定可选角色与流程语义；头脑风暴/方案决策为两种流程形态的变体 */
-export type TableType = "review" | "collab" | "brainstorm" | "decision" | "inquiry";
+export type TableType = "review" | "collab" | "brainstorm" | "decision" | "inquiry" | "dispatch" | "relay";
 
-/** 流程形态：review = 博弈评审流（提案 vs 评审）；collab = 协同流（全员共创、互审补缺）；inquiry = 问询流（人问 agent 答） */
-export type FlowShape = "review" | "collab" | "inquiry";
+/** 流程形态：review = 博弈评审流（提案 vs 评审）；collab = 协同流（全员共创、互审补缺）；inquiry = 问询流（人问 agent 答）；dispatch = 指挥流（多人指挥 agent 干活）；relay = 对接流（agent 对 agent 的工作对接） */
+export type FlowShape = "review" | "collab" | "inquiry" | "dispatch" | "relay";
 
 export interface TableTypeDef {
   id: TableType;
@@ -474,6 +498,18 @@ export const TABLE_TYPES: TableTypeDef[] = [
     flow: "inquiry", roles: ["answerer", "observer"], uniqueRoles: [],
     phaseLabels: { qa: "问答" },
   },
+  {
+    id: "dispatch", label: "指挥",
+    description: "多人指挥 agent 干活：web 下指令 → 执行方领单执行逐单回执 → 工作纪要",
+    flow: "dispatch", roles: ["worker", "director", "observer"], uniqueRoles: [],
+    phaseLabels: { working: "工作中" },
+  },
+  {
+    id: "relay", label: "对接",
+    description: "日常流程节点对接（高频常态）：提供方控规则发对接单 → 接收方核验索要 → 超规则经提供方持有人审批 → 对接纪要",
+    flow: "relay", roles: ["provider", "receiver", "observer"], uniqueRoles: [],
+    phaseLabels: { transfer: "对接中" },
+  },
 ];
 
 /** 类型解析：未知/缺失值回落 review（旧数据与旧客户端兼容） */
@@ -485,7 +521,7 @@ export function tableTypeOf(id: string | undefined | null): TableTypeDef {
 export function phaseLabelOf(tableType: string | undefined | null, phase: Phase): string {
   const def = tableTypeOf(tableType);
   const DEFAULT_PHASE_LABELS: Record<Phase, string> = {
-    open: "设定", qa: "问答", statements: "陈述", review: "评审", response: "回应",
+    open: "设定", qa: "问答", working: "工作中", transfer: "对接中", statements: "陈述", review: "评审", response: "回应",
     execution: "执行", convergence: "表决", human_intervention: "人工介入", closed: "结束",
   };
   return def.phaseLabels[phase] ?? DEFAULT_PHASE_LABELS[phase];
@@ -512,6 +548,10 @@ export type MsgType =
   | "REVIEW_COMMENT" | "RESPONSE"
   // 请求（合作/博弈原子操作）
   | "REQUEST" | "RESPOND_REQUEST"
+  // 工作指令（指挥桌：指挥方下达 → 执行方领单回执 → 澄清答复）
+  | "DIRECTIVE" | "DIRECTIVE_RESULT" | "DIRECTIVE_CLARIFY"
+  // 数据索要（对接桌：接收方核验缺失定向索要 → 提供方按声明规则回执 → 超规则转提供方持有人审批放行）
+  | "DATA_REQUEST" | "DATA_RESULT" | "DATA_GRANT"
   // 产物
   | "ARTIFACT_PUBLISH" | "ARTIFACT_PUBLISHED" | "ARTIFACT_FETCH" | "ARTIFACT_CONTENT"
   | "ARTIFACT_LIST" | "ARTIFACT_LOCK"
@@ -590,6 +630,8 @@ export interface TableInfoPayload {
   pendingSpeakers: string[];
   /** hosted 桌的预审调度层状态（self 桌恒为 idle） */
   precheck: PrecheckState;
+  /** 对接桌：数据索要全量投影（观察端「数据索要」卡 / 持有人审批）；非对接桌为空数组 */
+  dataRequests: DataRequestView[];
   /** 会议暂停叠加态（进行中可暂停；恢复后清空，phase 始终保留原阶段） */
   pause: PauseInfo | null;
 }
@@ -814,6 +856,122 @@ export interface RequestResponsePayload {
   requestIds?: string[]; // 批量处置：与 requestId 二选一，同批必须同 decision（全或无）
 }
 
+// ---------- 工作指令（指挥桌：人下指令 → agent 领单执行 → 回执/澄清闭环） ----------
+
+/** DIRECTIVE 载荷（指挥方经网页 user token 通道下达新指令；directiveId 由服务器生成） */
+export interface DirectivePayload {
+  directiveId: string;
+  title?: string;
+  text: string;
+}
+
+/** 指令回执结论：executing=领单/执行中；done=已完成；failed=执行失败；need_clarify=需要指挥方澄清；rejected=拒单（超出能力/安全边界） */
+export type DirectiveOutcome = "executing" | "done" | "failed" | "need_clarify" | "rejected";
+
+/** DIRECTIVE_RESULT 载荷（执行方席位回执，驱动指令状态机） */
+export interface DirectiveResultPayload {
+  directiveId: string;
+  outcome: DirectiveOutcome;
+  /** 回执说明：done 的完成详情（可含外部产物链接如 Figma 页面）/ failed 的失败原因 / rejected 的拒单理由 */
+  note?: string;
+  /** need_clarify 时的反问内容 */
+  clarify?: string;
+}
+
+/** DIRECTIVE_CLARIFY 载荷（指挥方答复 need_clarify，指令回 pending 重新可领） */
+export interface DirectiveClarifyPayload {
+  directiveId: string;
+  answer: string;
+}
+
+/** 指令状态（服务器 work_directives 记录，观察端/观察者投影） */
+export type WorkDirectiveStatus = "pending" | "executing" | "done" | "failed" | "need_clarify" | "rejected";
+
+/** 指令公开投影（观察端桌详情「工作指令」卡 / worker poll 待领清单） */
+export interface WorkDirectiveView {
+  directiveId: string;
+  msgId: string;
+  bySeat: string;
+  byName: string;
+  title?: string;
+  text: string;
+  status: WorkDirectiveStatus;
+  /** 领单执行方席位（executing 起） */
+  claimedBy?: string;
+  /** 执行方回执说明（done 详情/失败原因/拒单理由） */
+  resultNote?: string;
+  /** need_clarify 时执行方的反问 */
+  clarifyQ?: string;
+  /** 指挥方对反问的答复（答复后指令回 pending） */
+  clarifyA?: string;
+  createdAt: number;
+  statusAt?: number;
+}
+
+// ---------- 数据索要（对接桌：接收方核验缺失 → 定向索要 → 提供方按规则处置 → 超规则转持有人审批） ----------
+
+/** DATA_REQUEST 载荷（接收方席位 agent 或持有人网页发起；reqId 发起方生成、服务器查重） */
+export interface DataRequestPayload {
+  reqId: string;
+  title?: string;
+  /** 索要内容：要什么数据/用途/为什么缺（对照核验 checklist 的缺失项或 unknowns） */
+  text: string;
+  /** 定向提供方席位（必填——多提供方时不广播，各 receiver 按归属分组索要） */
+  toSeat: string;
+}
+
+/** 提供方回执结论：granted_auto=声明规则内已放行；rejected_auto=规则明确排除（note 必附理由与替代方案）；human_pending=超出/模糊，转持有人审批 */
+export type DataOutcome = "granted_auto" | "rejected_auto" | "human_pending";
+
+/** DATA_RESULT 载荷（提供方席位回执，驱动索要状态机） */
+export interface DataResultPayload {
+  reqId: string;
+  outcome: DataOutcome;
+  /** 回执说明：granted_auto=提供了什么（常见为对接单新版本/关联文件）；rejected_auto 与 human_pending 必附 */
+  note?: string;
+  /** 本次放行关联的资料文档（须已上传且关联同一 reqId） */
+  docIds?: string[];
+}
+
+/** 提供方持有人审批决定：granted=同意给；partial=给替代方案（note 必附）；rejected=拒绝（note 必附理由） */
+export type DataGrantDecision = "granted" | "partial" | "rejected";
+
+/** DATA_GRANT 载荷（提供方持有人网页 user token 通道构造；席位直发一律 403——服务器强制的放行门） */
+export interface DataGrantPayload {
+  reqId: string;
+  decision: DataGrantDecision;
+  note?: string;
+}
+
+/** 索要状态（服务器 data_requests 记录，观察端/观察者投影）：
+ *  pending（待提供方处置）→ granted_auto / rejected_auto（provider agent 终态）；
+ *  human_pending（转持有人）→ granted / partial / rejected（provider 持有人终态） */
+export type DataRequestStatus = "pending" | "granted_auto" | "rejected_auto" | "human_pending" | "granted" | "partial" | "rejected";
+
+/** 索要公开投影（观察端桌详情「数据索要」卡 / poll 待处理清单） */
+export interface DataRequestView {
+  reqId: string;
+  msgId: string;
+  fromSeat: string;
+  fromName: string;
+  toSeat: string;
+  title?: string;
+  text: string;
+  status: DataRequestStatus;
+  /** 提供方席位回执说明 */
+  resultNote?: string;
+  resultBy?: string;
+  resultAt?: number;
+  /** 提供方持有人审批说明（partial/rejected 必有） */
+  grantNote?: string;
+  grantBy?: string;
+  grantAt?: number;
+  /** 放行关联的资料文档 */
+  docIds?: string[];
+  createdAt: number;
+  statusAt?: number;
+}
+
 export type ArtifactFormat = "md" | "txt" | "json" | "png";
 export interface ArtifactPublishPayload {
   artifactId?: string; // 空 = 新产物
@@ -862,6 +1020,8 @@ export interface TableDocumentMeta {
   size: number; // 字节
   uploadedBy: string; // seatId
   uploadedAt: number;
+  /** 对接桌：关联的数据索要 reqId——带关联的文档按索要状态控制接收方可下载（放行后才可下载）；缺省=无关联（规则内主动分享） */
+  reqId?: string;
 }
 
 export interface DocUploadPayload {
@@ -888,6 +1048,7 @@ export type TableChange =
   | { kind: "seat"; ts: number; msgId: string; fromSeat: string; seatName: string; role?: Role; what: "join" | "config" | "left" }
   | { kind: "human"; ts: number; msgId: string; fromSeat: string; toSeat?: string; byHuman?: string }
   | { kind: "pause"; ts: number; msgId: string; fromSeat: string; what: "pause" | "resume" | "request"; bySeat: string; byName: string; byRole: string; reason: string; requestId?: string }
+  | { kind: "directive"; ts: number; msgId: string; fromSeat: string; directiveId: string; status: WorkDirectiveStatus }
   | { kind: "message"; ts: number; msgId: string; fromSeat: string; type: MsgType };
 
 /** 持有人私有指令（poll/changes 附带）：网页持有人 → 本席 agent 的高可信离线指令。
@@ -989,7 +1150,11 @@ export type AuditEvent =
   /** 回合内并行调度：host 发起批次 / 批次汇聚（全员交付或跳过） */
   | "parallel_dispatch" | "parallel_batch_done"
   /** 网页登录链接：agent 生成 / 持有人兑换（一次性 + 短时效；只记元信息不记 token） */
-  | "login_link_created" | "login_link_exchanged";
+  | "login_link_created" | "login_link_exchanged"
+  /** 指挥桌工作指令：指挥方下达 / 执行方回执（状态迁移）/ 指挥方答复澄清 */
+  | "work_directive_sent" | "work_directive_result" | "work_directive_clarify"
+  /** 对接桌数据索要：接收方发起 / 提供方席位回执（状态迁移）/ 提供方持有人审批放行 */
+  | "data_request_sent" | "data_request_result" | "data_request_grant";
 
 export interface AuditRecord {
   id: string; ts: number; tableId: string; seatId: string;

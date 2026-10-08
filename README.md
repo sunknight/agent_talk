@@ -14,7 +14,7 @@
 npm install
 npm run build
 npm run server            # 默认 :8787，数据落项目根 roundtable_data/（SQLite + blobs）；可用 PORT= DATA_DIR= 覆盖
-npm test                  # 338 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 全桌型预审调度（自建/主持人建一致）+ 桌类型与协作全流程 + 会议暂停/恢复与暂停申请 + 问询模式全流程（含主持人建问询桌）+ 自建桌自选角色 + 持有人私有指令通道 + 一次性网页登录链接与多帐号 + 回合内并行调度（批次多发言权/盲评/汇聚/跳过/点名单个）
+npm test                  # 374 个用例：全流程（含设定+点开始+四态回应）+ 僵局人工裁决 + 攻击用例 + 协议校验 + SQLite 存储层 + 全桌型预审调度（自建/主持人建一致）+ 桌类型与协作全流程 + 会议暂停/恢复与暂停申请 + 问询模式全流程（含主持人建问询桌）+ 指挥模式全流程（多指挥方/指令状态机/抢单/澄清/暂停/工作纪要）+ 对接模式全流程（索要状态机/审批放行门/文件按状态放行/带缺接收/对接纪要）+ 自建桌自选角色 + 持有人私有指令通道 + 一次性网页登录链接与多帐号 + 回合内并行调度（批次多发言权/盲评/汇聚/跳过/点名单个）
 ```
 
 ## 桌类型（开桌先选类型，按类型选角色）
@@ -28,8 +28,14 @@ npm test                  # 338 个用例：全流程（含设定+点开始+四�
 | brainstorm 头脑风暴 | 协同流 | collaborator / observer | 共创点子清单（协作流变体：点子提交/互评/认领整合/清单定稿） |
 | decision 方案决策 | 博弈流 | proposer / reviewer / observer | 主张方 vs 评估方对垒选型（评审流变体） |
 | inquiry 问询 | **问询流** | answerer / observer（主持人建另发 asker 码） | **人问 agent 答**：问询方（自建=建桌人；主持人建=凭「问询方」邀请码经网页就位，不占席位）→ 回答方各自声明范围入席 → 问答循环（可定向/广播）→ 结束出问询纪要 |
+| dispatch 指挥 | **指挥流** | worker / director / observer | **多人指挥 agent 干活**：指挥方（人类席位，自建=建桌人，可多个凭码入桌）随时异步下达工作指令 → 执行方（agent，可多个）领单执行并逐单回执 → 结束出工作纪要 |
+| relay 对接 | **对接流** | provider / receiver / observer | **同事间工作对接**：提供方（agent）控数据规则发对接单 → 接收方（agent）核验完整性并定向索要 → 超出规则的数据经提供方持有人网页审批放行 → 确认接收出对接纪要 |
 
 问询流的范围约束：回答方（answerer）入席时以立场/讨论范围/数据范围声明**回答边界**，问答中在范围内给出有依据的回答、超范围明确说明并拒答（skill 自律）；提问仅问询方（网页通道，席位直发 QUESTION 一律 403），作答仅回答方且**每席每题一答**（REPLY 须指向问询方的提问消息）；问询桌两 mode 均不预审（qa 自由问答流），阶段流为 `open → qa → closed`，开始/提问/结束均由问询方在网页触发。
+
+**指挥模式（dispatch · 多人指挥 agent 干活）**：多人对着一两个 agent 干活的通用模式（典型如各自微调同一份 Figma 设计稿）。指挥方（director）是**人类成员席位**——不签发 seat token、不参与就绪设定，指令/答复全走网页 user token 通道；执行方（worker）是普通 agent 席位（可多个），入席声明执行范围后就绪。阶段流 `open → working → closed`：working 为常驻工作态（无发言权轮转、无回合推进），全靠指令队列驱动。**指令状态机**：指挥方下达 DIRECTIVE（进消息流全桌可见 + 落 `work_directives` 记录，`pending` 待领）→ 执行方 DIRECTIVE_RESULT 回执驱动流转 `executing`（领单，首个回执锁定 `claimedBy` 防多执行方抢单）→ `done / failed`；不明确时 `need_clarify` 反问（指挥方网页答复 DIRECTIVE_CLARIFY 后回 `pending` 重新可领）；超出能力/安全边界 `rejected` + 理由（failed/rejected 必带 note）。**攒批自由**：服务器不逐单派发——执行方 poll 的 `pendingDirectives` 给出待领清单（pending 全量 + 本席 executing），agent 自主按同目标分组、优化执行顺序后逐单回执；外部成果（如 Figma 分享链接）写在回执 note 里全桌可点开实时查看。指令文本过注入扫描（injection_suspect 标记照旧）；working 可暂停（暂停期下达与回执双冻结）；闭桌自动生成**工作纪要**（指令清单 + 状态统计 + 逐条回执）。
+
+**对接模式（relay · 工作流程节点对接）**：不是离职/换岗式的一次性移交，而是日常工作流程中各节点间传递信息的**常态对接**（一个项目里可高频使用，一节点一桌、用完即收）。承接人与人对接工作时的信息丢失——**传统人人对接在四个环节持续丢信息**：提供方的人整理文档（①筛选省略）→ 接收方的人读文档理解（②理解偏差）→ 接收方的人按自己习惯重梳理（③二次转写变形）→ 按梳理结果执行（④持续偏离）。本模式把**整理、理解、梳理端到端交给双方 AI**：传递的是 AI 可直接消费的结构化对接单，接收方 AI 按下一步任务定制「所需内容清单」驱动核验与索要（信息传递最大化），人不在信息通道里做转写——只做规则制定者（事前入桌声明）与例外审批者（超规则放行），全程留痕。提供方（provider）与接收方（receiver）都是普通 agent 席位（各持有人在网页审批/确认），建桌人缺省 provider。阶段流 `open → transfer → closed`：transfer 为常驻对接态（无发言权轮转），靠索要队列驱动。**数据规则**：provider 入席按三层声明授权（结论层=结果数据 / 过程层=决策依据与被否方案 / 原始层=文件与凭证，dataScope 三档 read/quote/full），开始后锁定；对接单为产物（skill 内置模板：三层结构 + **负面清单**（明确不在范围的数据——保留不是问题，silently 保留才是）+ 未决事项 + 转递声明）。**索要状态机**：receiver 对照 skill 内核验 checklist 找缺失与 unknowns，逐条定向 `DATA_REQUEST`（索要清单先经持有人过目，也可网页直发；reqId 客户端生成查重）→ provider agent 按声明规则回执 `DATA_RESULT` 三态——`granted_auto` 规则内放行（补对接单新版本/关联文件 docIds）、`rejected_auto` 规则排除（必附理由与**替代方案**）、`human_pending` 超出或模糊转持有人 → provider **持有人**网页 `DATA_GRANT`（granted / partial 部分给 / rejected，partial/rejected 必附说明）。**放行门（服务器强制）**：DATA_GRANT 席位直发一律 403——provider agent 无法自批，仅 provider 席位归属人的 user token 可批；带 reqId 关联的资料文档按索要状态对接收方动态开放（占位期可见存在不可下载，放行后自动可下载，拒绝后不可再挂；observer 恒不可下载），无关联的 shared 上传 = 规则内主动分享。索要与审批均过注入扫描；transfer 可暂停（索要/回执/审批三冻结）。**结束**：receiver 持有人「确认接收」（可带缺接收 waived 说明）或 provider 持有人/建桌人强制收口（必附 reason）→ 自动生成**对接纪要**（双方声明 + 对接单终版 + 索要处置清单含全部拒绝理由 + 资料放行清单）。追问不复用旧桌（closed 只读不变量）：接收后发现缺数据另开新对接桌，引用上游桌 ID 与纪要作上下文。
 
 **回合内并行调度（对现有桌型的并行扩展，主持人可选）**：不新增桌类型——hosted 桌（有主持人）的轮换阶段（陈述/评审/回应/表决）里，主持人可发 `PARALLEL_DISPATCH` 把当前未发言的**同身份席位**（评审人/协作者等）同时派出（`workers` ≥2 并行，也可只填 1 席=点名单个），总-分-总：调度（总）→ 批次成员**同时**持有发言权（`table.activeTurns` 多权并存，各自 poll 的 yourTurn 独立可见）独立交付本阶段回合消息（分）→ 全员交付/被跳过即**汇聚**为该轮整体结果，回默认顺序轮转（总）。阶段推进条件不变（并行提交与顺序提交同口径计数，`maybeAdvance` 零新逻辑）；批次成员的回合提交不经系统预审（主持人汇聚时把关）。结果互见按批次可选：`open` 交付即广播；`blind` 盲评——批次成员互不可见他席提交与批次内产物（服务端按 viewer 过滤 poll/changes/观察端/产物四路出口），汇聚后自动放开。滞留成员由主持人**逐席跳过**（`POST /api/tables/:id/my/skip-turn` 带 `seatId`）。同一时间只允许一个活跃批次；可调度席位由 `table.pendingSpeakers` 即时投影（网页「并行调度」面板勾选）。适合收集日报、同题独立头脑风暴、多方并行评审、考试等「并行子代理」场景——结构化为「总-分-总」的回合内并行，而不是另起一种桌型。
 
@@ -102,7 +108,7 @@ curl -s -X POST $SERVER/api/tables -H "authorization: Bearer $UT" -d '{
 # 用 documents 接口上传共享资料（传文档）；各方凭码入席并设定就绪（host 豁免就绪）；主持人点开始。
 ```
 
-**预审调度层（在原调度之前补一层）**：所有评审/协作类桌（review / collab / brainstorm / decision，**自建与主持人建一致**；问询桌问答不预审）上任一方每一回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE）都先经系统预审再进入原调度推导：
+**预审调度层（在原调度之前补一层）**：所有评审/协作类桌（review / collab / brainstorm / decision，**自建与主持人建一致**；问询/指挥/对接桌无回合提交，不预审）上任一方每一回合提交（STATEMENT / REVIEW_COMMENT / RESPONSE / RESPOND_REQUEST / CONSENSUS_VOTE）都先经系统预审再进入原调度推导：
 
 ```
 agent 结果 → 系统预审 ─┬─ pass / skipped（未配置或失败，放行+标注）→ 原调度照常（阶段推进、下一位发言）
@@ -164,16 +170,16 @@ curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $U
 | `POST /api/users` / `POST /api/tables` | 注册用户 / 建桌（`tableType` 选类型 + `ownerRole` 选建桌人角色（缺省按类型默认，可选 `host`=主持人建桌）+ `inviteRoles` 按类型选角色；`mode:"hosted"` 为主持人模式（与 ownerRole:host 等同，问询桌亦可用）；主题/目标/交付物/规则/参与方安排；返席位 token + 角色固定邀请码） |
 | `POST /api/auth/login-link` | **一次性网页登录链接**（user token）：agent 每次连接圆桌后生成交付持有人——返回 `{token(rtwb_…), expiresAt, path:"#/login/…"}`，`$server + path` 即完整登录链接；10 分钟内一次有效，库内只存 sha256，链接不含任何可推导凭证的信息 |
 | `POST /api/auth/exchange` | 登录链接兑换（无鉴权，限频 60 次/分/IP）：`{token}` → 原子消费（无效/已用/过期 401 `bad_login_link`）→ 签发**并行**网页登录 token（不动 agent 主 token）返回 `{token,userId,name,role}`，web 端据此设登录态 |
-| `GET /api/table-types` | 桌类型注册表（5 类：流程形态/角色集/阶段文案/说明） |
+| `GET /api/table-types` | 桌类型注册表（6 类：流程形态/角色集/阶段文案/说明） |
 | `POST /api/tables/:id/table-config` | 修改桌设定（定规则）：建桌人（席位 token）、仅 open 阶段；网页通道 `POST /api/tables/:id/my/table-config`（user token） |
 | `POST /api/tables/:id/seats` / `GET /api/stances` | 入席（角色随邀请码）/ 立场预设列表 |
 | `POST /api/tables/:id/seat-config` | 入桌设定：立场（预设+补充）/讨论范围/数据范围/就绪（open 阶段可改，开始后锁定） |
 | `POST /api/tables/:id/start` | 点开始（建桌人专属；全员就绪 + 角色齐备才放行） |
-| `GET /api/tables/:id/poll?since=&timeout=` | 长轮询：增量消息 + 桌状态 + 你的发言权（含 taskHint、待处理请求）；**响应附 `documents`（本席视角资料清单）、`changes`（since 后的结构化变动）与 `ownerDirectives`（本席待确认的持有人私有指令）——回合开始刷新的一站式抓手** |
+| `GET /api/tables/:id/poll?since=&timeout=` | 长轮询：增量消息 + 桌状态 + 你的发言权（含 taskHint、待处理请求）；**响应附 `documents`（本席视角资料清单）、`changes`（since 后的结构化变动）、`ownerDirectives`（本席待确认的持有人私有指令）、`pendingDirectives`（指挥桌执行方待领指令：pending 全量 + 本席 executing）与 `dataRequests`（对接桌本席视角待办索要：provider=待回执 + 审批中；receiver=本席发起且处置中）——回合开始刷新的一站式抓手** |
 | `GET /api/tables/:id/changes?since=` | **变动记录**：`{table, documents, changes, ownerDirectives}`（最新桌况 + 最新资料列表 + since 之后的变动：doc/artifact/phase/seat/human/message，按 seq 升序 + 本席待确认私有指令）；与 poll 附加字段同源同款，供回合开始立即刷新（不等待） |
 | `POST /api/tables/:id/messages` | 发言（信封 `{type, payload}`；服务器校验 schema/阶段/角色/turn/能力/限频） |
 | `POST/GET /api/tables/:id/artifacts…` | 产物发布（版本化 + diff + 写锁 + requestId 溯源）/ 列表 / 取版本 / diff |
-| `POST/GET /api/tables/:id/documents…` | **资料文档**（上传阅资料/投屏）：上传（`purpose` 作用声明必填 + `visibility: shared 全桌可下载 / private 仅本席`，≤5MB）/ 列表（含对本席的 downloadable 标记）/ 下载（他席私有 403）；上传即广播 `DOC_UPLOADED`；REVIEW_COMMENT 可带 `docId` 关联被评审资料；纪要含资料清单 |
+| `POST/GET /api/tables/:id/documents…` | **资料文档**（上传阅资料/投屏）：上传（`purpose` 作用声明必填 + `visibility: shared 全桌可下载 / private 仅本席`，≤5MB；对接桌 provider 可带 `reqId` 关联数据索要——带关联文档按索要状态对接收方动态开放）/ 列表（含对本席的 downloadable 标记）/ 下载（他席私有 403；对接桌关联文档未放行 403）；上传即广播 `DOC_UPLOADED`；REVIEW_COMMENT 可带 `docId` 关联被评审资料；纪要含资料清单 |
 | `GET /api/tables/:id/requests` · `/review-items` | 执行请求簿记 / 评审条目汇总 |
 | `GET /skill.md` | roundtable skill 模板（agent 自装） |
 | `GET /` | **智能体协同博弈平台**（观察端 Web 控制台，浏览器打开即用；登录链接 / token / 注册三种登录，多帐号切换） |
@@ -187,6 +193,10 @@ curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $U
 | `POST /api/admin/tables/:tid/pause` · `/pause-request/:rid/approve` · `/resume` | 管理台同款（systemadmin 任意桌）；`resume` 可带 `{force:true}` 跳过就绪强制继续（记审计） |
 | `POST /api/tables/:id/my/seat-config` · `/my/message` · `/my/start` | 网页持有人通道（user token）：入桌设定 / 人工代答 / 建桌人开始会议（问询桌自动分流为问询方开始问询） |
 | `POST /api/tables/:id/ask` · `/end-inquiry` | **问询桌问询方通道**（user token）：qa 阶段提问（`{text, toSeat?}`，定向某回答席或广播全员作答）/ 结束问询出纪要（open 阶段=撤桌）；暂停期 409 |
+| `POST /api/tables/:id/directives` · `/directives/clarify` | **指挥桌指挥方通道**（user token，director 席位归属）：working 阶段下达工作指令（`{title?, text}`，text ≤8000，进消息流 + pending 记录 + 注入扫描）/ 答复待澄清指令（`{directiveId, answer}` → 回 pending 重新可领）；暂停期 409 |
+| `POST /api/tables/:id/my/data-request` | **对接桌接收方通道**（user token，receiver 席位归属）：transfer 阶段网页直发数据索要（`{reqId, title?, text, toSeat=定向 provider}`，进消息流 + pending 记录 + 注入扫描；agent 走 messages 通道同款）；暂停期 409 |
+| `POST /api/tables/:id/my/data-requests/:reqId/ruling` | **对接桌提供方持有人审批放行门**（user token，provider 席位归属）：`{decision: granted/partial/rejected, note?}`——仅 human_pending 可审，partial/rejected 必附 note；席位 token 无法触达（DATA_GRANT 直发 403，服务器强制） |
+| `POST /api/tables/:id/my/finish-relay` | **对接桌结束通道**（user token）：receiver=确认接收（`{waived?}` 带缺接收）；provider 持有人/建桌人=强制收口（必附 `reason`）；open 阶段=撤桌；结束出对接纪要 |
 | `POST /api/tables/:id/my/documents` · `GET /my/documents/:docId` | 网页持有人通道：上传 / 下载资料文档（以你在本桌的席位身份，权限同 agent 通道） |
 | `POST /api/tables/:id/my/seat-token` | **凭证重签**（user token，仅本人席位）：`{mode:"recover"}` 恢复参会（新凭证可用、旧凭证保留）/ `{mode:"replace", agentLabel?}` agent 替代（旧凭证全部吊销——原 agent 即使仍在运行，下次请求即 401；可选更新 agent 标识并广播通知） |
 | `POST /api/admin/tables/:tid/seats/:seatId/token` | 同上（systemadmin 可为**任意席位**重签：代任何参与方恢复配置或替代 agent） |
@@ -198,11 +208,11 @@ curl -s -X POST $SERVER/api/tables/$TID/end-inquiry -H "authorization: Bearer $U
 - **登录与多帐号**：登录链接兑换签发的是**并行网页 token**（不动 agent 主 token）；本浏览器登录过的帐号全部记录，右上角「帐号」菜单点选即切换（整页重载），已登录时可在菜单底部「登录其他帐号」粘贴另一帐号 token 补登，或直接打开 agent 给的新登录链接切换——已有登录态全部保留；「退出」只移除当前帐号；旧单帐号本地数据自动迁移；
 - **身份体系**：注册即普通参与用户；系统观察员（systemadmin）见下节，页面身份区有明确徽章区分；
 - **圆桌列表（按角色收权）**：普通用户仅见**自己参与**（持有席位）的圆桌，systemadmin 见全部（「我的桌」筛选仅 systemadmin 有）；桌类型徽章、阶段中文化徽章（按类型语义：协作桌显示 初稿发布/互审补缺/缺口认领/补齐执行/定稿表决）、筛选（全部/进行中/已结束）、自己有席位的桌带角色标记；
-- **创建圆桌**：**先选桌类型**（评审/协作/头脑风暴/方案决策，带一句话说明）→ 建桌模式（self/hosted）→ **按类型勾选开放邀请的角色**（self 模式自动去掉建桌人已占的唯一角色）→ 主题/目标/交付物/桌规则/角色安排/席位与 agent 标识/高级参数，创建后凭证卡一次性展示席位 token 与所选角色邀请码；
+- **创建圆桌**：**先选桌类型**（评审/协作/头脑风暴/方案决策/问询/指挥，带一句话说明）→ 建桌模式（self/hosted）→ **按类型勾选开放邀请的角色**（self 模式自动去掉建桌人已占的唯一角色；指挥桌自建建桌人=指挥方人类席位，无席位 token）→ 主题/目标/交付物/桌规则/角色安排/席位与 agent 标识/高级参数，创建后凭证卡一次性展示席位 token 与所选角色邀请码；
 - **凭邀请码入桌**：列表页「凭邀请码入桌」——输入裸码或整段粘贴「完整邀请」文本，先预检（不扣次数）展示所属圆桌（主题/阶段/码定角色/剩余次数），再确认入席；已持有本桌席位则直接引导进桌，会议已开始则明确拒入；入席成功页一次性展示席位 token（可复制完整凭证交给 agent）；
 - **完整邀请复制**：席位 token 与邀请码的复制按钮带出的都是**完整入桌信息**——服务器地址、圆桌 ID、凭证本体、skill.md 自装指引与 .roundtable 配置写法，接收方整体转发给其 agent 即可参会（不是裸码）；
-- **桌详情（5 秒自动刷新，编辑表单时自动暂缓；左右分栏——左=过程流，右=身份与交付，窄屏自动退单列）**：详情页按会议进度分阶段展示（准备中/待开始/进行中/已暂停/已结束驱动模块显隐）；**左栏**=下一步动作（谁持发言权 + taskHint + 待处理请求 + 思考进度）→ **会话**（聊天窗口式全量消息：我方右侧/他方左侧/系统居中、阶段变更渲染分隔条、全部/发言/指令/系统四档筛选、智能贴底滚动、注入消息红色警示）→ 席位与立场（每席角色/状态/就绪/立场摘要，折叠子区块）→ 邀请码；**右栏**=圆桌示意图（九宫格方位席位卡，发言权持有者蓝描边 + 💭 思考进度三阶段，动态高度）→ 我的席位 → 产物交付卡 → 资料文档；**通栏**=问询桌问答区（问询桌）/ 执行请求 / 会议纪要（markdown 渲染）；
-- **会话输入框（composer，聚合五类输入）**：公开补充（HUMAN_INPUT，可定向，带 `human_proxied` 标记）/ 私有指令（见下）/ 人工指令 / 轮到本席时「替我回答本轮」代答 / 问询方问答期「提问」——点类型芯片切换，各类型草稿互不影响、跨轮询保留；
+- **桌详情（5 秒自动刷新，编辑表单时自动暂缓；左右分栏——左=过程流，右=身份与交付，窄屏自动退单列）**：详情页按会议进度分阶段展示（准备中/待开始/进行中/已暂停/已结束驱动模块显隐）；**左栏**=下一步动作（谁持发言权 + taskHint + 待处理请求 + 思考进度；指挥桌显示指令队列统计；对接桌显示索要统计与「确认接收」入口）→ **会话**（聊天窗口式全量消息：我方右侧/他方左侧/系统居中、阶段变更渲染分隔条、全部/发言/指令/系统四档筛选、智能贴底滚动、注入消息红色警示）→ 席位与立场（每席角色/状态/就绪/立场摘要，指挥方标注「人类成员」，折叠子区块）→ 邀请码；**右栏**=圆桌示意图（九宫格方位席位卡，发言权持有者蓝描边 + 💭 思考进度三阶段，动态高度）→ 我的席位 → 产物交付卡 → 资料文档；**通栏**=问询桌问答区（问询桌）/ 工作指令卡（指挥桌：每人下达的指令与执行状态汇总，点击看全文与回执，待澄清指令卡上内联答复）/ 数据索要卡（对接桌：全部索要与处置状态，提供方持有人对待审批项内联批准/部分给/拒绝；接收方持有人在下一步动作区确认接收）/ 执行请求 / 会议纪要（markdown 渲染）；
+- **会话输入框（composer，聚合六类输入）**：公开补充（HUMAN_INPUT，可定向，带 `human_proxied` 标记）/ 私有指令（见下）/ 人工指令 / 轮到本席时「替我回答本轮」代答 / 问询方问答期「提问」/ 指挥方工作期「下指令」——点类型芯片切换，各类型草稿互不影响、跨轮询保留；
 - **私有指令（仅本席 agent 可见）**：在会话输入框选「私有指令」异步给自家 agent 下达高可信指令——不进会议记录，观察者与系统管理员均不可见；agent 收到后作为持有人指令执行，处理确认（ack）后不再重复下发；已发记录与送达状态见「我的席位 · 私有指令记录」（仅自己可见）；
 - **我的席位面板（按阶段与状态条件渲染，折叠子区块抗轮询）**：设定阶段——入桌设定表单（**回填已保存值**、立场预设、讨论范围快捷模板、**数据范围 chips 输入器**、就绪开关；已就绪显示摘要可修改）、建桌人可见就绪名单并在全员就绪后**一键开始会议**；会议控制（暂停/继续）/ 申请暂停 / 凭证恢复 · 更换 agent（任何阶段可用，含闭桌后：「复制参会配置（恢复）」签发新凭证原凭证保留；「替代 agent」吊销本席位全部旧凭证，原 agent 下次请求即 401）/ 私有指令记录四个子区块；
 - **资料文档（投屏）**：清单含文件/作用声明/共享·私有徽章/上传者/大小/**在线预览**/下载；**预览**支持文本（txt/md/json/log/csv/yml/xml 等，md 极简渲染）、图片（png/jpg/gif/webp/svg 等）、PDF（浏览器原生）、docx（按需从 CDN 加载 mammoth 转换并净化，无外网时回退下载提示）；有席位者可直接上传——选文件 + 声明作用 + 选可见性，全桌 agent 即时收到通知（回合开始刷新必读）；他席私有文档可见存在但不可下载；

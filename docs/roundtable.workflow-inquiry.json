@@ -1,0 +1,263 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Agent 圆桌 · 问询流程（人问 agent 答）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "setup",
+        "label": "开局设定",
+        "focus": [
+          "create",
+          "seat",
+          "start"
+        ],
+        "note": "自建或主持人发码就位；回答方凭码入席声明边界，全员就绪后开始问询。"
+      },
+      {
+        "id": "qa",
+        "label": "问答循环",
+        "focus": [
+          "ask",
+          "reply",
+          "pause"
+        ],
+        "note": "问询方随时提问（toSeat 定向或广播全体）；回答方在声明范围内作答；可暂停冻结。"
+      },
+      {
+        "id": "close",
+        "label": "结束与纪要",
+        "focus": [
+          "end",
+          "minutes"
+        ],
+        "note": "问询方一键结束；服务器自动生成问询纪要。"
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "asker",
+      "label": "问询方（网页 · 人）"
+    },
+    {
+      "id": "server",
+      "label": "服务器 · 状态机"
+    },
+    {
+      "id": "answerer",
+      "label": "回答方 agents（多席）"
+    }
+  ],
+  "phases": [
+    {
+      "id": "setup_phase",
+      "label": "设定",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "qa_phase",
+      "label": "问答（常驻循环）",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "close_phase",
+      "label": "结束",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "g_ask",
+      "label": "仅问询方可提问",
+      "lane": "asker",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "g_answer",
+      "label": "每席每题一答",
+      "lane": "answerer",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "create",
+    "seat",
+    "start",
+    "ask",
+    "reply",
+    "end",
+    "minutes"
+  ],
+  "nodes": [
+    {
+      "id": "create",
+      "lane": "asker",
+      "col": 0,
+      "type": "frontend",
+      "label": "建问询桌",
+      "sublabel": "自建即问询方·或主持人发码",
+      "width": 156
+    },
+    {
+      "id": "seat",
+      "lane": "answerer",
+      "col": 0,
+      "type": "backend",
+      "label": "回答方入席",
+      "sublabel": "凭码入席·声明边界·就绪",
+      "width": 156
+    },
+    {
+      "id": "start",
+      "lane": "asker",
+      "col": 1,
+      "type": "frontend",
+      "label": "开始问询",
+      "sublabel": "全部回答方就绪后·网页点开始",
+      "width": 148
+    },
+    {
+      "id": "ask",
+      "lane": "asker",
+      "col": 2,
+      "type": "frontend",
+      "label": "提问",
+      "sublabel": "toSeat 定向·省略=广播",
+      "width": 148
+    },
+    {
+      "id": "reply",
+      "lane": "answerer",
+      "col": 3,
+      "type": "backend",
+      "label": "作答",
+      "sublabel": "获 taskHint 作答权·范围内有据",
+      "width": 168
+    },
+    {
+      "id": "pause",
+      "lane": "server",
+      "col": 3,
+      "type": "security",
+      "label": "暂停",
+      "sublabel": "问答双冻结·重新就绪后继续",
+      "width": 156
+    },
+    {
+      "id": "end",
+      "lane": "asker",
+      "col": 4,
+      "type": "frontend",
+      "label": "结束问询",
+      "sublabel": "问询方·一键结束",
+      "width": 132
+    },
+    {
+      "id": "minutes",
+      "lane": "server",
+      "col": 5,
+      "type": "database",
+      "label": "问询纪要",
+      "sublabel": "问答对（定向/未答）+声明+清单",
+      "width": 164
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-create-seat",
+      "from": "create",
+      "to": "seat",
+      "label": "「回答方」邀请码"
+    },
+    {
+      "id": "e-seat-start",
+      "from": "seat",
+      "to": "start",
+      "label": "全员就绪"
+    },
+    {
+      "id": "e-start-ask",
+      "from": "start",
+      "to": "ask",
+      "label": "进入问答",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-ask-reply",
+      "from": "ask",
+      "to": "reply",
+      "label": "toSeat 定向 · 省略=广播"
+    },
+    {
+      "id": "e-reply-ask",
+      "from": "reply",
+      "to": "ask",
+      "label": "无轮次·随时下一问",
+      "variant": "emphasis",
+      "role": "return",
+      "route": "return-left"
+    },
+    {
+      "id": "e-reply-end",
+      "from": "reply",
+      "to": "end",
+      "label": "问询方随时可结束",
+      "variant": "dashed"
+    },
+    {
+      "id": "e-end-minutes",
+      "from": "end",
+      "to": "minutes",
+      "label": "自动生成",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-ask-pause",
+      "from": "ask",
+      "to": "pause",
+      "label": "问询方/主持人 暂停",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "e-pause-ask",
+      "from": "pause",
+      "to": "ask",
+      "label": "重新就绪·继续",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "开局与席位",
+      "items": [
+        "自建=建桌人即问询方（不占席位）；主持人建桌则另发「问询方」邀请码，提问者凭码在网页就位（同桌唯一）",
+        "回答方凭「回答方」邀请码入席；入桌设定即声明回答边界：立场=回答范围、讨论范围、数据范围"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "问答规则与交付",
+      "items": [
+        "提问仅问询方可发（席位直发会被拒）：toSeat 定向某回答席，省略=广播全体各自作答；每席每题一答",
+        "作答在声明范围内给出有依据回答；超范围明确说明并拒答、给建议问询方向；引用按披露级别 read 概括 / quote 摘录 / full 原文"
+      ]
+    }
+  ]
+}

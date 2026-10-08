@@ -1,0 +1,344 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Agent 圆桌 · 对接流程（relay）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "setup",
+        "label": "开局设定",
+        "focus": [
+          "create",
+          "rules",
+          "intent",
+          "start"
+        ],
+        "note": "发起方建桌（缺省提供方），双方 agent 席位入席声明，就绪后进入常驻对接态。"
+      },
+      {
+        "id": "doc-check",
+        "label": "对接单与清单核验",
+        "focus": [
+          "relaydoc",
+          "checklist"
+        ],
+        "note": "提供方 AI 按模板发布面向 AI 消费的结构化对接单；接收方 AI 按下一步任务定制内容清单核验覆盖度。"
+      },
+      {
+        "id": "request-loop",
+        "label": "索要循环",
+        "focus": [
+          "request",
+          "receipt",
+          "approve"
+        ],
+        "note": "DATA_REQUEST 定向索要；回执三选一，human_pending 由持有人 DATA_GRANT 审批，队列驱动直至全部处置。"
+      },
+      {
+        "id": "close",
+        "label": "收口与纪要",
+        "focus": [
+          "confirm",
+          "minutes"
+        ],
+        "note": "接收方 AI 直接消费对接单执行下一步；持有人确认接收，服务器自动生成对接纪要。"
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "holders",
+      "label": "持有人（网页 · 人）"
+    },
+    {
+      "id": "provider",
+      "label": "提供方 agent"
+    },
+    {
+      "id": "server",
+      "label": "服务器 · 状态机"
+    },
+    {
+      "id": "receiver",
+      "label": "接收方 agent"
+    }
+  ],
+  "phases": [
+    {
+      "id": "p-setup",
+      "label": "设定",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "p-running",
+      "label": "对接中 · 索要队列驱动",
+      "fromCol": 2,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "p-close",
+      "label": "结束",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "human_web",
+      "label": "网页 · 人在环",
+      "lane": "holders",
+      "fromCol": 2,
+      "toCol": 5,
+      "variant": "security"
+    },
+    {
+      "id": "server_gate",
+      "label": "强制放行门",
+      "lane": "server",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "create",
+    "rules",
+    "start",
+    "relaydoc",
+    "checklist",
+    "request",
+    "receipt",
+    "approve",
+    "confirm",
+    "minutes"
+  ],
+  "nodes": [
+    {
+      "id": "create",
+      "lane": "provider",
+      "col": 0,
+      "type": "backend",
+      "label": "建对接桌",
+      "sublabel": "发起方建桌 · 缺省提供方",
+      "width": 132,
+      "height": 56
+    },
+    {
+      "id": "rules",
+      "lane": "provider",
+      "col": 1,
+      "type": "security",
+      "label": "声明数据规则",
+      "sublabel": "三层授权 · read/quote/full",
+      "width": 136,
+      "height": 56
+    },
+    {
+      "id": "intent",
+      "lane": "receiver",
+      "col": 1,
+      "type": "backend",
+      "label": "声明接收目标",
+      "sublabel": "目标 · 关注点 · 就绪",
+      "width": 132,
+      "height": 56
+    },
+    {
+      "id": "start",
+      "lane": "holders",
+      "col": 2,
+      "type": "frontend",
+      "label": "开始对接",
+      "sublabel": "常驻态 · 无发言权轮转",
+      "width": 136,
+      "height": 56
+    },
+    {
+      "id": "relaydoc",
+      "lane": "provider",
+      "col": 3,
+      "type": "backend",
+      "label": "发布对接单",
+      "sublabel": "AI 整理 · 面向 AI 消费",
+      "width": 140,
+      "height": 56
+    },
+    {
+      "id": "checklist",
+      "lane": "receiver",
+      "col": 3,
+      "type": "backend",
+      "label": "清单核验",
+      "sublabel": "任务定制内容清单",
+      "width": 128,
+      "height": 56
+    },
+    {
+      "id": "request",
+      "lane": "receiver",
+      "col": 4,
+      "type": "backend",
+      "label": "数据索要",
+      "sublabel": "要什么 / 用途 / 为何缺",
+      "width": 136,
+      "height": 56
+    },
+    {
+      "id": "receipt",
+      "lane": "provider",
+      "col": 4,
+      "type": "backend",
+      "label": "自动回执 · 三选一",
+      "sublabel": "规则内 / 排除 / 拿不准转人",
+      "width": 148,
+      "height": 56
+    },
+    {
+      "id": "approve",
+      "lane": "holders",
+      "col": 4,
+      "type": "security",
+      "label": "持有人审批",
+      "sublabel": "批准 / 部分给 / 拒绝",
+      "width": 136,
+      "height": 56
+    },
+    {
+      "id": "confirm",
+      "lane": "holders",
+      "col": 5,
+      "type": "frontend",
+      "label": "确认接收",
+      "sublabel": "或强制收口 · 必附理由",
+      "width": 132,
+      "height": 56
+    },
+    {
+      "id": "minutes",
+      "lane": "server",
+      "col": 5,
+      "type": "database",
+      "label": "对接纪要",
+      "sublabel": "自动生成 · 终版留档",
+      "width": 132,
+      "height": 56
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-create-rules",
+      "from": "create",
+      "to": "rules",
+      "label": "邀请 · 双方 agent 席位"
+    },
+    {
+      "id": "e-create-intent",
+      "from": "create",
+      "to": "intent",
+      "label": "接收方受邀入席",
+      "role": "branch"
+    },
+    {
+      "id": "e-rules-start",
+      "from": "rules",
+      "to": "start",
+      "label": "声明就绪"
+    },
+    {
+      "id": "e-intent-start",
+      "from": "intent",
+      "to": "start",
+      "label": "就绪",
+      "role": "branch"
+    },
+    {
+      "id": "e-start-relaydoc",
+      "from": "start",
+      "to": "relaydoc",
+      "label": "进入常驻对接态",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-relaydoc-checklist",
+      "from": "relaydoc",
+      "to": "checklist",
+      "label": "对接单 v1 · 结构化无损"
+    },
+    {
+      "id": "e-checklist-request",
+      "from": "checklist",
+      "to": "request",
+      "label": "清单缺口 · unknowns"
+    },
+    {
+      "id": "e-request-receipt",
+      "from": "request",
+      "to": "receipt",
+      "label": "DATA_REQUEST · 先经持有人过目",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-receipt-relaydoc",
+      "from": "receipt",
+      "to": "relaydoc",
+      "label": "放行补新版本 / 关联文件",
+      "role": "return"
+    },
+    {
+      "id": "e-receipt-approve",
+      "from": "receipt",
+      "to": "approve",
+      "label": "human_pending",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "e-confirm-minutes",
+      "from": "confirm",
+      "to": "minutes",
+      "label": "结束 · 自动纪要",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-approve-confirm",
+      "from": "approve",
+      "to": "confirm",
+      "label": "全部处置 · AI 直接消费后确认",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "AI 端到端：整理 · 理解 · 梳理",
+      "items": [
+        "对接单面向 AI 消费：三层授权 + 负面清单 + 未决 + 转递声明，版本化、可定位",
+        "接收方 AI 按任务定制内容清单核验；直接消费对接单，无「人读→重写」损耗"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "清单驱动的索要循环",
+      "items": [
+        "清单缺口与 unknowns 逐条定向 DATA_REQUEST，先经持有人过目；队列驱动直至全部处置",
+        "轻量对接：结论+负面清单+未决三段即可开传——日常高频小对接不为流程所累"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "放行门与收口",
+      "items": [
+        "规则内自动放行；排除必附替代方案；超规则转持有人 DATA_GRANT（agent 无法自批，文件按审批开放）",
+        "确认接收或强制收口（必附理由）后自动生成对接纪要，含全部拒绝理由"
+      ]
+    }
+  ]
+}

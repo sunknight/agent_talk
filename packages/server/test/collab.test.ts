@@ -97,14 +97,20 @@ afterAll(() => new Promise<void>((r) => {
 }));
 
 describe("桌类型注册与建桌校验", () => {
-  it("GET /api/table-types 返回 5 类注册表", async () => {
+  it("GET /api/table-types 返回 7 类注册表", async () => {
     const r = await call("GET", "/api/table-types");
     expect(r.ok).toBe(true);
     const ids = r.data.tableTypes.map((t: { id: string }) => t.id);
-    expect(ids).toEqual(["review", "collab", "brainstorm", "decision", "inquiry"]);
+    expect(ids).toEqual(["review", "collab", "brainstorm", "decision", "inquiry", "dispatch", "relay"]);
     const collab = r.data.tableTypes.find((t: { id: string }) => t.id === "collab");
     expect(collab.roles).toEqual(["collaborator", "observer"]);
     expect(collab.flow).toBe("collab");
+    const dispatch = r.data.tableTypes.find((t: { id: string }) => t.id === "dispatch");
+    expect(dispatch.roles).toEqual(["worker", "director", "observer"]);
+    expect(dispatch.flow).toBe("dispatch");
+    const relay = r.data.tableTypes.find((t: { id: string }) => t.id === "relay");
+    expect(relay.roles).toEqual(["provider", "receiver", "observer"]);
+    expect(relay.flow).toBe("relay");
   });
 
   it("协作桌：owner 自动成为 collaborator，默认发 collaborator+observer 两码（self 模式协作者可多席）", async () => {

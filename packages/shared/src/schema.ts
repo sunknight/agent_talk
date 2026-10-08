@@ -4,6 +4,8 @@ import type {
   Envelope, HelloPayload, SeatJoinPayload, SeatConfigPayload, TableCreatePayload, TableStartPayload,
   StatementPayload, QuestionPayload, ReplyPayload,
   ReviewCommentPayload, ResponsePayload, RequestPayload, RequestResponsePayload,
+  DirectivePayload, DirectiveResultPayload, DirectiveClarifyPayload,
+  DataRequestPayload, DataResultPayload, DataGrantPayload,
   ArtifactPublishPayload, ArtifactFetchPayload, ArtifactLockPayload,
   ConsensusVotePayload, EscalatePayload, HumanInputPayload, HumanRulingPayload,
   TurnReleasePayload, HostPrereviewPayload, SupplementPayload, HistoryPayload,
@@ -40,7 +42,7 @@ const seatJoinSchema = s({
   type: "object", required: ["inviteCode", "seatName", "role", "agentLabel"],
   properties: {
     inviteCode: str(4, 64), seatName: str(1, 64),
-    role: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer", "asker"] },
+    role: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer", "asker", "worker", "director", "provider", "receiver"] },
     agentLabel: str(1, 64),
     capsOverride: {
       type: "object", additionalProperties: false,
@@ -128,6 +130,68 @@ const requestResponseSchema = s({
   additionalProperties: false,
 });
 
+const directiveSchema = s({
+  type: "object", required: ["directiveId", "text"],
+  properties: {
+    directiveId: str(1, 64),
+    title: str(0, 200),
+    text: str(1, 8_000),
+  },
+  additionalProperties: false,
+});
+
+const directiveResultSchema = s({
+  type: "object", required: ["directiveId", "outcome"],
+  properties: {
+    directiveId: str(1, 64),
+    outcome: { type: "string", enum: ["executing", "done", "failed", "need_clarify", "rejected"] },
+    note: str(0, 4_000),
+    clarify: str(0, 4_000),
+  },
+  additionalProperties: false,
+});
+
+const directiveClarifySchema = s({
+  type: "object", required: ["directiveId", "answer"],
+  properties: {
+    directiveId: str(1, 64),
+    answer: str(1, 4_000),
+  },
+  additionalProperties: false,
+});
+
+const dataRequestSchema = s({
+  type: "object", required: ["reqId", "text", "toSeat"],
+  properties: {
+    reqId: str(1, 64),
+    title: str(0, 200),
+    text: str(1, 8_000),
+    toSeat: str(1, 64),
+  },
+  additionalProperties: false,
+});
+
+const dataResultSchema = s({
+  type: "object", required: ["reqId", "outcome"],
+  properties: {
+    reqId: str(1, 64),
+    outcome: { type: "string", enum: ["granted_auto", "rejected_auto", "human_pending"] },
+    note: str(0, 4_000),
+    docIds: { type: "array", minItems: 1, maxItems: 20, items: str(1, 64) },
+  },
+  additionalProperties: false,
+});
+
+const dataGrantSchema = s({
+  type: "object", required: ["reqId", "decision"],
+  properties: {
+    reqId: str(1, 64),
+    decision: { type: "string", enum: ["granted", "partial", "rejected"] },
+    note: str(0, 4_000),
+  },
+  additionalProperties: false,
+});
+
 const artifactPublishSchema = s({
   type: "object", required: ["name", "format", "contentBase64", "changeNote"],
   properties: {
@@ -159,7 +223,7 @@ const humanRulingSchema = s({
   type: "object", required: ["instruction"],
   properties: {
     instruction: str(1, 8_000),
-    resumePhase: { type: "string", enum: ["open", "qa", "statements", "review", "response", "execution", "convergence", "human_intervention", "closed"] },
+    resumePhase: { type: "string", enum: ["open", "qa", "working", "transfer", "statements", "review", "response", "execution", "convergence", "human_intervention", "closed"] },
     forceConvergence: { type: "boolean" },
   },
   additionalProperties: false,
@@ -222,8 +286,8 @@ const tableCreateSchema = s({
   properties: {
     topic: str(1, 300),
     template: { type: "string", enum: ["review-collab"] },
-    tableType: { type: "string", enum: ["review", "collab", "brainstorm", "decision", "inquiry"] },
-    inviteRoles: { type: "array", minItems: 1, maxItems: 5, uniqueItems: true, items: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer"] } },
+    tableType: { type: "string", enum: ["review", "collab", "brainstorm", "decision", "inquiry", "dispatch", "relay"] },
+    inviteRoles: { type: "array", minItems: 1, maxItems: 5, uniqueItems: true, items: { type: "string", enum: ["proposer", "reviewer", "observer", "collaborator", "answerer", "worker", "director", "provider", "receiver"] } },
     mode: { type: "string", enum: ["self", "hosted"] },
     goals: str(0, 4_000), deliverables: str(0, 4_000), rules: str(0, 4_000), rolePlan: str(0, 4_000),
     owner: {
@@ -275,6 +339,12 @@ export const payloadValidators: Partial<Record<string, (p: unknown) => boolean>>
   RESPONSE: responseSchema,
   REQUEST: requestSchema,
   RESPOND_REQUEST: requestResponseSchema,
+  DIRECTIVE: directiveSchema,
+  DIRECTIVE_RESULT: directiveResultSchema,
+  DIRECTIVE_CLARIFY: directiveClarifySchema,
+  DATA_REQUEST: dataRequestSchema,
+  DATA_RESULT: dataResultSchema,
+  DATA_GRANT: dataGrantSchema,
   ARTIFACT_PUBLISH: artifactPublishSchema,
   ARTIFACT_FETCH: artifactFetchSchema,
   ARTIFACT_LOCK: artifactLockSchema,
@@ -321,6 +391,12 @@ export const is = {
   response: (p: unknown): p is ResponsePayload => !!payloadValidators.RESPONSE!(p),
   request: (p: unknown): p is RequestPayload => !!payloadValidators.REQUEST!(p),
   requestResponse: (p: unknown): p is RequestResponsePayload => !!payloadValidators.RESPOND_REQUEST!(p),
+  directive: (p: unknown): p is DirectivePayload => !!payloadValidators.DIRECTIVE!(p),
+  directiveResult: (p: unknown): p is DirectiveResultPayload => !!payloadValidators.DIRECTIVE_RESULT!(p),
+  directiveClarify: (p: unknown): p is DirectiveClarifyPayload => !!payloadValidators.DIRECTIVE_CLARIFY!(p),
+  dataRequest: (p: unknown): p is DataRequestPayload => !!payloadValidators.DATA_REQUEST!(p),
+  dataResult: (p: unknown): p is DataResultPayload => !!payloadValidators.DATA_RESULT!(p),
+  dataGrant: (p: unknown): p is DataGrantPayload => !!payloadValidators.DATA_GRANT!(p),
   artifactPublish: (p: unknown): p is ArtifactPublishPayload => !!payloadValidators.ARTIFACT_PUBLISH!(p),
   artifactFetch: (p: unknown): p is ArtifactFetchPayload => !!payloadValidators.ARTIFACT_FETCH!(p),
   artifactLock: (p: unknown): p is ArtifactLockPayload => !!payloadValidators.ARTIFACT_LOCK!(p),

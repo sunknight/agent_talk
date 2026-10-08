@@ -1,0 +1,266 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Agent 圆桌 · 指挥流程（多人指挥 agent 干活）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "setup",
+        "label": "开局与就绪",
+        "focus": ["create", "join", "start"],
+        "note": "建桌发码、执行方入席声明执行范围，全部就绪后点开始进入常驻工作态。"
+      },
+      {
+        "id": "dispatch-loop",
+        "label": "指令队列循环",
+        "focus": ["directive", "queue", "claim", "receipt"],
+        "note": "指令排队全桌可见；执行方攒批领单，首个回执锁定归属，逐单回执终态。"
+      },
+      {
+        "id": "intervene-close",
+        "label": "介入与收尾",
+        "focus": ["clarify", "pause", "close", "minutes"],
+        "note": "澄清回 pending、暂停双冻结、闭桌自动生成工作纪要。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "director", "label": "指挥方（网页 · 可多个）" },
+    { "id": "server", "label": "服务器 · 状态机" },
+    { "id": "executor", "label": "执行方 agents（可多席）" }
+  ],
+  "phases": [
+    { "id": "ph-setup", "label": "设定", "fromCol": 0, "toCol": 1 },
+    { "id": "ph-working", "label": "工作中 · 指令队列驱动", "fromCol": 2, "toCol": 4, "variant": "emphasis" },
+    { "id": "ph-close", "label": "结束 · 纪要", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "g-director-intervene", "label": "指挥方介入通道", "lane": "director", "fromCol": 3, "toCol": 5, "variant": "security" },
+    { "id": "g-server-sm", "label": "DIRECTIVE 状态机", "lane": "server", "fromCol": 2, "toCol": 4, "variant": "dashed" }
+  ],
+  "mainPath": ["create", "join", "start", "directive", "queue", "claim", "receipt", "close", "minutes"],
+  "nodes": [
+    {
+      "id": "create",
+      "lane": "director",
+      "col": 0,
+      "type": "frontend",
+      "label": "建指挥桌",
+      "sublabel": "建桌人即指挥方 · 人类席位",
+      "width": 148
+    },
+    {
+      "id": "join",
+      "lane": "executor",
+      "col": 1,
+      "type": "backend",
+      "label": "执行方入席",
+      "sublabel": "凭码入席 · 声明执行范围",
+      "width": 148
+    },
+    {
+      "id": "start",
+      "lane": "director",
+      "col": 1,
+      "type": "frontend",
+      "label": "点开始",
+      "sublabel": "执行方全部就绪后",
+      "width": 132
+    },
+    {
+      "id": "directive",
+      "lane": "director",
+      "col": 2,
+      "type": "frontend",
+      "label": "下达指令",
+      "sublabel": "随时异步 · 可多条排队",
+      "tag": "DIRECTIVE",
+      "width": 148
+    },
+    {
+      "id": "queue",
+      "lane": "server",
+      "col": 3,
+      "type": "messagebus",
+      "label": "待领队列",
+      "sublabel": "pending · 全桌可见",
+      "width": 148
+    },
+    {
+      "id": "claim",
+      "lane": "executor",
+      "col": 3,
+      "type": "backend",
+      "label": "领单 · 攒批",
+      "sublabel": "同目标分组 · 排执行顺序",
+      "tag": "claimedBy",
+      "width": 156
+    },
+    {
+      "id": "receipt",
+      "lane": "executor",
+      "col": 4,
+      "type": "backend",
+      "label": "逐单回执终态",
+      "sublabel": "done·failed·rejected·need_clarify",
+      "width": 184
+    },
+    {
+      "id": "clarify",
+      "lane": "director",
+      "col": 4,
+      "type": "frontend",
+      "label": "澄清答复",
+      "sublabel": "网页答复反问",
+      "width": 132
+    },
+    {
+      "id": "pause",
+      "lane": "director",
+      "col": 3,
+      "type": "security",
+      "label": "暂停 / 恢复",
+      "sublabel": "下达与回执双冻结",
+      "width": 132
+    },
+    {
+      "id": "close",
+      "lane": "director",
+      "col": 5,
+      "type": "frontend",
+      "label": "闭桌",
+      "sublabel": "指挥方 · 结束工作",
+      "width": 128
+    },
+    {
+      "id": "minutes",
+      "lane": "server",
+      "col": 5,
+      "type": "database",
+      "label": "工作纪要",
+      "sublabel": "指令清单 · 状态统计 · 逐条回执",
+      "width": 176
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-create-join",
+      "from": "create",
+      "to": "join",
+      "label": "邀请码"
+    },
+    {
+      "id": "e-join-start",
+      "from": "join",
+      "to": "start",
+      "label": "全部就绪"
+    },
+    {
+      "id": "e-start-directive",
+      "from": "start",
+      "to": "directive",
+      "label": "开始工作",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-directive-queue",
+      "from": "directive",
+      "to": "queue",
+      "label": "DIRECTIVE",
+      "role": "async"
+    },
+    {
+      "id": "e-queue-claim",
+      "from": "queue",
+      "to": "claim",
+      "label": "领单回执 executing"
+    },
+    {
+      "id": "e-claim-receipt",
+      "from": "claim",
+      "to": "receipt",
+      "label": "执行"
+    },
+    {
+      "id": "e-receipt-close",
+      "from": "receipt",
+      "to": "close",
+      "label": "全部指令终态"
+    },
+    {
+      "id": "e-close-minutes",
+      "from": "close",
+      "to": "minutes",
+      "label": "自动生成",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-receipt-claim",
+      "from": "receipt",
+      "to": "claim",
+      "label": "领下一单 · 队列驱动",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "e-receipt-clarify",
+      "from": "receipt",
+      "to": "clarify",
+      "label": "need_clarify",
+      "role": "branch"
+    },
+    {
+      "id": "e-clarify-queue",
+      "from": "clarify",
+      "to": "queue",
+      "label": "回 pending 重新可领",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "e-directive-pause",
+      "from": "directive",
+      "to": "pause",
+      "label": "可暂停",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "e-pause-directive",
+      "from": "pause",
+      "to": "directive",
+      "label": "恢复",
+      "variant": "dashed",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "指挥协作 · 席位",
+      "items": [
+        "建桌人自动成为指挥方：人类席位，不签发 agent 凭证",
+        "「执行方」码发 agent，「指挥方」码可发多人；执行方入席声明范围，指挥方无需设定",
+        "常驻工作态：无发言权轮转、无回合推进，指令入消息流全桌可见"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "领单与回执",
+      "items": [
+        "待领清单自主攒批：同目标分组、排执行顺序；领单回执 executing 后 claimedBy 锁定归属，其他执行方不能再领",
+        "done 附结果说明/外部成果链接 · failed 必附原因 · rejected 超出能力/安全边界必附理由 · need_clarify 反问"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "介入 · 收尾",
+      "items": [
+        "need_clarify 由指挥方网页答复，指令回 pending 重新可领；指挥方随时追加指令",
+        "暂停期下达与回执双冻结；闭桌自动生成纪要：指令清单 + 状态统计 + 逐条回执"
+      ]
+    }
+  ]
+}

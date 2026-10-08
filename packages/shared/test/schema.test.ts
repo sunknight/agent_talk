@@ -76,6 +76,27 @@ describe("payload schema", () => {
     expect(is.humanRuling({ instruction: "继续", resumePhase: "review" })).toBe(true);
     expect(is.humanRuling({ instruction: "继续", resumePhase: "war" })).toBe(false);
   });
+
+  it("DIRECTIVE：text 必填、title 可选；directiveId 必填（服务器生成后回填校验同款）", () => {
+    expect(is.directive({ directiveId: "wd_1", text: "修改 bd10 搜索框背景为白色" })).toBe(true);
+    expect(is.directive({ directiveId: "wd_1", title: "改配色", text: "…" })).toBe(true);
+    expect(is.directive({ directiveId: "wd_1" })).toBe(false);
+    expect(is.directive({ text: "缺 directiveId" })).toBe(false);
+  });
+
+  it("DIRECTIVE_RESULT：outcome 枚举五态；note/clarify 可选（必填性留 engine 层）", () => {
+    expect(is.directiveResult({ directiveId: "wd_1", outcome: "executing" })).toBe(true);
+    expect(is.directiveResult({ directiveId: "wd_1", outcome: "need_clarify", clarify: "指哪一家竞品？" })).toBe(true);
+    expect(is.directiveResult({ directiveId: "wd_1", outcome: "done", note: "完成" })).toBe(true);
+    expect(is.directiveResult({ directiveId: "wd_1", outcome: "cancelled" })).toBe(false);
+    expect(is.directiveResult({ directiveId: "wd_1" })).toBe(false);
+  });
+
+  it("DIRECTIVE_CLARIFY：directiveId + answer 必填", () => {
+    expect(is.directiveClarify({ directiveId: "wd_1", answer: "参考竞品 A" })).toBe(true);
+    expect(is.directiveClarify({ directiveId: "wd_1" })).toBe(false);
+    expect(is.directiveClarify({ answer: "缺 id" })).toBe(false);
+  });
 });
 
 describe("能力声明", () => {

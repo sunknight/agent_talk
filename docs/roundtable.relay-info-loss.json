@@ -1,0 +1,295 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "人人对接的信息丢失 vs relay 对接模式",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "problem",
+        "label": "问题 · 四环节丢失",
+        "focus": [
+          "m1",
+          "m2",
+          "m3",
+          "m4"
+        ],
+        "note": "传统人人对接：整理、理解、梳理全由人转手，信息在每个环节衰减，越靠下游越失真。"
+      },
+      {
+        "id": "solution",
+        "label": "方案 · AI 端到端",
+        "focus": [
+          "r1",
+          "r2",
+          "r3",
+          "r5"
+        ],
+        "note": "relay 对接桌：整理/理解/梳理端到端交给双方 AI，结构化对接单直接消费，清单驱动索要补缺。"
+      },
+      {
+        "id": "gate",
+        "label": "人在环 · 两端把控",
+        "focus": [
+          "h1",
+          "h2"
+        ],
+        "note": "人不在信息通道里做转写：只在两端定数据规则、批超规则例外（DATA_GRANT 服务器强制）。"
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "manual",
+      "label": "传统 · 人人对接"
+    },
+    {
+      "id": "relay",
+      "label": "relay 对接 · AI 端到端"
+    },
+    {
+      "id": "human",
+      "label": "持有人 · 通道之外"
+    }
+  ],
+  "groups": [
+    {
+      "id": "g-manual",
+      "label": "人转手四次 · 每步都在丢",
+      "lane": "manual",
+      "fromCol": 0,
+      "toCol": 3,
+      "variant": "dashed"
+    },
+    {
+      "id": "g-relay",
+      "label": "AI 全程承载 · 人不在通道里",
+      "lane": "relay",
+      "fromCol": 1,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "g-human",
+      "label": "只做两件事：定规则 · 批例外",
+      "lane": "human",
+      "fromCol": 0,
+      "toCol": 3,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "r1",
+    "r2",
+    "r3",
+    "r5"
+  ],
+  "nodes": [
+    {
+      "id": "m1",
+      "lane": "manual",
+      "col": 0,
+      "type": "external",
+      "label": "人整理文档",
+      "sublabel": "面向人阅读",
+      "width": 112,
+      "height": 56
+    },
+    {
+      "id": "m2",
+      "lane": "manual",
+      "col": 1,
+      "type": "external",
+      "label": "人读文档理解",
+      "sublabel": "凭个人语境吸收",
+      "width": 112,
+      "height": 56
+    },
+    {
+      "id": "m3",
+      "lane": "manual",
+      "col": 2,
+      "type": "external",
+      "label": "人重梳理",
+      "sublabel": "按习惯二次转写",
+      "width": 112,
+      "height": 56
+    },
+    {
+      "id": "m4",
+      "lane": "manual",
+      "col": 3,
+      "type": "external",
+      "label": "按梳理结果执行",
+      "sublabel": "④ 与原意持续偏离",
+      "width": 124,
+      "height": 56
+    },
+    {
+      "id": "h1",
+      "lane": "human",
+      "col": 0,
+      "type": "security",
+      "label": "定数据规则",
+      "sublabel": "三层授权 · 开始后锁定",
+      "width": 124,
+      "height": 56
+    },
+    {
+      "id": "r1",
+      "lane": "relay",
+      "col": 1,
+      "type": "backend",
+      "label": "提供方 AI 整理",
+      "sublabel": "对接单 · 面向 AI 消费",
+      "width": 132,
+      "height": 56
+    },
+    {
+      "id": "r2",
+      "lane": "relay",
+      "col": 2,
+      "type": "database",
+      "label": "结构化对接单",
+      "sublabel": "三层+负面清单·版本化",
+      "width": 142,
+      "height": 56
+    },
+    {
+      "id": "r3",
+      "lane": "relay",
+      "col": 3,
+      "type": "backend",
+      "label": "接收方 AI 清单核验",
+      "sublabel": "任务定制内容清单",
+      "width": 142,
+      "height": 56
+    },
+    {
+      "id": "h2",
+      "lane": "human",
+      "col": 3,
+      "type": "security",
+      "label": "批超规则例外",
+      "sublabel": "DATA_GRANT 专属通道",
+      "width": 142,
+      "height": 56
+    },
+    {
+      "id": "r5",
+      "lane": "relay",
+      "col": 4,
+      "type": "frontend",
+      "label": "AI 直接消费执行",
+      "sublabel": "无人读→重写环节",
+      "width": 136,
+      "height": 56
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-m1-m2",
+      "from": "m1",
+      "to": "m2",
+      "label": "① 整理时的筛选与省略",
+      "role": "branch",
+      "variant": "dashed"
+    },
+    {
+      "id": "e-m2-m3",
+      "from": "m2",
+      "to": "m3",
+      "label": "② 理解偏差 · 跳读",
+      "role": "branch",
+      "variant": "dashed"
+    },
+    {
+      "id": "e-m3-m4",
+      "from": "m3",
+      "to": "m4",
+      "label": "③ 二次转写变形",
+      "role": "branch",
+      "variant": "dashed"
+    },
+    {
+      "id": "e-h1-r1",
+      "from": "h1",
+      "to": "r1",
+      "label": "结论/过程/原始 · read/quote/full"
+    },
+    {
+      "id": "e-r1-r2",
+      "from": "r1",
+      "to": "r2",
+      "label": "结构化无损落单",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-r2-r3",
+      "from": "r2",
+      "to": "r3",
+      "label": "AI 直接消费",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-r3-r2",
+      "from": "r3",
+      "to": "r2",
+      "label": "清单缺口定向索要 · 补版本/放行文件",
+      "role": "return"
+    },
+    {
+      "id": "e-r3-h2",
+      "from": "r3",
+      "to": "h2",
+      "label": "超出声明规则",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "e-h2-r3",
+      "from": "h2",
+      "to": "r3",
+      "label": "批准 / 部分给 / 拒绝",
+      "role": "return",
+      "variant": "security"
+    },
+    {
+      "id": "e-r3-r5",
+      "from": "r3",
+      "to": "r5",
+      "label": "全部处置 · 信息最大化",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "问题：人人对接的四环节丢失",
+      "items": [
+        "提供方的人整理文档（① 筛选省略）→ 接收方的人读文档（② 理解偏差）→ 按自己习惯重梳理（③ 二次转写变形）→ 按梳理结果执行（④ 持续偏离）",
+        "每一环都是「人做有损压缩」，越靠近下游失真越大——文档看着齐了，关键细节早已丢失"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "方案：relay 对接桌（AI 端到端）",
+      "items": [
+        "整理、理解、梳理全部由双方 AI 承载：对接单是面向 AI 消费的结构（三层 + 负面清单 + 未决 + 转递声明），版本化、可定位",
+        "接收方 AI 按下一步任务定制「所需内容清单」，对照清单核验、缺口定向索要——信息传递最大化；下一步工作直接消费对接单，不「人读→重写」"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "人在环：只在两端把控",
+      "items": [
+        "人不在信息通道里做转写：提供方持有人只定三层授权规则（开始后锁定），接收方持有人过目索要清单",
+        "超出规则的数据必须提供方持有人亲自审批（DATA_GRANT 为网页专属，agent 无法自批）；全程留痕，闭桌自动生成对接纪要"
+      ]
+    }
+  ]
+}
