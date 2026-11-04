@@ -49,6 +49,10 @@ describe("观察端 Web 控制台", () => {
     expect(html).toContain("只显示这一次"); // ownerSeatToken 凭证警示
     expect(html).toContain('label class="t"'); // 表单字段标签
     expect(html).toContain("human-only"); // agent 标识选填默认
+    expect(html).toContain("ROLE_LABEL[it.role]||it.role"); // 邀请码卡角色徽章：全量角色映射（worker/director 等不再误显示为观察方）
+    expect(html).not.toContain("it.role==='reviewer'?'reviewer':'observer'"); // 旧两分支硬编码渲染已移除
+    expect(html).toContain(".rb.provider"); // 对接桌提供方徽章样式
+    expect(html).toContain(".rb.receiver"); // 对接桌接收方徽章样式
   });
 
   it("GET /api/me：返回会话身份（建桌表单默认席位名来源）", async () => {

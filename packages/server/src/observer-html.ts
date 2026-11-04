@@ -116,6 +116,8 @@ export const OBSERVER_HTML = String.raw`<!doctype html>
   .rb.asker { color:var(--acc); border-color:var(--acc); border-style:dashed; }
   .rb.worker { color:var(--ok); border-color:var(--ok); }
   .rb.director { color:var(--acc); border-color:var(--acc); border-style:dashed; }
+  .rb.provider { color:var(--vote); border-color:var(--vote); }
+  .rb.receiver { color:var(--warn); border-color:var(--warn); }
   .rb.ttype { color:var(--warn); border-color:var(--warn); border-style:dashed; }
   /* chips 输入器（数据范围） */
   .chips { display:flex; flex-wrap:wrap; gap:6px; padding:6px 8px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel); min-height:38px; align-items:center; transition:border-color var(--tt),box-shadow var(--tt); }
@@ -3876,7 +3878,7 @@ function renderDetail(d){
         var el=document.getElementById('invites');
         var hh='';
         inv.invites.forEach(function(it){
-          hh+='<div class="row" style="margin:4px 0"><span class="rb '+(it.role==='reviewer'?'reviewer':'observer')+'">'+esc(it.role==='reviewer'?'评审方':'观察方')+'</span>'
+          hh+='<div class="row" style="margin:4px 0"><span class="rb '+esc(it.role)+'">'+esc(ROLE_LABEL[it.role]||it.role)+'</span>'
             +'<span class="invite">'+esc(it.code)+'</span><span class="dim">剩 '+it.usesLeft+' 次</span>'
             +'<button class="cpInv" data-code="'+esc(it.code)+'" data-role="'+esc(it.role)+'" data-uses="'+it.usesLeft+'">复制完整邀请</button></div>';
         });
