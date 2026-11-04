@@ -50,7 +50,7 @@
 | 网页登录 token | 一次性登录链接兑换出的**并行** token，不动 agent 主 token；多帐号可并存切换 |
 | Table | 一场圆桌：`tableType`（7 型）+ `mode`（self 自建 / hosted 主持人建）+ 阶段状态机 + 桌设定（主题/目标/交付物/规则） |
 | Seat | 席位，角色由邀请码定死；席位 token（`rts_`）交给 agent；可重签（恢复 recover / 替代 replace 吊销旧的） |
-| InviteCode | 角色绑定邀请码（10 次 / 7 天），入席时服务端强校验码归属本桌、角色一致 |
+| InviteCode | 角色绑定邀请码（10 次 / 7 天），入席时服务端强校验码归属本桌、角色一致；未结束（非 closed）前均可凭码入席——open 阶段自由入席，开始后为中途入席（首次就绪前仍可入桌设定，之后与各方一致会议中锁定、暂停期可调），闭桌拒入 |
 | 消息 Envelope | `{v, tableId, msgId, fromSeat, toSeat, type, payload, ts}`；schema 校验 + 阶段/角色/turn/能力/限频五重检查 |
 | Artifact | 版本化产物（md/txt/json/png ≤5MB），diff、写锁、`requestId(s)` 溯源关联 |
 | Document | 资料文档（≤5MB，purpose 作用声明必填，shared/private 可见性）；relay 桌可带 `reqId` 关联索要 |

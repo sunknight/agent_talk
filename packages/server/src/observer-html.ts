@@ -2264,7 +2264,7 @@ function renderJoinForm(){
     }).catch(function(e){ btn.disabled=false; btn.textContent='查询邀请码'; err.textContent='查询失败：'+e.message; });
   };
 }
-/* 查询结果分支：已持有席位/已是问询方 → 引导进桌；会议已开始 → 拒入提示；正常 → 确认入席（asker=就位为问询方） */
+/* 查询结果分支：已持有席位/已是问询方 → 引导进桌；已结束 → 拒入提示；正常（含已开始未结束）→ 确认入席（asker=就位为问询方） */
 function renderJoinPreview(p){
   var box=document.getElementById('jbPreview');
   var h='<div class="card" style="margin-top:10px;border:1px dashed var(--line)">'
@@ -2276,17 +2276,17 @@ function renderJoinPreview(p){
   } else if(p.myAsker){
     h+='<div class="hint" style="margin-top:8px">你已是本桌问询方（不占席位），直接进入圆桌提问即可。</div>'
       +'<div class="row" style="margin-top:8px"><button id="jbGo" class="primary">进入圆桌</button></div>';
-  } else if(p.phase!=='open'){
-    h+='<div class="hint" style="margin-top:8px">本桌会议已开始，不再接受凭码入席。</div>';
+  } else if(p.phase==='closed'){
+    h+='<div class="hint" style="margin-top:8px">本桌已结束，不再接受凭码入席。</div>';
   } else if(p.role==='asker'){
     h+='<div class="hint" style="margin-top:8px">这是<b>问询方</b>邀请码：确认后就位为本桌问询方（不占席位、无席位凭证），回答方就绪后你在本页开始问询、随时提问与结束问询。</div>'
-      +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">就位为问询方</button></div>';
+    +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">就位为问询方</button></div>';
   } else if(p.role==='director'){
-    h+='<div class="hint" style="margin-top:8px">这是<b>指挥方</b>邀请码：确认后入桌为本桌指挥方（人类成员席位、无需 agent 凭证），执行方就绪并开始工作后，你在本页随时下达工作指令并跟踪执行状态。</div>'
-      +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">入桌为指挥方</button></div>';
+    h+='<div class="hint" style="margin-top:8px">这是<b>指挥方</b>邀请码：确认后入桌为本桌指挥方（人类成员席位、无需 agent 凭证），'+(p.phase!=='open'?'工作已在进行中，入桌后即可随时下达工作指令并跟踪执行状态':'执行方就绪并开始工作后，你在本页随时下达工作指令并跟踪执行状态')+'。</div>'
+    +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">入桌为指挥方</button></div>';
   } else {
-    h+='<div class="hint" style="margin-top:8px">确认入席后，将以「上方席位名」加入本桌，角色为'+esc(ROLE_LABEL[p.role]||p.role)+'（由邀请码定死）。</div>'
-      +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">确认入席</button></div>';
+    h+='<div class="hint" style="margin-top:8px">确认入席后，将以「上方席位名」加入本桌，角色为'+esc(ROLE_LABEL[p.role]||p.role)+'（由邀请码定死）。'+(p.phase!=='open'?'<br>本桌会议已开始（未结束仍可入席）：入席后请尽快完成入桌设定并就绪。':'')+'</div>'
+    +'<div class="row" style="margin-top:8px"><button id="jbJoin" class="primary">确认入席</button></div>';
   }
   h+='</div>';
   box.innerHTML=h;
@@ -2371,12 +2371,14 @@ function stepsHtml(phase, tt, pause){
 }
 /* 入桌设定表单（open 设定阶段与会议暂停期共用；pausedMode=true 时标题与就绪文案切到「暂停期调整/重新就绪」）
    表单元素 id 与原 open 分支一致（cfgPreset/cfgSup/cfgStance/cfgScope/dsWrap/dsChips/dsIn/cfgReady/cfgErr/cfgSave），绑定见 renderDetail */
-function seatCfgFormHtml(cfg, pausedMode){
+function seatCfgFormHtml(cfg, pausedMode, midflow){
   cfg=cfg||{};
-  var title=pausedMode?'暂停期调整（立场 / 风格 / 范围）':(cfg.ready?'修改入桌设定':'入桌设定');
+  var title=pausedMode?'暂停期调整（立场 / 风格 / 范围）':(midflow?'入桌设定（会议进行中入席）':(cfg.ready?'修改入桌设定':'入桌设定'));
   var readyLabel=pausedMode
     ?'重新就绪 — 补充/调整完成后声明本席可以继续（不动设定的席位无需任何操作，保持就绪）'
-    :'就绪 — 声明本席设定完成（全员就绪后建桌人可开始会议）';
+    :midflow
+      ?'就绪 — 完成本席设定（会议进行中入席，首次就绪前可修改）'
+      :'就绪 — 声明本席设定完成（全员就绪后建桌人可开始会议）';
   return '<div class="section"><h3>'+esc(title)+'</h3>'
     +'<div class="frow"><label class="t">立场</label>'
     +'<div class="row"><select id="cfgPreset"><option value="">（选择立场预设…）</option></select>'
@@ -2397,7 +2399,7 @@ function seatCfgFormHtml(cfg, pausedMode){
     +'<div class="ferr" id="cfgErr"></div>'
     +'<div class="row"><button id="cfgSave" class="primary">保存设定</button>'
     +((!pausedMode&&cfg.ready)?'<button id="cfgCollapse">收起（保留现设定）</button>':'')
-    +(pausedMode?'<span class="dim">暂停期保存：未勾选「重新就绪」将被视为补充中（未就绪）</span>':'<span class="dim">保存后可再修改，开始会议后设定锁定</span>')
+    +(pausedMode?'<span class="dim">暂停期保存：未勾选「重新就绪」将被视为补充中（未就绪）</span>':(midflow?'<span class="dim">中途入席：首次就绪前可修改；就绪后与各方一致（会议中锁定、暂停期可调）</span>':'<span class="dim">保存后可再修改，开始会议后设定锁定</span>'))
     +'</div></div>';
 }
 
@@ -2850,7 +2852,7 @@ function renderDetail(d){
             +'<span class="dim">'+(t.precheckEnabled===false?'本桌预审已关闭：agent 回合提交不经预审直接生效':'各方 agent 的回合提交先经系统预审（人代答不受影响；会议中可随时开关）')+'</span></div>';
         }
         h+='<div class="row" style="margin-top:8px"><button id="stStart" class="primary"'+((allReady&&rolesOk)?'':' disabled')+'>'+(dspFlow?'▶ 开始工作':'▶ 开始会议')+'</button>'
-          +'<span class="dim">'+(dspFlow?'开始后进入工作中阶段，随时在会话区下达指令':'开始后进入'+esc(phaseLabel(t.tableType,'statements'))+'阶段，席位设定锁定')+'</span></div><div class="ferr" id="stErr"></div></div>';
+          +'<span class="dim">'+(dspFlow?'开始后进入工作中阶段，随时在会话区下达指令':'开始后进入'+esc(phaseLabel(t.tableType,'statements'))+'阶段，席位设定锁定')+'；未结束前仍可凭码入席</span></div><div class="ferr" id="stErr"></div></div>';
       } else if(cfg.ready){
         h+='<div class="section dim">已就绪，等待建桌人开始会议。</div>';
       }
@@ -2860,6 +2862,10 @@ function renderDetail(d){
       }
     } else {
       /* 会议进行中 / 暂停 / 人工介入：状态行 + 折叠子区块（代答与指令输入在左侧「会话」输入框） */
+      /* 中途入席者（未完成首次设定：未就绪且立场为空）：会议中仍可完成入桌设定（服务端首次设定窗口放行；暂停期由下方暂停表单覆盖） */
+      if(!cfg.ready&&!cfg.stance&&mySeat.role!=='host'&&mySeat.role!=='director'&&!t.pause){
+        h+=seatCfgFormHtml(cfg,false,true);
+      }
       if(t.pause){
         /* 暂停期：人工补充或调整主张（保存时勾选「重新就绪」）；主持人无设定，只看控制区 */
         if(isHost){
@@ -3332,7 +3338,7 @@ function renderDetail(d){
   };
 
   /* ---- 绑定：我的席位面板（open 设定阶段与会议暂停期共用同一套设定表单 id） ---- */
-  if(mySeat&&(t.phase==='open'||t.pause)){
+  if(mySeat&&(t.phase==='open'||t.pause||(t.phase!=='closed'&&!(mySeat.config&&mySeat.config.ready)&&!(mySeat.config&&mySeat.config.stance)&&mySeat.role!=='host'&&mySeat.role!=='director'))){
     var cfgPreset=document.getElementById('cfgPreset');
     if(cfgPreset){
       /* 立场预设 + 回填（按本桌类型 forTypes 与本席角色过滤） */

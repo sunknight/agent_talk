@@ -380,7 +380,7 @@ export class Hub {
   }): { seatId: string; token: string; seat: SeatInfo | null; asker?: boolean } {
     const user = this.requireUser(userToken);
     const meta = this.requireTable(tableId);
-    if (meta.phase !== "open") throw new ApiError(409, "already_started", "会议已开始，不再接受凭码入席");
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "会议已结束，不再接受凭码入席");
     // 先只读预检码有效性与归属（消费前）：无效或跨桌的尝试不扣减次数。
     // 问询方（asker）码不受重复入席限制——同一用户可既持席位又兼任问询方（账号打通场景：
     // 同号用户网页提问 + 自己的 agent 凭同账号入回答席，入席先后不应影响就位）
@@ -392,7 +392,7 @@ export class Hub {
       const s = this.store.getSeat(tableId, existed);
       throw new ApiError(409, "already_seated", `你已在本桌持有席位「${s?.name ?? existed}」，无需重复入席`);
     }
-    // 增减参与人：open 阶段自由入席；开始后由建桌人人工协调
+    // 增减参与人：未结束前均可凭码入席（open 自由入席；开始后为中途入席，闭桌拒入）
     if (!inv) throw new ApiError(403, "bad_invite", "邀请码无效或已用尽");
     if (inv.tableId !== tableId) throw new ApiError(403, "bad_invite", "邀请码不属于本圆桌");
     // 角色由邀请码固定（身份安排权在建桌人），席位不能自封
@@ -444,18 +444,26 @@ export class Hub {
     if (p.role !== "director") this.store.saveSeatToken(token, tableId, seatId);
     this.sysMsg(tableId, "SEAT_JOINED", { seat: this.seatPublicView(seat) });
     this.audit(tableId, seatId, "seat_join", { name: seatName, role: p.role, by: user.name });
+    // 中途入席（已开始未结束）：提示先完成入桌设定并就绪——首次就绪前设定窗口开放（见 updateSeatConfig）
+    if (meta.phase !== "open") {
+      this.sysMsg(tableId, "INFO", { text: `${seatName} 于会议进行中入席：请在首次发言前完成入桌设定（立场/讨论范围/数据范围）并就绪（首次就绪前可改，之后会议中锁定、暂停期可调整）`, level: "info" });
+    }
     return { seatId, token, seat };
   }
 
   /** 入桌设定：立场（预设+补充）、风格（预设+补充，可选）、讨论范围、数据范围（条目可带披露级别）、就绪标记（open 阶段与会议暂停期可反复修改）。
    *  暂停期就绪语义（动设定才重置）：保存时未显式带 ready:true 则置为未就绪——
-   *  调整主张中的席位不会被视为「已补充完成」；无需补充的席位不保存即保持就绪。 */
+   *  调整主张中的席位不会被视为「已补充完成」；无需补充的席位不保存即保持就绪。
+   *  中途入席者首次设定窗口：未结束且从未完成设定（未就绪且立场为空）的席位可随时设定——
+   *  否则中途入席者永远无法就绪，会卡死「暂停→恢复」的全员就绪判定；首次就绪后窗口关闭，与各方一致锁定。 */
   updateSeatConfig(tableId: string, seat: ServerSeat, p: {
     stancePreset?: string; stance: string; stylePreset?: string; style?: string;
     scope?: string; dataScope?: DataScopeItem[]; ready?: boolean;
   }): SeatInfo {
     const meta = this.requireTable(tableId);
-    if (meta.phase !== "open" && !meta.pause) throw new ApiError(409, "already_started", "会议已开始，席位设定锁定（暂停期可调整）");
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "会议已结束，席位设定锁定");
+    const lateJoinSetup = !seat.config.ready && !seat.config.stance;
+    if (meta.phase !== "open" && !meta.pause && !lateJoinSetup) throw new ApiError(409, "already_started", "会议已开始，席位设定锁定（暂停期可调整；中途入席者首次就绪前可完成设定）");
     if (seat.role === "host") throw new ApiError(403, "role", "主持人不参与就绪设定（hosted 桌由各方设定立场后由主持人点开始）");
     if (seat.role === "director") throw new ApiError(403, "role", "指挥方是人类席位，不参与就绪设定（网页直接下达指令）");
     const stance = checkField(p.stance, "stance", 8_000);

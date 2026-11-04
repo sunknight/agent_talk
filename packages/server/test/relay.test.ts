@@ -79,7 +79,7 @@ async function ownerReady(tableId: string, seatToken: string) {
 }
 
 /** 建一张已开始的对接桌（建桌人 provider 就绪 + 1 receiver 就绪 → transfer），返回双方身份。
- *  preStart：点开始前入席额外席位（开始后凭码入席会被 already_started 拒） */
+ *  preStart：点开始前入席额外席位（点开始要求全员就绪，中途入席者未就绪会挡住开始） */
 async function mkTransferring(topic: string, preStart?: (t: { tableId: string; codes: Record<string, string> }) => Promise<unknown>) {
   const t = await mkRelay(topic);
   expect(t.ok).toBe(true);

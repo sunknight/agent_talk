@@ -1,5 +1,6 @@
 /** 凭码入桌（任务 0017）：邀请码预检端点（裸码/完整邀请文本提取/无效码/不消费）、
- *  跨桌码拒绝（消费前校验归属）、重复入席拒绝、会议开始后拒入、成功入席流程 */
+ *  跨桌码拒绝（消费前校验归属）、重复入席拒绝、成功入席流程；
+ *  任务 0050：未结束前均可凭码入席（中途入席 + 首次设定窗口）、闭桌拒入 */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -162,27 +163,47 @@ describe("凭码入桌（Web 端）", () => {
     expect(p.data.usesLeft).toBe(10);
   });
 
-  it("会议开始后凭码入席 → 409 already_started（文案不再暗示 observer 可中途加入）", async () => {
-    const meta = hub.store.getTable(otherTableId)!;
-    meta.phase = "statements";
-    hub.store.saveTable(meta);
+  it("会议开始后凭码入席：未结束前可入席，首次就绪前可设定；闭桌拒入 table_closed（任务 0050）", async () => {
     const c2 = await call("POST", "/api/tables", {
-      token: other, body: { topic: "开始后拒入桌", owner: { seatName: "第三人", agentLabel: "zcode" } },
+      token: other, body: { topic: "开始后入席桌", owner: { seatName: "第三人", agentLabel: "zcode" } },
     });
     const startedCode = c2.data.inviteCodes.find((c: { role: string }) => c.role === "observer").code;
-    const m2 = hub.store.getTable(c2.data.tableId)!;
+    const startedTableId = c2.data.tableId;
+    const m2 = hub.store.getTable(startedTableId)!;
     m2.phase = "review";
     hub.store.saveTable(m2);
-    const r = await call("POST", `/api/tables/${c2.data.tableId}/seats`, {
+    // 会议进行中：凭码入席成功（中途入席），席位 token 正常签发
+    const r = await call("POST", `/api/tables/${startedTableId}/seats`, {
       token: joiner, body: { inviteCode: startedCode, seatName: "迟到者", role: "observer", agentLabel: "zcode" },
     });
-    expect(r.status).toBe(409);
-    expect(r.error.code).toBe("already_started");
-    expect(r.error.message).not.toContain("observer 邀请码");
-    // 会议开始后预检仍可用（只读），前端据此提示不可入席
-    const p = await call("POST", "/api/invites/preview", { token: joiner, body: { code: startedCode } });
+    expect(r.ok).toBe(true);
+    expect(r.data.seat.role).toBe("observer");
+    expect(r.data.token).toMatch(/^rts_/);
+    // 中途入席者首次设定窗口：会议中可保存设定并就绪
+    const lateCfg = await call("POST", `/api/tables/${startedTableId}/my/seat-config`, {
+      token: joiner, body: { stance: "中途入席观察", ready: true },
+    });
+    expect(lateCfg.ok).toBe(true);
+    // 首次就绪后窗口关闭：会议中再改 → 409 already_started（与各方一致锁定）
+    const locked = await call("POST", `/api/tables/${startedTableId}/my/seat-config`, {
+      token: joiner, body: { stance: "首次就绪后再改", ready: true },
+    });
+    expect(locked.status).toBe(409);
+    expect(locked.error.code).toBe("already_started");
+    // 闭桌拒入：table_closed
+    const m3 = hub.store.getTable(startedTableId)!;
+    m3.phase = "closed";
+    hub.store.saveTable(m3);
+    const lateUser = (await call("POST", "/api/users", { body: { name: "闭桌后加入者" } })).data.token;
+    const r2 = await call("POST", `/api/tables/${startedTableId}/seats`, {
+      token: lateUser, body: { inviteCode: startedCode, seatName: "更迟到者", role: "observer", agentLabel: "zcode" },
+    });
+    expect(r2.status).toBe(409);
+    expect(r2.error.code).toBe("table_closed");
+    // 开始/结束后预检均可用（只读），前端据 phase 分支提示
+    const p = await call("POST", "/api/invites/preview", { token: lateUser, body: { code: startedCode } });
     expect(p.ok).toBe(true);
-    expect(p.data.phase).toBe("review");
+    expect(p.data.phase).toBe("closed");
   });
 });
 
