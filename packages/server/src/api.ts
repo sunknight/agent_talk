@@ -206,6 +206,14 @@ export function createHttpServer(hub: Hub) {
         if (seg[4] === "start" && !seg[5]) {
           return ok(res, hub.startByUser(bearer(req), tableId));
         }
+        // 退席（本人在本桌的 active 席位；建桌人席位与闭桌拒退）
+        if (seg[4] === "leave" && !seg[5]) {
+          return ok(res, hub.leaveByUser(bearer(req), tableId));
+        }
+        // 移出席位（建桌人 / systemadmin：把指定参与方席位退席）
+        if (seg[4] === "seat-leave" && !seg[5]) {
+          return ok(res, hub.seatLeaveByController(bearer(req), tableId, String(body.seatId ?? "")));
+        }
         // 修改桌设定（建桌人专属，open 阶段；主持人「定规则」网页通道）
         if (seg[4] === "table-config" && !seg[5]) {
           return ok(res, hub.updateTableConfigByUser(bearer(req), tableId, {

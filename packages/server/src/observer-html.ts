@@ -2451,6 +2451,13 @@ function credBodyHtml(){
     +'<button id="stReplace" class="danger">替代 agent（禁用原凭证）</button></div>'
     +'<div class="ferr" id="stErr"></div>';
 }
+/* 退席子区块：拿错角色码入桌后换角色等场景；建桌人席位与已结束桌不渲染（服务端同规则拒退） */
+function leaveBodyHtml(role){
+  var hasAgent=role!=='director'; /* director 为人类席位无 token；其余席位退席即吊销 agent 凭证 */
+  return '<div class="hint" style="margin-bottom:6px">退席后本席在本桌标记为已退席并留会议记录'+(hasAgent?'，席位凭证立即失效、你的 agent 将无法继续参会':'')+'；如需再次入桌须凭邀请码重新入席（角色由新邀请码决定，适合拿错码换角色的场景）。建桌人席位不可退席。</div>'
+    +'<div class="row"><button id="stLeave" class="danger" data-agent="'+(hasAgent?'1':'0')+'">退席本席（不可撤销）</button></div>'
+    +'<div class="ferr" id="leaveErr"></div>';
+}
 function secDetailsHtml(id,title,sub,body,open){
   return '<details class="sec" id="'+id+'"'+(open?' open':'')+'><summary>'+esc(title)+(sub?('<span class="dim">'+esc(sub)+'</span>'):'')+'</summary><div class="sec-body">'+body+'</div></details>';
 }
@@ -2759,6 +2766,8 @@ function renderDetail(d){
   }
   seats.forEach(function(s){
     var cfg=s.config||{};
+    /* 席位控制操作行：systemadmin（复制配置/替代 agent/移出）与建桌人（移出）；建桌人席位自身不可被移出 */
+    var canCtl=admin||(mySeat&&mySeat.seatId===t.ownerSeat);
     h+='<div class="vcard '+esc(s.role)+'">'
       +'<div class="row">'+roleBadge(s.role)+'<b>'+esc(s.name)+'</b>'
       +(s.seatId===t.ownerSeat?'<span class="badge">建桌人</span>':'')
@@ -2776,8 +2785,9 @@ function renderDetail(d){
         ?'<div class="kv"><span class="k">立场</span><span class="dim">仅本席可见</span></div><div class="kv"><span class="k">风格</span><span class="dim">仅本席可见</span></div>'
         :'<div class="kv"><span class="k">立场</span><span title="'+escAttr(cfg.stance||'')+'">'+esc((cfg.stance||'').slice(0,60)||'（未填写）')+'</span></div>'
           +(cfg.style?'<div class="kv"><span class="k">风格</span><span title="'+escAttr(cfg.style)+'">'+esc(cfg.style.slice(0,60))+'</span></div>':''))
-      +(admin?'<div class="row" style="margin-top:8px"><button class="admCred sm" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">复制配置</button> '
-        +'<button class="admRepl sm danger" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">替代 agent</button></div>':'')
+      +(canCtl?'<div class="row" style="margin-top:8px">'+(admin?'<button class="admCred sm" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">复制配置</button> '
+        +'<button class="admRepl sm danger" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">替代 agent</button> ':'')
+        +(s.seatId!==t.ownerSeat?'<button class="seatKick sm danger" data-sid="'+escAttr(s.seatId)+'" data-name="'+escAttr(s.name)+'" data-role="'+escAttr(s.role)+'">移出</button>':'')+'</div>':'')
       +'</div>';
   });
   h+='</div></div>';
@@ -2901,6 +2911,10 @@ function renderDetail(d){
         h+=secDetailsHtml('seatDetPod','私有指令记录','我发出的 · 仅自己可见（发送在「会话」输入框）','<div id="podList" style="margin-top:2px"></div>',false);
         h+=secDetailsHtml('seatDetCred','凭证恢复 · 更换 agent','复制配置给新 agent / 替代换新',credBodyHtml(),false);
       }
+    }
+    /* 退席入口（低频危险操作，折叠收纳）：未结束且非建桌人席位才显示 */
+    if(stage!=='ended'&&!isOwner){
+      h+=secDetailsHtml('seatDetLeave','退席','离开本桌 · 凭证失效 · 可凭码再入',leaveBodyHtml(mySeat.role),false);
     }
     h+='</div>';
   }
@@ -3500,6 +3514,19 @@ function renderDetail(d){
   bindStartBtn('stStart','stErr');
   bindStartBtn('inqStart','inqStartErr');
 
+  /* ---- 绑定：退席（我的席位 · 不可撤销，confirm 双确认提示后果） ---- */
+  var stLeave=document.getElementById('stLeave');
+  if(stLeave) stLeave.onclick=function(){
+    var agentSeat=stLeave.getAttribute('data-agent')==='1';
+    if(!window.confirm('确认退席？本席将标记为已退席（不可撤销）：'
+      +(agentSeat?'席位凭证立即失效，你的 agent 将无法继续参会；':'')
+      +'如需再次入桌，须凭邀请码重新入席（角色由新码决定）。')) return;
+    stLeave.disabled=true;
+    api('POST','/api/tables/'+view.tableId+'/my/leave',{})
+      .then(function(){ toast('已退席；凭邀请码可重新入桌'); loadList(); })
+      .catch(function(e){ stLeave.disabled=false; document.getElementById('leaveErr').textContent='退席失败：'+e.message; });
+  };
+
   /* ---- 绑定：问询方提问 / 结束问询（无席位通道） ---- */
   var askSend=document.getElementById('askSend');
   if(askSend) askSend.onclick=function(){
@@ -3698,6 +3725,18 @@ function renderDetail(d){
         toast('新凭证已签发并复制；该席位原 agent 已禁用');
         view.dirtyPanel=false; loadDetail();
       }).catch(function(e){ toast('失败：'+e.message); });
+    };
+  });
+
+  /* ---- 绑定：移出席位（建桌人 / systemadmin：把参与方席位退席，其凭证立即失效） ---- */
+  app.querySelectorAll('button.seatKick').forEach(function(b){
+    b.onclick=function(){
+      var name=b.getAttribute('data-name');
+      if(!window.confirm('确认把「'+name+'」移出本桌？其席位将标记为已退席（不可撤销），席位凭证立即失效、该 agent 将无法继续参会；其持有人如需再次入桌须凭邀请码重新入席。')) return;
+      b.disabled=true;
+      api('POST','/api/tables/'+view.tableId+'/my/seat-leave',{seatId:b.getAttribute('data-sid')})
+        .then(function(){ toast('已移出「'+name+'」'); view.dirtyPanel=false; loadDetail(); })
+        .catch(function(e){ b.disabled=false; toast('移出失败：'+e.message); });
     };
   });
 

@@ -1009,6 +1009,38 @@ export class Hub {
     this.audit(tableId, seat.seatId, "seat_leave", {});
   }
 
+  /** 网页持有人退席（user token）：退掉本人在本桌的 active 席位（拿错码换角色等场景）。
+   *  建桌人席位不可退（退后圆桌无主失控，解散走闭桌）；闭桌后席位已定格无需退。
+   *  退席即复用 leaveTable（SEAT_LEFT 广播 + 审计），席位凭证同步失效（requireSeat 拒 left），
+   *  再入桌走凭码入席（owner 多行并存，seatOfUser 只认 active 席）。 */
+  leaveByUser(userToken: string, tableId: string): { left: boolean; seatId: string } {
+    const user = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "圆桌已结束，席位已定格，无需退席");
+    const seatId = this.activeSeatOfUser(tableId, user.userId);
+    if (!seatId) throw new ApiError(403, "no_seat", "你在本桌没有可退的席位");
+    if (seatId === meta.ownerSeat) throw new ApiError(403, "not_allowed", "建桌人席位不可退席（退席后圆桌将无人可控）；如需解散请结束会议");
+    const seat = this.requireSeat(tableId, seatId) as ServerSeat;
+    this.leaveTable(tableId, seat);
+    return { left: true, seatId };
+  }
+
+  /** 控制人移出席位（建桌人 / systemadmin）：把指定参与方席位退席（误入桌、席位调整等）。
+   *  建桌人席位不可被移出（同 leaveByUser 防无主桌）；闭桌后席位已定格。复用 leaveTable 留痕。 */
+  seatLeaveByController(userToken: string, tableId: string, seatId: string): { left: boolean; seatId: string } {
+    const u = this.requireUser(userToken);
+    const meta = this.requireTable(tableId);
+    if (meta.phase === "closed") throw new ApiError(409, "table_closed", "圆桌已结束，席位已定格，不可移出");
+    if (u.role !== "systemadmin") {
+      const ownerUserId = this.store.seatOwnerOf(tableId, meta.ownerSeat);
+      if (ownerUserId !== u.userId) throw new ApiError(403, "not_owner", "仅建桌人与系统管理员可移出参与方席位");
+    }
+    if (seatId === meta.ownerSeat) throw new ApiError(403, "not_allowed", "建桌人席位不可移出（退席后圆桌将无人可控）");
+    const seat = this.requireSeat(tableId, seatId); // 含 left 拒绝（409 seat_left：已退席无需再移）
+    this.leaveTable(tableId, seat);
+    return { left: true, seatId };
+  }
+
   // ================= 查询与长轮询 =================
 
   requireTable(tableId: string): TableMeta {
