@@ -177,7 +177,7 @@ function parallelCtlHtml(d,seats,t){
 var TL_SPEECH={STATEMENT:1,REVIEW_COMMENT:1,RESPONSE:1,SUPPLEMENT:1,CONSENSUS_VOTE:1,QUESTION:1,REPLY:1,REQUEST:1,RESPOND_REQUEST:1,HUMAN_INPUT:1,ESCALATE:1,DIRECTIVE:1,DIRECTIVE_RESULT:1,DIRECTIVE_CLARIFY:1,DATA_REQUEST:1,DATA_RESULT:1,DATA_GRANT:1};
 var TL_TASK={statements:'交付陈述',review:'评审意见',response:'回应评审',execution:'处置请求',convergence:'共识表决',qa:'回答',working:'执行指令',human_intervention:'人工介入'};
 var TL_COL_MAX=8, TL_MIN_COL_W=126, TL_CARD_H=56, TL_VGAP=14, TL_SEP_H=26, TL_MS_H=32, TL_RAIL_W=24, TL_HEAD_H=26, TL_GROUP_H=20;
-var TL_ROLE_COLOR={proposer:'#4f8cff',reviewer:'#3fb68b',collaborator:'#b07ce8',host:'#c9a227',observer:'#a2abc0',answerer:'#3fb68b',asker:'#4f8cff'};
+var TL_ROLE_COLOR={proposer:'var(--acc)',reviewer:'var(--ok)',collaborator:'var(--vote)',host:'var(--goldline)',observer:'var(--dim)',answerer:'var(--ok)',asker:'var(--acc)'};
 var TL_ROLE_GROUP_ORDER=['proposer','reviewer','collaborator','answerer','asker','host','observer'];
 function fmtDur(ms){
   if(!(ms>=0)) ms=0;
@@ -335,20 +335,20 @@ function timelineCardHtml(d,seats,t){
   h+='<div class="tl-hrow"'+(grouped?(' style="top:'+TL_GROUP_H+'px"'):'')+'><div class="tl-gsp" style="flex:0 0 '+TL_RAIL_W+'px"></div>';
   lanes.forEach(function(l){
     h+='<div class="tl-colhead" style="width:'+colW+'px" title="'+escAttr(l.name+'（'+(ROLE_LABEL[l.role]||l.role)+'）')+'">'
-      +'<span class="dot" style="background:'+(TL_ROLE_COLOR[l.role]||'#a2abc0')+'"></span><b>'+esc(clipStr(l.name,9))+'</b></div>';
+      +'<span class="dot" style="background:'+(TL_ROLE_COLOR[l.role]||'var(--dim)')+'"></span><b>'+esc(clipStr(l.name,9))+'</b></div>';
   });
   h+='</div><svg class="tl-svg" width="'+W+'" height="'+H+'" font-size="11" xmlns="http://www.w3.org/2000/svg">'
-    +'<defs><marker id="tlArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5a6786"/></marker></defs>';
+    +'<defs><marker id="tlArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--faint)"/></marker></defs>';
   /* 列生命线（细虚线竖线：agent 固定 x 坐标的纵向轨道） */
   for(var li=0;li<n;li++){
-    h+='<line x1="'+colCx(li)+'" y1="0" x2="'+colCx(li)+'" y2="'+H+'" stroke="#252a38" stroke-dasharray="2 4"/>';
+    h+='<line x1="'+colCx(li)+'" y1="0" x2="'+colCx(li)+'" y2="'+H+'" stroke="var(--line)" stroke-dasharray="2 4"/>';
   }
   /* 阶段分隔行：通栏虚线 + 居中标签 */
   items.forEach(function(it){
     if(it.kind!=='ph') return;
     var ly=it.y+TL_SEP_H-9;
-    h+='<line x1="'+TL_RAIL_W+'" y1="'+ly+'" x2="'+W+'" y2="'+ly+'" stroke="#2a2f3d" stroke-dasharray="3 4"/>'
-      +'<text x="'+((W+TL_RAIL_W)/2)+'" y="'+(ly-4)+'" text-anchor="middle" fill="#a2abc0">'+esc('— '+phaseLabel(t.tableType,it.phase)+(it.ts?(' · '+fmtClock(it.ts)):'')+' —')+'</text>';
+    h+='<line x1="'+TL_RAIL_W+'" y1="'+ly+'" x2="'+W+'" y2="'+ly+'" stroke="var(--line)" stroke-dasharray="3 4"/>'
+      +'<text x="'+((W+TL_RAIL_W)/2)+'" y="'+(ly-4)+'" text-anchor="middle" fill="var(--dim)">'+esc('— '+phaseLabel(t.tableType,it.phase)+(it.ts?(' · '+fmtClock(it.ts)):'')+' —')+'</text>';
   });
   /* 箭头链（画在卡片下层）：串行 hand-off 相邻相连；并行=分派 fan-out / 成员 fan-in 汇聚卡 / 汇聚卡续链 */
   function msMid(it){
@@ -358,7 +358,7 @@ function timelineCardHtml(d,seats,t){
     return { x:(mn+mx)/2, y:it.y+TL_MS_H/2 };
   }
   function arrow(x1,y1,x2,y2){
-    h+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="#5a6786" stroke-width="1.2" opacity=".65" marker-end="url(#tlArrow)"/>';
+    h+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="var(--faint)" stroke-width="1.2" opacity=".65" marker-end="url(#tlArrow)"/>';
   }
   var src=null;
   items.forEach(function(it,ix){
@@ -396,38 +396,38 @@ function timelineCardHtml(d,seats,t){
       var g=it.grp, mid=msMid(it), cw=Math.min(230,W-TL_RAIL_W-8);
       var dur=(g.endTs&&g.dispatchTs)?fmtDur(g.endTs-g.dispatchTs):'';
       var lab='◇ 第 '+g.ord+' 批汇聚 · '+g.done+' 方交付'+(g.skip?(' · '+g.skip+' 跳过'):'')+(dur?(' · 总时长 '+dur):'');
-      h+='<g class="tl-ms"><rect x="'+(mid.x-cw/2)+'" y="'+it.y+'" width="'+cw+'" height="'+TL_MS_H+'" rx="6" fill="rgba(232,200,119,.07)" stroke="#e8c877" stroke-dasharray="5 3" opacity=".95"/>'
+      h+='<g class="tl-ms"><rect x="'+(mid.x-cw/2)+'" y="'+it.y+'" width="'+cw+'" height="'+TL_MS_H+'" rx="6" fill="var(--gold-bg)" stroke="var(--gold)" stroke-dasharray="5 3" opacity=".95"/>'
         +'<title>'+esc('并行批次虚拟汇总节点：'+lab+(g.task?('\n批次任务：'+clipStr(g.task,120)):''))+'</title>'
-        +'<text x="'+mid.x+'" y="'+(it.y+TL_MS_H/2+4)+'" text-anchor="middle" fill="#e8c877">'+esc(clipStr(lab,Math.floor(cw/11)))+'</text></g>';
+        +'<text x="'+mid.x+'" y="'+(it.y+TL_MS_H/2+4)+'" text-anchor="middle" fill="var(--gold)">'+esc(clipStr(lab,Math.floor(cw/11)))+'</text></g>';
       return;
     }
     var nd=it.nd, ni=it.ni;
     var ix2=laneIdx[nd.seatId];
     if(ix2==null) return;
     var cx0=colX(ix2)+7, cy=it.y;
-    var col=TL_ROLE_COLOR[seatRoleOf(seats,nd.seatId)]||'#4f8cff';
+    var col=TL_ROLE_COLOR[seatRoleOf(seats,nd.seatId)]||'var(--acc)';
     if(it.kind==='run'){
       var rid=view.tlRun.length;
       var runTask=nd.batch?'并行交付':(TL_TASK[nd.phase]||'执行中');
       view.tlRun.push({txtId:'tlrt'+rid,start:nd.start,task:runTask,stage:(nd.stage?turnStageLabel({stage:nd.stage}):'')});
-      h+='<g class="tl-run"><rect class="tl-box" x="'+cx0+'" y="'+cy+'" width="'+cardW+'" height="'+TL_CARD_H+'" rx="6" fill="rgba(79,140,255,.08)" stroke="#4f8cff" stroke-dasharray="5 3"/>'
+      h+='<g class="tl-run"><rect class="tl-box" x="'+cx0+'" y="'+cy+'" width="'+cardW+'" height="'+TL_CARD_H+'" rx="6" fill="var(--acc-bg)" stroke="var(--acc)" stroke-dasharray="5 3"/>'
         +'<rect x="'+cx0+'" y="'+cy+'" width="3" height="'+TL_CARD_H+'" fill="'+col+'"/>'
         +'<title>'+esc(seatName(seats,nd.seatId)+' 正在'+runTask+' · 思考进度 '+(nd.stage?turnStageLabel({stage:nd.stage}):'思考中'))+'</title>'
-        +'<text id="tlrt'+rid+'" x="'+(cx0+10)+'" y="'+(cy+20)+'" fill="#4f8cff" font-weight="600">'+esc(runTask+' · 已执行 '+fmtDur(m.now-nd.start)+(nd.stage?(' · '+turnStageLabel({stage:nd.stage})):''))+'</text>'
-        +'<text x="'+(cx0+10)+'" y="'+(cy+39)+'" fill="#a2abc0">尚未交付 · 已执行时长每秒跳动</text></g>';
+        +'<text id="tlrt'+rid+'" x="'+(cx0+10)+'" y="'+(cy+20)+'" fill="var(--acc)" font-weight="600">'+esc(runTask+' · 已执行 '+fmtDur(m.now-nd.start)+(nd.stage?(' · '+turnStageLabel({stage:nd.stage})):''))+'</text>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+39)+'" fill="var(--dim)">尚未交付 · 已执行时长每秒跳动</text></g>';
     } else {
       var brief=(nd.msg?msgBodyText(nd.msg,seats):'');
       var task=(it.kind==='skip'?'跳过发言':(MT_LABEL[nd.type]||TL_TASK[nd.phase]||'执行'));
       var dur2=(nd.end!=null&&nd.start!=null)?fmtDur(nd.end-nd.start):'';
       var clipN=Math.max(8,Math.floor((cardW-16)/11.5));
       h+='<g class="tl-node" data-tln="'+ni+'">'
-        +'<rect class="tl-box" x="'+cx0+'" y="'+cy+'" width="'+cardW+'" height="'+TL_CARD_H+'" rx="6" fill="#1c2231" stroke="'+(it.kind==='skip'?'#4a5266':'#2a2f3d')+'"'+(it.kind==='skip'?' stroke-dasharray="4 3"':'')+'/>'
+        +'<rect class="tl-box" x="'+cx0+'" y="'+cy+'" width="'+cardW+'" height="'+TL_CARD_H+'" rx="6" fill="var(--panel-2)" stroke="'+(it.kind==='skip'?'var(--line-2)':'var(--line)')+'"'+(it.kind==='skip'?' stroke-dasharray="4 3"':'')+'/>'
         +'<rect x="'+cx0+'" y="'+cy+'" width="3" height="'+TL_CARD_H+'" fill="'+col+'"/>'
         +'<title>'+esc(seatName(seats,nd.seatId)+' · '+task+(brief?('\n'+clipStr(brief,200)):''))+'</title>'
-        +'<text x="'+(cx0+10)+'" y="'+(cy+20)+'" font-weight="600" fill="'+(it.kind==='skip'?'#a2abc0':'#e6e9f0')+'">'+esc(task)+'</text>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+20)+'" font-weight="600" fill="'+(it.kind==='skip'?'var(--dim)':'var(--fg)')+'">'+esc(task)+'</text>'
         +'<text x="'+(cx0+cardW-8)+'" y="'+(cy+20)+'" text-anchor="end" fill="'+col+'">'+esc(dur2)+'</text>'
-        +'<text x="'+(cx0+10)+'" y="'+(cy+38)+'" fill="#a2abc0">'+esc(clipStr(brief,clipN))+'</text>'
-        +'<text x="'+(cx0+10)+'" y="'+(cy+50)+'" font-size="9.5" fill="#6b7690">'+esc((nd.end!=null?fmtTs(nd.end):'')+(nd.msg?(' · #'+nd.msg.seq):''))+'</text>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+38)+'" fill="var(--dim)">'+esc(clipStr(brief,clipN))+'</text>'
+        +'<text x="'+(cx0+10)+'" y="'+(cy+50)+'" font-size="9.5" fill="var(--faint)">'+esc((nd.end!=null?fmtTs(nd.end):'')+(nd.msg?(' · #'+nd.msg.seq):''))+'</text>'
         +'</g>';
     }
   });
@@ -441,7 +441,7 @@ function timelineCardHtml(d,seats,t){
     }
     if(ry==null){ var lastIt=items[items.length-1]; ry=lastIt?lastIt.y:(H-10); }
     var glyph=mk.kind==='precheck'?'◉':(mk.kind==='pause'?'⏸':'▤');
-    var fill=mk.kind==='pause'?'#e0a23c':'#6b7690';
+    var fill=mk.kind==='pause'?'var(--warn)':'var(--faint)';
     h+='<text x="'+(TL_RAIL_W/2)+'" y="'+(ry+15)+'" text-anchor="middle" fill="'+fill+'" font-size="10"><title>'+esc(mk.label+' · '+fmtClock(mk.ts))+'</title>'+glyph+'</text>';
   });
   h+='</svg></div></div>';
