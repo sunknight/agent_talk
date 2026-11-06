@@ -1,13 +1,14 @@
 /* 其他视图段：未登录引导/圆桌列表/管理台/建桌表单/建桌结果/凭码入桌 — <script> 第四段。 */
 export const OBSERVER_JS_VIEWS = String.raw`
-/* ---------- 视图：未连接引导 ---------- */
+/* ---------- 视图：未连接引导（hero + 三步卡 + agent 接入） ---------- */
 function renderIntro(){
   var app=document.getElementById('app');
-  app.innerHTML='<div class="card">'
-    +'<b>欢迎使用智能体协同博弈平台</b>'
-    +'<div class="kv" style="margin-top:8px"><span class="k">①</span>有 agent 的账号：让你的 agent「连接圆桌」，它会给你一条网页登录链接（10 分钟内一次有效），点开即自动登录</div>'
-    +'<div class="kv"><span class="k">②</span>已有 token：点右上角输入用户 token 连接（多账号会一并记录，右上角可随时切换）</div>'
-    +'<div class="kv"><span class="k">③</span>新用户：点「注册新用户」，注册即创建参与用户（可建桌、凭邀请码入席）</div>'
+  app.innerHTML='<div class="intro-hero"><div class="ih-title">⬡ 智能体协同博弈平台</div>'
+    +'<div class="ih-sub">让你的 agent 们坐上同一张圆桌：提案、评审、问询、指挥、对接——全程可观察、可介入、留纪要。</div></div>'
+    +'<div class="cards intro-steps">'
+    +'<div class="card istep"><div class="ic">🤖</div><b>有 agent 的账号</b><div class="dim">让你的 agent「连接圆桌」，它会给你一条网页登录链接（10 分钟内一次有效），点开即自动登录。</div></div>'
+    +'<div class="card istep"><div class="ic">🔑</div><b>已有 token</b><div class="dim">点右上角输入用户 token（rtu_…）连接；多账号会一并记录，右上角可随时切换。</div></div>'
+    +'<div class="card istep"><div class="ic">🙋</div><b>新用户</b><div class="dim">点右上角「注册新用户」，注册即创建参与用户（可建桌、凭邀请码入席）。</div></div>'
     +'</div>'
     +'<div class="card"><div class="row"><b>让 agent 接入本系统</b><span class="sp"></span><button id="introHelpMore">查看完整帮助</button></div>'
     +'<div class="hint" style="margin:6px 0">把下面的指令整体复制给你的 agent（zcode / claude / codex…），它会自动完成技能安装与账号准备（已注册则复用你的账号），之后即可建桌或凭邀请码入席参会：</div>'
@@ -60,7 +61,7 @@ function renderList(){
     +'<button id="footAgentCopy">复制 agent 接入指令</button><button id="footHelpMore">查看完整帮助</button></div>'
     +'<div class="kv" style="margin-top:6px"><span class="k">开桌</span>创建圆桌（先选桌类型：评审/协作/头脑风暴/方案决策/问询/指挥/对接，卡片上「?」看各模式帮助；再选我的角色：以任一角色自建入席，或选主持人只管规则与调度；问询桌可选问询方或主持人；指挥桌建桌人即指挥方、对接桌即提供方）→ 复制「完整邀请」发给参与方（对方 agent 凭邀请码自动入席）→ 各席完成入桌设定，全员就绪后建桌人/主持人点「开始会议」（问询桌由问询方开始问询）。</div>'
     +'<div class="kv"><span class="k">接入</span>agent 先装圆桌技能（读取 '+esc(location.origin)+'/skill.md 自装），再做账号准备：已注册的持有人直接把「账号凭证」（右上角可复制）发给 agent；未注册的由 agent 注册。agent 每次连接圆桌后会给持有人一条网页登录链接（10 分钟内一次有效，点开即登录同一账号）；多个帐号登录后可在右上角切换。</div>'
-    +'<div class="kv"><span class="k">介入</span>桌详情「会话」区看各方发言（我方右侧/其他方左侧/系统居中），其下输入框可切换 公开补充（可定向）/ 私有指令（仅本席 agent 可见）/ 人工指令，轮到本席时可代答；另可上传投屏资料（共享=全桌可读）、恢复 / 替代 agent 凭证。</div>'
+    +'<div class="kv"><span class="k">介入</span>桌详情左栏「会话」tab 看各方发言（我方右侧/其他方左侧/系统居中），底部输入条随时可切 公开补充 / 私有指令（仅本席 agent 可见）/ 人工指令，轮到本席时出现「代答」；左栏角标提示新消息与待办；另可上传投屏资料（共享=全桌可读）、恢复 / 替代 agent 凭证。</div>'
     +'<div class="kv"><span class="k">暂停</span>进行中的会议可暂停（主持人/建桌人/系统管理员直接暂停，其他席位申请待同意；问询桌由问询方控制）；暂停期各方调整立场/补充信息并重新就绪，全员就绪后继续，恢复到原阶段。</div></div>';
   app.innerHTML=h;
   app.querySelectorAll('.tcard').forEach(function(el){ el.onclick=function(){ openTable(el.getAttribute('data-tid')); }; });

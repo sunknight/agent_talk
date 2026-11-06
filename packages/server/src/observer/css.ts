@@ -342,6 +342,7 @@ export const OBSERVER_CSS = String.raw`  :root {
   /* 下一步动作条：任何 tab 常驻，蓝底高亮，直给「现在该做什么」 */
   .dt-action { display:flex; gap:12px; align-items:center; flex-wrap:wrap; background:linear-gradient(90deg,var(--acc-bg),rgba(46,107,230,.02)); border:1px solid var(--acc-line); border-left:4px solid var(--acc); border-radius:var(--r-lg); padding:12px 16px; margin-bottom:14px; font-size:13px; min-height:48px; }
   .dt-action .lbl { font-weight:700; color:var(--acc); white-space:nowrap; font-size:12px; letter-spacing:.05em; }
+  .dt-action > div { overflow-wrap:anywhere; } /* 长路径/API 文本窄屏不断溢出 */
   .dt-action .go { margin-left:auto; }
   .dt-action.warn { background:linear-gradient(90deg,var(--warn-bg),rgba(179,116,7,.02)); border-color:var(--warn-line); border-left-color:var(--warn); }
   .dt-action.warn .lbl { color:var(--warn); }
@@ -412,6 +413,15 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dcols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 14px; align-items:start; }
   .dcol { min-width:0; }
   @media (max-width:980px) { .dcols { grid-template-columns:1fr; } }
+  /* 未登录引导页：hero + 三步卡 */
+  .intro-hero { text-align:center; padding:36px 16px 22px; }
+  .intro-hero .ih-title { font-size:24px; font-weight:700; letter-spacing:.03em; }
+  .intro-hero .ih-sub { color:var(--dim); margin-top:8px; font-size:14px; }
+  .intro-steps { grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); margin-bottom:14px; }
+  .intro-steps .istep { margin-bottom:0; text-align:left; }
+  .intro-steps .istep .ic { font-size:22px; margin-bottom:6px; }
+  .intro-steps .istep b { display:block; margin-bottom:4px; font-size:14.5px; }
+  .intro-steps .istep .dim { font-size:12.5px; line-height:1.6; }
   /* 底部操作条内的输入聚合（自会话卡迁来）：紧凑化 */
   .dtbar .cmp-grp { margin-top:6px; }
   .dtbar .cmp-grp h3 { margin:0 0 4px; font-size:12.5px; }
