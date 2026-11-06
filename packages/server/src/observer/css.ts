@@ -340,7 +340,7 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dt-head .shead > b { font-size:17px; }
   .dt-head .toprow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   /* 下一步动作条：任何 tab 常驻，蓝底高亮，直给「现在该做什么」 */
-  .dt-action { display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:linear-gradient(90deg,var(--acc-bg),rgba(46,107,230,.02)); border:1px solid var(--acc-line); border-left:4px solid var(--acc); border-radius:var(--r-lg); padding:10px 14px; margin-bottom:14px; font-size:13px; min-height:44px; }
+  .dt-action { display:flex; gap:12px; align-items:center; flex-wrap:wrap; background:linear-gradient(90deg,var(--acc-bg),rgba(46,107,230,.02)); border:1px solid var(--acc-line); border-left:4px solid var(--acc); border-radius:var(--r-lg); padding:12px 16px; margin-bottom:14px; font-size:13px; min-height:48px; }
   .dt-action .lbl { font-weight:700; color:var(--acc); white-space:nowrap; font-size:12px; letter-spacing:.05em; }
   .dt-action .go { margin-left:auto; }
   .dt-action.warn { background:linear-gradient(90deg,var(--warn-bg),rgba(179,116,7,.02)); border-color:var(--warn-line); border-left-color:var(--warn); }

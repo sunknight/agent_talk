@@ -1751,16 +1751,16 @@ function loadDetail(){
   })
     .catch(function(e){ toast(e.message); openList(); });
 }
-function openTable(id){
+function openTable(id,deepTab){
   view.mode='detail'; view.tableId=id; view.lastDetailJson=''; view.lastDetailData=null;
   view.dirtyPanel=false; view.cfgEditing=false; view.rtExpanded=false;
   view.chatFilter='all'; view.cmpType=''; view.seatOpen={}; view.chatAtBottom=true; view.cbPrevTop=0;
   view.chatSides={}; view.sidesSaving=0;
-  view.uiTab=null; view.maxSeenSeq=0; /* 左栏 tab：进桌回到默认（open=总览），新消息角标清零 */
+  view.uiTab=deepTab||null; view.maxSeenSeq=0; /* 左栏 tab：进桌默认（open=总览），#/table/<id>/<tab> 深链直达；新消息角标清零 */
   view.tlOpen=true; view.tlStick=true; view.tlModel=null; view.tlRun=[];
   if(!view.tlTimer) view.tlTimer=setInterval(tlTick,1000); /* 执行时序图：进行中节点每秒跳动（mode 守卫，全局一次） */
   clearInterval(view.timer);
-  var want='#/table/'+id;
+  var want='#/table/'+id+(deepTab?('/'+deepTab):'');
   if(location.hash!==want) location.hash=want; // 详情页 URL（刷新/分享/后退可用）；先定好 view 再写 hash，hashchange→syncRoute 幂等不重入
   document.getElementById('app').innerHTML='<div class="card dim">加载圆桌 '+esc(id)+'…</div>';
   loadDetail();
@@ -1778,6 +1778,8 @@ function openList(){
 /* ---------- hash 路由：详情页 URL 直达（#/table/<id>）----------
    刷新/分享/前进后退均保持视图；未登录打开分享链时 hash 原样保留，登录成功后凭 hash 直达 */
 function routeTableId(){ var m=/^#\/table\/([A-Za-z0-9_-]+)/.exec(location.hash||''); return m?m[1]:null; }
+/* tab 深链：#/table/<id>/<tab>（ov/chat/proc/work/files/mgn…见 TAB_IDS）——分享/动作条深链直达指定视图 */
+function routeTableTab(){ var m=/^#\/table\/[A-Za-z0-9_-]+\/(ov|chat|proc|work|files|mng)/.exec(location.hash||''); return m?m[1]:null; }
 /* 一次性网页登录链接（#/login/<token>）：agent 生成、10 分钟内一次有效；
    兑换成功即记录帐号并设为活跃（多帐号并存，可随时切回），失败给出明确提示 */
 function routeLoginToken(){ var m=/^#\/login\/([A-Za-z0-9_-]+)/.exec(location.hash||''); return m?m[1]:null; }
@@ -1790,7 +1792,7 @@ function tryExchangeLogin(lt){
       view.userName=d.name||''; view.userId=d.userId||''; view.role=d.role||'user';
       refreshWho(); toast('已登录：'+(d.name||''));
       var tid=routeTableId();
-      if(tid) openTable(tid); else openList();
+      if(tid) openTable(tid,routeTableTab()); else openList();
     })
     .catch(function(e){
       toast('登录链接无效：'+e.message);
@@ -1805,7 +1807,10 @@ function syncRoute(){
     return;
   }
   var id=routeTableId();
-  if(id){ if(!(view.mode==='detail'&&view.tableId===id)) openTable(id); }
+  if(id){
+    if(!(view.mode==='detail'&&view.tableId===id)) openTable(id,routeTableTab());
+    else { var ht=routeTableTab(); if(ht&&ht!==view.uiTab) switchDtTab(ht); } /* 同桌 hash 变化 = tab 深链切换 */
+  }
   else if(view.mode==='detail') openList();
 }
 window.addEventListener('hashchange',syncRoute);
@@ -1839,7 +1844,7 @@ else if(TOKEN){
   api('GET','/api/observer/tables').then(function(){
     fetchMe();
     var tid=routeTableId();
-    if(tid) openTable(tid); else openList(); // 刷新/分享链直达详情
+    if(tid) openTable(tid,routeTableTab()); else openList(); // 刷新/分享链直达详情（含 tab 深链）
   })
     .catch(function(){ toast('已保存的 token 失效，请重新连接'); });
 }
