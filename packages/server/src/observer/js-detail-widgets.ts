@@ -259,8 +259,8 @@ function deriveTimeline(d,seats,t){
   return { lanes:lanes,nodes:nodes,marks:marks,bands:bands,started:started,now:now };
 }
 function timelineCardHtml(d,seats,t){
-  /* 可用画布宽：从已渲染的左栏测（首轮渲染前无 DOM 用 640 兜底，后续轮询自然校正） */
-  var avail=640, dm=document.querySelector('.dcol.dmain');
+  /* 可用画布宽：从已渲染的 tab 内容区测（首轮渲染前无 DOM 用 640 兜底，后续轮询自然校正） */
+  var avail=640, dm=document.querySelector('.dt-main');
   if(dm&&dm.clientWidth) avail=Math.max(320,dm.clientWidth-36);
   var m=deriveTimeline(d,seats,t);
   if(!m.started) return '';

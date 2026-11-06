@@ -412,6 +412,13 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dcols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 14px; align-items:start; }
   .dcol { min-width:0; }
   @media (max-width:980px) { .dcols { grid-template-columns:1fr; } }
+  /* 底部操作条内的输入聚合（自会话卡迁来）：紧凑化 */
+  .dtbar .cmp-grp { margin-top:6px; }
+  .dtbar .cmp-grp h3 { margin:0 0 4px; font-size:12.5px; }
+  .dtbar .cmp-grp .dim { font-size:11.5px; }
+  .dtbar textarea { min-height:46px; max-height:150px; }
+  .dtbar .ferr { min-height:0; margin-top:4px; }
+  .dtbar .row { margin:4px 0 0; }
   /* 浅色主题滚动条 */
   * { scrollbar-width:thin; scrollbar-color:#c8d0dc transparent; }
   ::-webkit-scrollbar { width:10px; height:10px; }
