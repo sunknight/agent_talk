@@ -202,8 +202,10 @@ export const OBSERVER_CSS = String.raw`  :root {
   .rt-rest { border-top:1px dashed var(--line); margin-top:10px; padding-top:8px; }
   @keyframes rtpulse { 0% { box-shadow:0 0 0 0 rgba(46,107,230,.35); } 100% { box-shadow:0 0 0 12px rgba(46,107,230,0); } }
   /* 帮助体系：右上角帮助按钮 / agent 接入指令块 / 帮助弹窗 */
-  #helpBtn { font-size:12px; padding:3px 12px; border-radius:99px; color:var(--dim); border:1px solid var(--line); background:var(--panel); transition:color var(--tt),border-color var(--tt); }
-  #helpBtn:hover { color:var(--acc); border-color:var(--acc); }
+  /* 顶栏小按钮：与帮助同高（12px 字号），小圆角，相互留白 */
+  #whoArea, #loginArea { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #helpBtn, .hbtn { font-size:12px; padding:3px 12px; border-radius:6px; color:var(--dim); border:1px solid var(--line); background:var(--panel); transition:color var(--tt),border-color var(--tt),background var(--tt); }
+  #helpBtn:hover, .hbtn:hover { color:var(--acc); border-color:var(--acc); background:var(--acc-bg); }
   .helpbox { background:var(--panel-2); border:1px solid var(--line); border-radius:var(--r); padding:10px 12px; white-space:pre-wrap; word-break:break-word; font:12.5px/1.7 ui-monospace,Menlo,monospace; margin:8px 0; }
   #helpModal .dbody h4 { margin:18px 0 6px; font-size:14px; color:var(--acc); }
   #helpModal .dbody h4:first-child { margin-top:0; }
@@ -365,6 +367,9 @@ export const OBSERVER_CSS = String.raw`  :root {
   /* 中列：内容撑满 + 输入区沉底（内容不足一屏时也贴底） */
   .dt-main { display:flex; flex-direction:column; min-height:calc(100vh - 170px); }
   .dt-view { flex:1; min-width:0; }
+  /* 邀请码小卡片（右栏窄宽不再挤换行） */
+  .inv-card { background:var(--panel-2); border:1px solid var(--line); border-radius:var(--r); padding:8px 10px; margin:6px 0; }
+  .inv-card .invite { font-size:13px; margin:5px 0 0; letter-spacing:1.5px; }
   /* 右栏 · 动态栏（阶段提示/邀请码/事件流/帮助），全高 sticky */
   .dt-rail { position:sticky; top:66px; display:flex; flex-direction:column; gap:10px; min-width:0; max-height:calc(100vh - 80px); overflow:auto; }
   .rail-card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); padding:12px 14px; box-shadow:var(--shadow); font-size:12.5px; }
@@ -492,7 +497,9 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dtbar .bb-mid { display:flex; gap:8px; align-items:stretch; margin-top:2px; }
   .dtbar .bb-mid > textarea { flex:1; min-height:54px; max-height:150px; }
   .dtbar .bb-side { display:flex; flex-direction:column; gap:6px; justify-content:flex-end; }
-  .dtbar .bb-send2 { min-height:54px; align-self:stretch; }
+  .dtbar .bb-send2 { min-height:54px; align-self:stretch; min-width:92px; }
+  /* 快捷控制按钮与发送按钮等宽（右缘对齐时的宽度一致感） */
+  .dtbar .bb-ctl button, .dtbar .bb-ctrl button { min-width:92px; justify-content:center; }
   .dtbar .bb-more summary { cursor:pointer; font-size:11.5px; color:var(--dim); user-select:none; padding:5px 0 0; }
   .dtbar .bb-more[open] summary { margin-bottom:2px; }
   .dtbar .cmp-grp { margin-top:10px; }

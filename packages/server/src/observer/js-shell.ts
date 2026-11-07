@@ -16,10 +16,10 @@ export const OBSERVER_JS_SHELL = String.raw`function refreshWho(){
   var admin=view.role==='systemadmin';
   who.innerHTML='<span>'+esc(view.userName)+'</span>'
     +(admin?' <span class="wbadge admin">系统观察员 · 全局观察模式</span>':' <span class="wbadge user">参与用户</span>');
-  la.innerHTML=(admin?'<button id="adminBtn">管理台</button>':'')
-    +'<button id="acctBtn" title="复制含用户 token 的账号凭证，交给自己的 agent 保持同一身份">复制账号凭证</button>'
-    +'<button id="acctSwBtn" title="本浏览器记录的帐号间切换；也可在这里登录其他帐号">帐号</button>'
-    +'<button id="logoutBtn">退出</button>';
+  la.innerHTML=(admin?'<button id="adminBtn" class="hbtn">管理台</button>':'')
+    +'<button id="acctBtn" class="hbtn" title="复制含用户 token 的账号凭证，交给自己的 agent 保持同一身份">复制账号凭证</button>'
+    +'<button id="acctSwBtn" class="hbtn" title="本浏览器记录的帐号间切换；也可在这里登录其他帐号">帐号</button>'
+    +'<button id="logoutBtn" class="hbtn">退出</button>';
   if(admin) document.getElementById('adminBtn').onclick=openAdmin;
   document.getElementById('acctBtn').onclick=function(){
     copyText(accountCredentialText());

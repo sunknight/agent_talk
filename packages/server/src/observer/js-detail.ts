@@ -1808,9 +1808,11 @@ function renderDetail(d){
         var el=document.getElementById('invites');
         var hh='';
         inv.invites.forEach(function(it){
-          hh+='<div class="row" style="margin:4px 0"><span class="rb '+esc(it.role)+'">'+esc(ROLE_LABEL[it.role]||it.role)+'</span>'
-            +'<span class="invite">'+esc(it.code)+'</span><span class="dim">剩 '+it.usesLeft+' 次</span>'
-            +'<button class="cpInv" data-code="'+esc(it.code)+'" data-role="'+esc(it.role)+'" data-uses="'+it.usesLeft+'">复制完整邀请</button></div>';
+          /* 窄栏小卡片：头行=角色+剩余次数 / 码行等宽 / 复制按钮整行（不再挤换行） */
+          hh+='<div class="inv-card"><div class="row"><span class="rb '+esc(it.role)+'">'+esc(ROLE_LABEL[it.role]||it.role)+'</span>'
+            +'<span class="sp"></span><span class="dim">剩 '+it.usesLeft+' 次</span></div>'
+            +'<div class="invite">'+esc(it.code)+'</div>'
+            +'<button class="cpInv sm" style="width:100%;margin-top:6px" data-code="'+esc(it.code)+'" data-role="'+esc(it.role)+'" data-uses="'+it.usesLeft+'">复制完整邀请</button></div>';
         });
         el.innerHTML=hh||'<span class="dim">无可用邀请码</span>';
         el.querySelectorAll('button.cpInv').forEach(function(b){
