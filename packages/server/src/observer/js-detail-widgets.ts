@@ -350,12 +350,24 @@ function timelineCardHtml(d,seats,t){
     h+='<line x1="'+TL_RAIL_W+'" y1="'+ly+'" x2="'+W+'" y2="'+ly+'" stroke="var(--line)" stroke-dasharray="3 4"/>'
       +'<text x="'+((W+TL_RAIL_W)/2)+'" y="'+(ly-4)+'" text-anchor="middle" fill="var(--dim)">'+esc('— '+phaseLabel(t.tableType,it.phase)+(it.ts?(' · '+fmtClock(it.ts)):'')+' —')+'</text>';
   });
-  /* 箭头链（画在卡片下层）：串行 hand-off 相邻相连；并行=分派 fan-out / 成员 fan-in 汇聚卡 / 汇聚卡续链 */
+  /* 箭头链（画在卡片下层）：串行 hand-off 相邻相连；并行=分派 fan-out / 成员 fan-in 汇聚卡 / 汇聚卡续链。
+     目标锚点按连线方向适配：同列→顶部中心；目标在源右侧→左缘垂直中心；在左侧→右缘垂直中心（跨列时垂直间隔小，接侧缘更清晰） */
   function msMid(it){
     var g=it.grp,mn=1e9,mx=-1e9;
     g.workers.forEach(function(sid){ var ix=laneIdx[sid]; if(ix!=null){ mn=Math.min(mn,colCx(ix)); mx=Math.max(mx,colCx(ix)); } });
     if(mx<0) mn=mx=TL_RAIL_W;
     return { x:(mn+mx)/2, y:it.y+TL_MS_H/2 };
+  }
+  /** 普通卡目标锚点（列 ix、顶 y）：fromX=源锚点 x（前节点下部中心） */
+  function dstAnchor(ix,ty,fromX){
+    var tcx=colCx(ix), l=colX(ix)+7;
+    if(Math.abs(fromX-tcx)<0.6) return {x:tcx,y:ty};
+    return (fromX<tcx)?{x:l,y:ty+TL_CARD_H/2}:{x:l+cardW,y:ty+TL_CARD_H/2};
+  }
+  /** 汇聚卡（虚拟汇总卡，宽 cw 居中 mid.x）同规则 */
+  function msAnchor(mid,cw0,ty,fromX){
+    if(Math.abs(fromX-mid.x)<0.6) return {x:mid.x,y:ty};
+    return (fromX<mid.x)?{x:mid.x-cw0/2,y:ty+TL_MS_H/2}:{x:mid.x+cw0/2,y:ty+TL_MS_H/2};
   }
   function arrow(x1,y1,x2,y2){
     h+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="var(--faint)" stroke-width="1.2" opacity=".65" marker-end="url(#tlArrow)"/>';
@@ -364,11 +376,14 @@ function timelineCardHtml(d,seats,t){
   items.forEach(function(it,ix){
     if(it.kind==='ph'){ src=null; return; }
     if(it.kind==='ms'){
-      var mid=msMid(it);
+      var mid=msMid(it), cw0=Math.min(230,W-TL_RAIL_W-8);
       for(var k=ix-1;k>=0;k--){
         var pk=items[k];
         if(pk.kind!=='done'&&pk.kind!=='skip') continue;
-        if(pk.nd&&pk.nd.grp===it.grp&&laneIdx[pk.nd.seatId]!=null) arrow(colCx(laneIdx[pk.nd.seatId]),pk.y+TL_CARD_H,mid.x,it.y,false);
+        if(pk.nd&&pk.nd.grp===it.grp&&laneIdx[pk.nd.seatId]!=null){
+          var fx=colCx(laneIdx[pk.nd.seatId]), fa=msAnchor(mid,cw0,it.y,fx);
+          arrow(fx,pk.y+TL_CARD_H,fa.x,fa.y);
+        }
       }
       src={x:mid.x,y:it.y+TL_MS_H};
       return;
@@ -376,17 +391,20 @@ function timelineCardHtml(d,seats,t){
     var nd=it.nd, cx=(laneIdx[nd.seatId]!=null)?colCx(laneIdx[nd.seatId]):null;
     if(cx==null) return;
     if(nd.type==='PARALLEL_DISPATCH'){
-      if(src) arrow(src.x,src.y,cx,it.y);
+      if(src){ var da=dstAnchor(laneIdx[nd.seatId],it.y,src.x); arrow(src.x,src.y,da.x,da.y); }
       for(var j2=ix+1;j2<items.length;j2++){
         var pj=items[j2];
         if(pj.kind==='ph'||pj.kind==='ms') continue;
-        if(pj.nd&&pj.nd.grp&&pj.nd.grp.dispatchTs===nd.end&&laneIdx[pj.nd.seatId]!=null) arrow(cx,it.y+TL_CARD_H,colCx(laneIdx[pj.nd.seatId]),pj.y);
+        if(pj.nd&&pj.nd.grp&&pj.nd.grp.dispatchTs===nd.end&&laneIdx[pj.nd.seatId]!=null){
+          var fo=dstAnchor(laneIdx[pj.nd.seatId],pj.y,cx);
+          arrow(cx,it.y+TL_CARD_H,fo.x,fo.y);
+        }
       }
       src=null;
       return;
     }
     if(nd.grp){ src=null; return; } /* 批次成员：入箭头来自分派、出箭头去汇聚，不接常规链 */
-    if(src) arrow(src.x,src.y,cx,it.y);
+    if(src){ var ta=dstAnchor(laneIdx[nd.seatId],it.y,src.x); arrow(src.x,src.y,ta.x,ta.y); }
     src={x:cx,y:it.y+TL_CARD_H};
   });
   /* 节点卡片（agent 名在列头，卡内=任务+时长+简要结果+时刻） */

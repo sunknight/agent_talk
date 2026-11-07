@@ -58,6 +58,8 @@ export interface WorkDirectiveRecord {
   title?: string;
   text: string;
   status: "pending" | "executing" | "done" | "failed" | "need_clarify" | "rejected";
+  /** 指定执行方席位（下达时定向；缺省=广播先到先得）；pending 期仅该席可领单/回执 */
+  toSeat?: string;
   /** 领单 worker 席位（executing 起锁定，防多 worker 抢单） */
   claimedBy?: string;
   /** worker 回执说明：done 详情（可含外部产物链接）/ failed 原因 / rejected 理由 */

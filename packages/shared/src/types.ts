@@ -863,6 +863,8 @@ export interface DirectivePayload {
   directiveId: string;
   title?: string;
   text: string;
+  /** 指定执行方席位（@定向语义）：指定后仅该 worker 席可领单/回执；缺省=广播，先到先得 */
+  toSeat?: string;
 }
 
 /** 指令回执结论：executing=领单/执行中；done=已完成；failed=执行失败；need_clarify=需要指挥方澄清；rejected=拒单（超出能力/安全边界） */
@@ -896,6 +898,8 @@ export interface WorkDirectiveView {
   title?: string;
   text: string;
   status: WorkDirectiveStatus;
+  /** 指定执行方席位（下达时定向；缺省=广播先到先得）；pending 期仅该席可领单 */
+  toSeat?: string;
   /** 领单执行方席位（executing 起） */
   claimedBy?: string;
   /** 执行方回执说明（done 详情/失败原因/拒单理由） */

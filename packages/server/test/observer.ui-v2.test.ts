@@ -138,7 +138,8 @@ describe("观察页 v2 二轮：三栏工作台与建桌重排", () => {
     expect(OBSERVER_HTML).toContain("多条自动排队 · 执行方可攒批回执");
     expect(OBSERVER_HTML).toContain("bb-head");
     expect(OBSERVER_HTML).toContain('id="dirSend" class="primary bb-send2"');
-    expect(OBSERVER_HTML).toContain("展开更多（标题等可选项）");
+    expect(OBSERVER_HTML).toContain("展开更多（指定执行方、标题等可选项）");
+    expect(OBSERVER_HTML).toContain('id="dirTo"'); // 指定执行方下拉（多 worker 时渲染）
     expect(OBSERVER_HTML).toContain(":composer[1]) /* 单类型：省 chips 行");
   });
   it("建桌表单：左类型列表 + 右表单 + 进阶折叠", () => {

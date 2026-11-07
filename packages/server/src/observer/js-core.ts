@@ -528,7 +528,8 @@ function openWdModal(w,seats){
   var body='<div class="row">'+roleBadge('director')+'<b>'+esc(w.byName||w.bySeat)+'</b>'
     +'<span class="dim">下达于 '+esc(new Date(w.createdAt).toLocaleString())+'</span>'
     +'<span class="sp"></span><span class="badge '+cls+'">'+esc(WD_STATUS[st]||st)+'</span></div>'
-    +(w.claimedBy?('<div class="kv" style="margin-top:6px"><span class="k">执行方</span>'+roleBadge('worker')+'<b>'+esc(seatName(seats,w.claimedBy))+'</b>'+((w.statusAt)?(' · '+esc(new Date(w.statusAt).toLocaleString())):'')+'</div>'):'')
+    +(w.claimedBy?('<div class="kv" style="margin-top:6px"><span class="k">执行方</span>'+roleBadge('worker')+'<b>'+esc(seatName(seats,w.claimedBy))+'</b>'+((w.statusAt)?(' · '+esc(new Date(w.statusAt).toLocaleString())):'')+'</div>')
+      :(w.toSeat?('<div class="kv" style="margin-top:6px"><span class="k">指定执行方</span>'+roleBadge('worker')+'<b>'+esc(seatName(seats,w.toSeat))+'</b><span class="dim">· 定向指令，仅该席位可领单</span></div>'):''))
     +'<h3 style="margin:14px 0 4px">指令内容</h3>'
     +((w.title)?('<div class="kv"><span class="k">标题</span>'+esc(w.title)+'</div>'):'')
     +'<div class="sumcard" style="white-space:pre-wrap">'+esc(w.text||'')+'</div>';

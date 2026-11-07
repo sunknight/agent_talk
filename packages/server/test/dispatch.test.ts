@@ -4,6 +4,7 @@
  * - 开始：无执行方 409；执行方未就绪 409（director 永不就绪但不阻塞）；就绪 → working
  * - 指令：open 409 / working 可发（进消息流 + pending 记录）；非 director 403；text 必填 422；注入标记
  * - 状态机：executing→done/failed；pending 直接 done=隐式领单；need_clarify→答复回 pending；rejected；终态 409；抢单 409 claimed_other
+ * - 定向指派：toSeat 指定执行方，仅指定席 poll 可见/可领（他席回执 409 assigned_other）；目标必须是 active worker；缺省广播先到先得
  * - 权限：DIRECTIVE_RESULT 仅 worker；observer poll 无 pendingDirectives；worker poll 有
  * - 暂停：working 可暂停；暂停期发指令/回执双 409
  * - 纪要：闭桌出工作纪要（指令清单与状态统计）
@@ -328,6 +329,55 @@ describe("指挥桌：回执状态机", () => {
     const poll1 = await call("GET", `/api/tables/${t.tableId}/poll?since=999999&timeout=0`, { token: w1.seatToken });
     expect(poll1.data.pendingDirectives.length).toBe(1);
     expect(poll1.data.pendingDirectives[0].status).toBe("executing");
+  });
+
+  it("定向指派 toSeat：仅指定席可见可领（他席回执 409 assigned_other）；非法目标校验；广播单不受影响", async () => {
+    const t = await mkDispatch("定向指派");
+    const w1 = await joinWorker(t.tableId, t.codes.worker, "执行方甲");
+    const w2 = await joinWorker(t.tableId, t.codes.worker, "执行方乙");
+    await call("POST", `/api/tables/${t.tableId}/my/start`, { token: t.user });
+    // 非法目标：不存在的席位 → 404；director 席位 → 409 not_worker
+    const bad1 = await call("POST", `/api/tables/${t.tableId}/directives`, { token: t.user, body: { text: "指给幽灵", toSeat: "seat_不存在" } });
+    expect(bad1.ok).toBe(false);
+    expect(bad1.error?.code).toBe("no_seat");
+    const dirSeat = (await detailOf(t.user, t.tableId)).table.seats.find((s: any) => s.role === "director");
+    const bad2 = await call("POST", `/api/tables/${t.tableId}/directives`, { token: t.user, body: { text: "指给指挥", toSeat: dirSeat.seatId } });
+    expect(bad2.ok).toBe(false);
+    expect(bad2.error?.code).toBe("not_worker");
+    // 定向 w2：投影带 toSeat，消息流 DIRECTIVE 载荷同步携带
+    const r = await call("POST", `/api/tables/${t.tableId}/directives`, { token: t.user, body: { text: "只有乙能干的活", title: "定向任务", toSeat: w2.seatId } });
+    expect(r.ok, JSON.stringify(r.error)).toBe(true);
+    const id = r.data.directiveId as string;
+    let d = (await detailOf(t.user, t.tableId)).directives.find((x: any) => x.directiveId === id);
+    expect(d.toSeat).toBe(w2.seatId);
+    expect(d.status).toBe("pending");
+    const w2poll0 = await call("GET", `/api/tables/${t.tableId}/poll?since=0&timeout=0`, { token: w2.seatToken });
+    expect(w2poll0.data.messages.some((m: any) => m.type === "DIRECTIVE" && m.payload.directiveId === id && m.payload.toSeat === w2.seatId)).toBe(true);
+    // 广播单照旧：两席待领清单都含；定向单仅 w2 可见
+    const idPub = (await call("POST", `/api/tables/${t.tableId}/directives`, { token: t.user, body: { text: "公共任务" } })).data.directiveId;
+    const poll1 = await call("GET", `/api/tables/${t.tableId}/poll?since=999999&timeout=0`, { token: w1.seatToken });
+    const ids1 = poll1.data.pendingDirectives.map((x: any) => x.directiveId);
+    expect(ids1).toContain(idPub);
+    expect(ids1).not.toContain(id);
+    const poll2 = await call("GET", `/api/tables/${t.tableId}/poll?since=999999&timeout=0`, { token: w2.seatToken });
+    const ids2 = poll2.data.pendingDirectives.map((x: any) => x.directiveId);
+    expect(ids2).toContain(id);
+    expect(ids2).toContain(idPub);
+    expect(poll2.data.pendingDirectives.find((x: any) => x.directiveId === id).toSeat).toBe(w2.seatId);
+    // w1 越席回执定向单 → 409 assigned_other；公共单仍可正常领
+    const r1a = await result(w1.seatToken, t.tableId, id, "executing");
+    expect(r1a.ok).toBe(false);
+    expect(r1a.error?.code).toBe("assigned_other");
+    const r1b = await result(w1.seatToken, t.tableId, idPub, "done", { note: "公共单我领了" });
+    expect(r1b.ok).toBe(true);
+    // w2 领单定向单并完成
+    const r2 = await result(w2.seatToken, t.tableId, id, "executing", { note: "乙开始" });
+    expect(r2.ok, JSON.stringify(r2.error)).toBe(true);
+    const r3 = await result(w2.seatToken, t.tableId, id, "done", { note: "乙完成" });
+    expect(r3.ok).toBe(true);
+    d = (await detailOf(t.user, t.tableId)).directives.find((x: any) => x.directiveId === id);
+    expect(d.status).toBe("done");
+    expect(d.claimedBy).toBe(w2.seatId);
   });
 
   it("DIRECTIVE_RESULT 仅 worker 可发；指令不存在 404；非指挥桌 409", async () => {

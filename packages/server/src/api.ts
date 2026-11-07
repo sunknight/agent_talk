@@ -314,6 +314,7 @@ export function createHttpServer(hub: Hub) {
         return ok(res, hub.sendDirectiveByUser(bearer(req), seg[2], {
           title: body.title !== undefined && body.title !== null ? String(body.title) : undefined,
           text: String(body.text ?? ""),
+          toSeat: body.toSeat !== undefined && body.toSeat !== null ? String(body.toSeat) : undefined,
         }));
       }
       if (seg[0] === "api" && seg[1] === "tables" && seg[2] && seg[3] === "directives" && seg[4] === "clarify" && method === "POST" && !seg[5]) {

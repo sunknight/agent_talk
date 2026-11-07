@@ -630,8 +630,9 @@ export class Hub {
 
   /** 指挥方下达工作指令（my 通道）：working 阶段随时可发（异步队列，无发言权概念）；
    *  进消息流全桌可见 + 建 work_directives 记录（pending 待执行方领单）。
+   *  toSeat=指定执行方（@定向）：仅该 worker 席可领单/回执，他席 poll 待领清单不出现；缺省=广播先到先得。
    *  与问询桌 askByUser 的差异：这里过注入扫描（指令文本将进入 agent 执行上下文，命中打 flags 供执行方警示持有人） */
-  sendDirectiveByUser(userToken: string, tableId: string, p: { title?: string; text: string }): { directiveId: string; msg: StoredMsg } {
+  sendDirectiveByUser(userToken: string, tableId: string, p: { title?: string; text: string; toSeat?: string }): { directiveId: string; msg: StoredMsg } {
     const user = this.requireUser(userToken);
     const meta = this.requireTable(tableId);
     if (tableTypeOf(meta.tableType).id !== "dispatch") {
@@ -644,8 +645,15 @@ export class Hub {
     if (meta.pause) throw new ApiError(409, "meeting_paused", "工作已暂停，恢复后再下达指令");
     const text = checkField(p.text, "text", WORK_DIRECTIVE_MAX);
     const title = p.title !== undefined ? checkField(p.title, "title", 200, 0) : undefined;
+    const toSeat = p.toSeat?.trim() || undefined;
+    if (toSeat) {
+      const target = this.store.getSeat(tableId, toSeat);
+      if (!target || target.status === "left") throw new ApiError(404, "no_seat", "指定执行方席位不存在或已退席");
+      if (target.role !== "worker") throw new ApiError(409, "not_worker", `只能指定执行方（worker）席位，${target.name} 是 ${target.role}`);
+      if (toSeat === seat.seatId) throw new ApiError(409, "bad_target", "不能指定指挥方席位自己");
+    }
     const directiveId = newId("wd");
-    const payload: DirectivePayload = { directiveId, ...(title ? { title } : {}), text };
+    const payload: DirectivePayload = { directiveId, ...(title ? { title } : {}), text, ...(toSeat ? { toSeat } : {}) };
     const env = makeEnvelope({ tableId, from: seat.seatId, to: "all", type: "DIRECTIVE", payload });
     const v = validateEnvelope(env);
     if (!v.ok) throw new ApiError(422, "bad_payload", `消息校验失败：${v.errors.join("; ")}`);
@@ -654,10 +662,10 @@ export class Hub {
     if (hits.length) this.audit(tableId, seat.seatId, "policy_reject", { reason: "injection_flagged", hits, msgId: env.msgId });
     const rec: WorkDirectiveRecord = {
       directiveId, tableId, msgId: msg.msgId, bySeat: seat.seatId, byName: seat.name,
-      ...(title ? { title } : {}), text, status: "pending", createdAt: Date.now(),
+      ...(title ? { title } : {}), text, status: "pending", ...(toSeat ? { toSeat } : {}), createdAt: Date.now(),
     };
     this.store.saveWorkDirective(rec);
-    this.audit(tableId, seat.seatId, "work_directive_sent", { directiveId, msgId: msg.msgId, bytes: text.length });
+    this.audit(tableId, seat.seatId, "work_directive_sent", { directiveId, msgId: msg.msgId, bytes: text.length, ...(toSeat ? { toSeat } : {}) });
     return { directiveId, msg };
   }
 
@@ -686,7 +694,7 @@ export class Hub {
     return msg;
   }
 
-  /** DIRECTIVE_RESULT 入库前校验：指令存在 + 状态迁移合法 + 领单归属（防多 worker 抢单 / 越席收尾） */
+  /** DIRECTIVE_RESULT 入库前校验：指令存在 + 状态迁移合法 + 领单归属（防多 worker 抢单 / 越席收尾）+ 定向指派归属 */
   private precheckDirectiveResult(tableId: string, seat: ServerSeat, p: DirectiveResultPayload) {
     const rec = this.store.getWorkDirective(tableId, p.directiveId);
     if (!rec) throw new ApiError(404, "no_directive", `工作指令不存在：${p.directiveId}`);
@@ -695,6 +703,10 @@ export class Hub {
     }
     if (rec.status === "executing" && rec.claimedBy !== seat.seatId) {
       throw new ApiError(409, "claimed_other", "指令已被其他执行方席位领取，请勿重复处理");
+    }
+    if (rec.status === "pending" && rec.toSeat && rec.toSeat !== seat.seatId) {
+      const target = this.store.getSeat(tableId, rec.toSeat);
+      throw new ApiError(409, "assigned_other", `指令已指定执行方 ${target?.name ?? rec.toSeat}，仅指定席位可处理`);
     }
     if (p.outcome === "need_clarify" && !(p.clarify ?? "").trim()) {
       throw new ApiError(422, "bad_payload", "need_clarify 回执必须携带 clarify 反问内容");
@@ -731,6 +743,7 @@ export class Hub {
       directiveId: rec.directiveId, msgId: rec.msgId, bySeat: rec.bySeat, byName: rec.byName,
       ...(rec.title !== undefined ? { title: rec.title } : {}),
       text: rec.text, status: rec.status,
+      ...(rec.toSeat !== undefined ? { toSeat: rec.toSeat } : {}),
       ...(rec.claimedBy !== undefined ? { claimedBy: rec.claimedBy } : {}),
       ...(rec.resultNote !== undefined ? { resultNote: rec.resultNote } : {}),
       ...(rec.clarifyQ !== undefined ? { clarifyQ: rec.clarifyQ } : {}),
@@ -740,10 +753,12 @@ export class Hub {
     };
   }
 
-  /** worker 视角待办指令：pending 全量（可领）+ 本席 executing（继续做）；攒批与执行顺序由 agent 自主决定 */
+  /** worker 视角待办指令：可领 pending（广播全量 + 指定本席的指派单）+ 本席 executing（继续做）；攒批与执行顺序由 agent 自主决定 */
   private pendingDirectivesFor(tableId: string, seat: ServerSeat): WorkDirectiveView[] {
     return this.store.getWorkDirectives(tableId)
-      .filter((d) => d.status === "pending" || (d.status === "executing" && d.claimedBy === seat.seatId))
+      .filter((d) =>
+        (d.status === "pending" && (!d.toSeat || d.toSeat === seat.seatId))
+        || (d.status === "executing" && d.claimedBy === seat.seatId))
       .map((d) => this.workDirectiveView(d));
   }
 

@@ -136,6 +136,7 @@ const directiveSchema = s({
     directiveId: str(1, 64),
     title: str(0, 200),
     text: str(1, 8_000),
+    toSeat: str(1, 64),
   },
   additionalProperties: false,
 });

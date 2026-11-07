@@ -263,14 +263,19 @@ function barComposerHtml(d,seats,mySeat,isAsker,stage,ctl){
         +'<div class="bb-side"><select id="askTo">'+aopts+'</select><button id="askSend" class="primary bb-send2">提问</button></div></div>'
         +'<div class="ferr" id="askErr"></div>';
     }else if(g==='dir'){
-      /* 紧凑三行：标题+帮助+快捷控制（右） / 指令输入（~80%）+发送（右） / 展开更多（标题等可选项） */
+      /* 紧凑三行：标题+帮助+快捷控制（右） / 指令输入（~80%）+发送（右） / 展开更多（指定执行方、标题等可选项） */
+      var dirW=0,dirOpts='';
+      seats.forEach(function(s){ if(s.role==='worker'){ dirW++; dirOpts+='<option value="'+esc(s.seatId)+'">指定 '+esc(s.name)+'（仅其可领单）</option>'; } });
       h+='<div class="bb-head"><h3>下达工作指令</h3>'
         +'<span class="dim" title="可随时异步发送，多条指令自动排队；执行方按需攒批（如同类改动合并）后逐单回执">可随时异步发送，多条自动排队 · 执行方可攒批回执</span>'
         +((single&&ctl)?('<span class="sp"></span><span class="bb-ctl">'+ctl+'</span>'):'')+'</div>'
         +'<div class="bb-mid"><textarea id="dirText" rows="2" placeholder="指令内容（相对明确的工作要求，如：修改 bd10 页面的搜索框背景颜色为白色；多个改动点可分多条）。执行方领单执行并逐条回执；外部成果（如设计稿）可在回执给出链接。"></textarea>'
         +'<button id="dirSend" class="primary bb-send2">下达指令</button></div>'
-        +'<details class="bb-more"><summary>展开更多（标题等可选项）</summary>'
-        +'<div class="row" style="margin-top:6px"><input id="dirTitle" placeholder="标题（可选，一句话概要，如：调整 bd10 搜索框配色）" style="flex:1"></div></details>'
+        +'<details class="bb-more"><summary>展开更多（指定执行方、标题等可选项）</summary>'
+        +'<div class="row" style="margin-top:6px"><input id="dirTitle" placeholder="标题（可选，一句话概要，如：调整 bd10 搜索框配色）" style="flex:1"></div>'
+        +((dirW>1)?('<div class="row" style="margin-top:6px"><select id="dirTo"><option value="">不指定 · 谁先领单谁执行</option>'+dirOpts+'</select>'
+          +'<span class="dim">定向指令只有指定席位能领单，其余执行方看不到它</span></div>'):'')
+        +'</details>'
         +'<div class="ferr" id="dirErr"></div>';
     }else if(g==='dr'){
       var drOpts='';
@@ -771,6 +776,7 @@ function renderDetail(d){
       h+='<div class="rcard '+cls+'" data-wd="'+wi+'" title="点击查看指令详情">'
         +'<div class="row"><b>'+esc(clipStr(w.title||w.text||'',44))+'</b><span class="sp"></span><span class="badge '+cls+'">'+esc(WD_STATUS[st]||st)+'</span></div>'
         +'<div class="dim">'+esc(w.byName||w.bySeat)+' 下达 · '+fmtTs(w.createdAt)
+        +((w.toSeat&&st==='pending')?(' · 指定 '+esc(seatName(seats,w.toSeat))+' 执行（仅其可领）'):'')
         +((w.claimedBy&&st!=='pending')?(' · 执行：'+esc(seatName(seats,w.claimedBy))):'')+'</div>';
       if(st==='need_clarify'){
         h+='<div style="margin-top:4px"><span class="badge warn">反问</span> '+esc(clipStr(w.clarifyQ||'',90))+'</div>';
@@ -1452,11 +1458,13 @@ function renderDetail(d){
   if(dirSend) dirSend.onclick=function(){
     var text=document.getElementById('dirText').value.trim();
     var title=document.getElementById('dirTitle').value.trim();
+    var toSel=document.getElementById('dirTo');
+    var toSeat=(toSel&&toSel.value)?toSel.value:undefined;
     var errEl=document.getElementById('dirErr'); errEl.textContent='';
     if(!text){ errEl.textContent='请输入指令内容'; return; }
     dirSend.disabled=true;
-    api('POST','/api/tables/'+view.tableId+'/directives',{text:text,title:title||undefined})
-      .then(function(){ toast('指令已下达，执行方将领单处理'); document.getElementById('dirText').value=''; view.dirtyPanel=false; loadDetail(); })
+    api('POST','/api/tables/'+view.tableId+'/directives',{text:text,title:title||undefined,toSeat:toSeat})
+      .then(function(){ toast('指令已下达'+(toSeat?'，已指定执行方':'，执行方将领单处理')); document.getElementById('dirText').value=''; view.dirtyPanel=false; loadDetail(); })
       .catch(function(e){ dirSend.disabled=false; errEl.textContent='下达失败：'+e.message; });
   };
 
