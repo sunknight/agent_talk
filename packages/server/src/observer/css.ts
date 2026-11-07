@@ -335,32 +335,35 @@ export const OBSERVER_CSS = String.raw`  :root {
   .phasediv::before,.phasediv::after { content:''; flex:1; height:1px; background:var(--line); }
   /* ============ 详情页工作台（v2）：常驻头 + 左栏 tab + 内容区 + 底部操作条 ============ */
   /* 详情头卡：主题 + 徽章 + 复制链接 */
-  .dt-head { background:var(--panel); border:1px solid var(--line); border-top:3px solid var(--acc); border-radius:var(--r-lg); padding:14px 18px 10px; margin-bottom:12px; box-shadow:var(--shadow); }
-  /* 七桌型着色：顶条色 + 左上浅色渐变（视觉落点） */
-  .dt-head.tt-review { border-top-color:#2e6be6; background:linear-gradient(120deg,#eaf1fe,#ffffff 58%); }
-  .dt-head.tt-collab { border-top-color:#7952d3; background:linear-gradient(120deg,#f1edfc,#ffffff 58%); }
-  .dt-head.tt-brainstorm { border-top-color:#d98f1f; background:linear-gradient(120deg,#fdf3e3,#ffffff 58%); }
-  .dt-head.tt-decision { border-top-color:#0e8a5f; background:linear-gradient(120deg,#e8f6f0,#ffffff 58%); }
-  .dt-head.tt-inquiry { border-top-color:#0d9bb5; background:linear-gradient(120deg,#e6f6fa,#ffffff 58%); }
-  .dt-head.tt-dispatch { border-top-color:#d95f2b; background:linear-gradient(120deg,#fdeee6,#ffffff 58%); }
-  .dt-head.tt-relay { border-top-color:#a07d1c; background:linear-gradient(120deg,#faf3df,#ffffff 58%); }
+  .dt-head { background:var(--panel); border:1px solid var(--line); border-top:3px solid var(--acc); border-radius:var(--r-lg); padding:14px 18px 12px; margin-bottom:12px; box-shadow:var(--shadow); }
+  /* 七桌型着色：顶条色（背景保持白色，视觉落点靠顶条+徽章色） */
+  .dt-head.tt-review { border-top-color:#2e6be6; }
+  .dt-head.tt-collab { border-top-color:#7952d3; }
+  .dt-head.tt-brainstorm { border-top-color:#d98f1f; }
+  .dt-head.tt-decision { border-top-color:#0e8a5f; }
+  .dt-head.tt-inquiry { border-top-color:#0d9bb5; }
+  .dt-head.tt-dispatch { border-top-color:#d95f2b; }
+  .dt-head.tt-relay { border-top-color:#a07d1c; }
+  .dt-head .toprow { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
   .dt-head .shead { margin-bottom:4px; align-items:center; }
   .dt-head .shead > b { font-size:17px; }
   .dt-head .toprow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   /* 下一步动作条：任何 tab 常驻，蓝底高亮，直给「现在该做什么」 */
-  .dt-action { display:flex; gap:12px; align-items:center; flex-wrap:wrap; background:linear-gradient(90deg,var(--acc-bg),rgba(46,107,230,.02)); border:1px solid var(--acc-line); border-left:4px solid var(--acc); border-radius:var(--r-lg); padding:12px 16px; margin-bottom:14px; font-size:13px; min-height:48px; }
-  .dt-action .lbl { font-weight:700; color:var(--acc); white-space:nowrap; font-size:12px; letter-spacing:.05em; }
-  .dt-action > div { overflow-wrap:anywhere; } /* 长路径/API 文本窄屏不断溢出 */
-  .dt-action .go { margin-left:auto; }
-  .dt-action.warn { background:linear-gradient(90deg,var(--warn-bg),rgba(179,116,7,.02)); border-color:var(--warn-line); border-left-color:var(--warn); }
+  /* 下一步动作卡（左栏 tab 之下，竖排窄卡；文案长路径可断行） */
+  .dt-action { background:linear-gradient(180deg,var(--acc-bg),#ffffff 70%); border:1px solid var(--acc-line); border-top:3px solid var(--acc); border-radius:var(--r-lg); padding:11px 13px; font-size:12.5px; line-height:1.65; box-shadow:var(--shadow); }
+  .dt-action .lbl { display:block; font-weight:700; color:var(--acc); font-size:12px; letter-spacing:.05em; margin-bottom:5px; }
+  .dt-action > div { overflow-wrap:anywhere; }
+  .dt-action .go { margin-top:8px; display:flex; flex-direction:column; gap:6px; align-items:stretch; }
+  .dt-action .go .row { margin:0; }
+  .dt-action.warn { background:linear-gradient(180deg,var(--warn-bg),#ffffff 70%); border-color:var(--warn-line); border-top-color:var(--warn); }
   .dt-action.warn .lbl { color:var(--warn); }
-  .dt-action.err { background:linear-gradient(90deg,var(--err-bg),rgba(214,69,69,.02)); border-color:var(--err-line); border-left-color:var(--err); }
+  .dt-action.err { background:linear-gradient(180deg,var(--err-bg),#ffffff 70%); border-color:var(--err-line); border-top-color:var(--err); }
   .dt-action.err .lbl { color:var(--err); }
   /* 工作台主体：左栏 tab 导航（含我的席位摘要）+ 右侧内容区 */
   .dt-shell { display:grid; grid-template-columns:232px minmax(0,1fr) 300px; gap:16px; align-items:start; }
   @media (max-width:1440px) { .dt-shell { grid-template-columns:220px minmax(0,1fr) 262px; } }
   /* 中列：内容撑满 + 输入区沉底（内容不足一屏时也贴底） */
-  .dt-main { display:flex; flex-direction:column; min-height:calc(100vh - 240px); }
+  .dt-main { display:flex; flex-direction:column; min-height:calc(100vh - 170px); }
   .dt-view { flex:1; min-width:0; }
   /* 右栏 · 动态栏（阶段提示/邀请码/事件流/帮助），全高 sticky */
   .dt-rail { position:sticky; top:66px; display:flex; flex-direction:column; gap:10px; min-width:0; max-height:calc(100vh - 80px); overflow:auto; }
@@ -404,10 +407,12 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dt-main .cb-list { max-height:calc(100vh - 330px); min-height:380px; }
   @media (max-width:1200px) { .dt-main .cb-list { max-height:60vh; } }
   /* 底部常驻操作条：所有 tab 可用——主输入（桌型×身份自适应类型）+ 快捷控制（阶段×角色） */
-  /* 输入区（zcode 风格）：固定在中间列底部——sticky 贴视口底，内容不足一屏时沉到列底；圆角外框最小高度 */
-  .dtbar { position:sticky; bottom:12px; z-index:14; margin-top:auto; background:var(--panel); border:1px solid var(--line-2); border-radius:16px; box-shadow:0 8px 28px rgba(16,24,40,.12); padding:10px 14px 12px; }
-  .dtbar-in { display:flex; flex-direction:column; gap:6px; min-height:52px; }
-  .dtbar-ro { color:var(--dim); font-size:12.5px; text-align:center; padding:6px 0 2px; }
+  /* 输入区（zcode 风格）：钉在整个窗口底部、宽度对齐中列（placeDtBar 动态定位），圆角外框最小高度；
+     中列末尾的 #dtBarPh 占位防止内容被 fixed 遮挡 */
+  .dtbar { position:fixed; bottom:12px; z-index:14; background:var(--panel); border:1px solid var(--line-2); border-radius:16px; box-shadow:0 8px 28px rgba(16,24,40,.16); padding:10px 14px 12px; }
+  .dtbar-in { display:flex; flex-direction:column; gap:8px; min-height:52px; }
+  .dtbar-ro { color:var(--dim); font-size:12.5px; text-align:center; padding:8px 0 4px; }
+  #dtBarPh { margin-top:auto; }
   .bb-row { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
   .bb-types { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
   .bb-chip { font-size:12px; padding:2px 12px; border-radius:99px; border:1px solid var(--line); color:var(--dim); background:var(--panel); cursor:pointer; transition:color var(--tt),border-color var(--tt),background var(--tt); }
@@ -432,6 +437,7 @@ export const OBSERVER_CSS = String.raw`  :root {
   @media (max-width:1200px) {
     .dt-shell { grid-template-columns:1fr; }
     .dt-side { position:static; }
+    .dt-side .dt-action { order:-1; margin-bottom:2px; } /* 单列时动作卡置顶全宽 */
     .dt-rail { position:static; max-height:none; order:3; }
     .dtabs { flex-direction:row; overflow-x:auto; padding:5px; gap:4px; }
     .dtab { width:auto; white-space:nowrap; padding:6px 12px; }
@@ -478,8 +484,9 @@ export const OBSERVER_CSS = String.raw`  :root {
   .intro-steps .istep b { display:block; margin-bottom:4px; font-size:14.5px; }
   .intro-steps .istep .dim { font-size:12.5px; line-height:1.6; }
   /* 底部操作条内的输入聚合（自会话卡迁来）：紧凑化 */
-  .dtbar .cmp-grp { margin-top:6px; }
-  .dtbar .cmp-grp h3 { margin:0 0 4px; font-size:12.5px; }
+  .dtbar .cmp-grp { margin-top:10px; }
+  .dtbar .cmp-grp h3 { margin:0 0 10px; font-size:12.5px; }
+  .dtbar .cmp-grp .dim { margin-bottom:8px; }
   .dtbar .cmp-grp .dim { font-size:11.5px; }
   .dtbar textarea { min-height:46px; max-height:150px; }
   .dtbar .ferr { min-height:0; margin-top:4px; }

@@ -114,17 +114,23 @@ describe("观察页 v2 二轮：三栏工作台与建桌重排", () => {
     expect(OBSERVER_HTML).toContain("switchDtTab('chat')");
     expect(OBSERVER_HTML).toContain("已就绪':'未就绪'"); // 暂停期就绪名单
   });
-  it("详情头按桌型着色（tt-* 渐变与顶条）", () => {
+  it("详情头按桌型着色（白底+类型色顶条；列表卡顶条同色）", () => {
     expect(OBSERVER_HTML).toContain("dt-head tt-'+esc(t.tableType)");
+    expect(OBSERVER_HTML).not.toContain("linear-gradient(120deg,#fdf3e3"); // 彩色渐变已移除
     for (const tt of ["review", "collab", "brainstorm", "decision", "inquiry", "dispatch", "relay"]) {
       expect(OBSERVER_HTML).toContain(`.dt-head.tt-${tt} {`);
       expect(OBSERVER_HTML).toContain(`.tcard.tt-${tt} {`);
     }
   });
-  it("输入区 zcode 化：中列底部 sticky 圆角外框，不再全宽 fixed", () => {
-    expect(OBSERVER_HTML).toContain(".dtbar { position:sticky; bottom:12px;");
-    expect(OBSERVER_HTML).not.toContain(".dtbar { position:fixed");
-    expect(OBSERVER_HTML).toContain("margin-top:auto");
+  it("下一步动作卡移入左栏（tab 之下）", () => {
+    expect(OBSERVER_HTML).toContain("'</nav>'+actCard+meH");
+    expect(OBSERVER_HTML).toContain(".dt-side .dt-action { order:-1;");
+  });
+  it("输入区 zcode 化：钉在窗口底、宽度对齐中列（placeDtBar 定位 + 占位防遮挡）", () => {
+    expect(OBSERVER_HTML).toContain(".dtbar { position:fixed; bottom:12px;");
+    expect(OBSERVER_HTML).toContain("function placeDtBar()");
+    expect(OBSERVER_HTML).toContain('id="dtBarPh"');
+    expect(OBSERVER_HTML).toContain("bar.style.left=Math.round(r.left)+'px'");
   });
   it("建桌表单：左类型列表 + 右表单 + 进阶折叠", () => {
     expect(OBSERVER_HTML).toContain("ct-wrap");

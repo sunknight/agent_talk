@@ -287,6 +287,18 @@ function switchDtTab(id){
   try{ sessionStorage.setItem('rt_dtab_'+view.tableId,id); }catch(e){}
   rerenderDetail();
 }
+/* 底部输入区（position:fixed 钉在窗口底）：左缘/宽度对齐中列，并给中列末尾占位防内容被盖；
+   每次 renderDetail 重建后调用；resize 时也重算（boot 注册一次） */
+function placeDtBar(){
+  var bar=document.querySelector('.dtbar');
+  var col=document.querySelector('.dt-main');
+  if(!bar||!col) return;
+  var r=col.getBoundingClientRect();
+  bar.style.left=Math.round(r.left)+'px';
+  bar.style.width=Math.round(r.width)+'px';
+  var ph=document.getElementById('dtBarPh');
+  if(ph){ ph.style.height=(bar.offsetHeight+20)+'px'; ph.style.flex='none'; }
+}
 
 function renderDetail(d){
   var t=d.table, seats=(t.seats||[]).filter(function(s){ return s.status!=='left'; });
@@ -1028,15 +1040,19 @@ function renderDetail(d){
   var secMap={ov:sec.ov,chat:sec.chat,proc:sec.proc,work:sec.work,files:sec.files,mng:sec.mng};
   var app=document.getElementById('app');
   app.className='detail';
+  var actCard='<div class="dt-action'+((t.pause||t.phase==='human_intervention')?' warn':'')+'"><span class="lbl">★ 下一步</span>'
+    +'<div>'+sec.act+'</div>'
+    +(gotoH?'<div class="go">'+gotoH+'</div>':'')+'</div>';
   app.innerHTML=sec.head
-    +'<div class="dt-action'+((t.pause||t.phase==='human_intervention')?' warn':'')+'"><span class="lbl">下一步</span><div style="flex:1;min-width:0">'+sec.act+'</div>'
-    +(gotoH?'<div class="go row">'+gotoH+'</div>':'')+'</div>'
-    +'<div class="dt-shell"><aside class="dt-side"><nav class="dtabs">'+tabNav+'</nav>'+meH+'</aside>'
-    +'<section class="dt-main"><div class="dt-view">'+secMap[tab]+'</div>'+barH+'</section>'
-    +'<aside class="dt-rail">'+railH+'</aside></div>';
+    +'<div class="dt-shell"><aside class="dt-side"><nav class="dtabs">'+tabNav+'</nav>'+actCard+meH+'</aside>'
+    +'<section class="dt-main"><div class="dt-view">'+secMap[tab]+'</div><div id="dtBarPh"></div></section>'
+    +'<aside class="dt-rail">'+railH+'</aside></div>'
+    +barH;
   document.title=t.topic+' · 圆桌详情'; // 分享/历史记录可辨识
   document.getElementById('back').onclick=function(){ openList(); };
   document.getElementById('dCopyLink').onclick=function(){ copyText(location.origin+'/#/table/'+view.tableId); toast('详情页链接已复制，可发给他人直达本桌'); };
+  /* 输入区固定窗口底：对齐中列左缘与宽度（轮询重建/窗口尺寸变化后重算），占位防遮挡 */
+  placeDtBar();
   /* tab 切换 / 动作条深链 / 右栏事件流跳会话 / 帮助卡开合 */
   app.querySelectorAll('button[data-dt]').forEach(function(b){ b.onclick=function(){ switchDtTab(b.getAttribute('data-dt')); }; });
   var onTab=app.querySelector('.dtab.on'); /* 窄屏横滚 tab 条：当前项滚入视野 */
@@ -1892,6 +1908,7 @@ function syncRoute(){
 }
 window.addEventListener('hashchange',syncRoute);
 window.addEventListener('popstate',syncRoute);
+window.addEventListener('resize',function(){ if(view.mode==='detail') placeDtBar(); });
 
 /* ---------- 草稿保护：面板内任何编辑都冻结轮询重渲染 ---------- */
 (function(){
