@@ -132,6 +132,15 @@ describe("观察页 v2 二轮：三栏工作台与建桌重排", () => {
     expect(OBSERVER_HTML).toContain('id="dtBarPh"');
     expect(OBSERVER_HTML).toContain("bar.style.left=Math.round(r.left)+'px'");
   });
+  it("指挥方输入区紧凑三行（单类型省 chips，标题+帮助+快捷控制同行，可选标题折叠）", () => {
+    expect(OBSERVER_HTML).toContain("var single=types.length===1");
+    expect(OBSERVER_HTML).toContain("下达工作指令</h3>");
+    expect(OBSERVER_HTML).toContain("多条自动排队 · 执行方可攒批回执");
+    expect(OBSERVER_HTML).toContain("bb-head");
+    expect(OBSERVER_HTML).toContain('id="dirSend" class="primary bb-send2"');
+    expect(OBSERVER_HTML).toContain("展开更多（标题等可选项）");
+    expect(OBSERVER_HTML).toContain(":composer[1]) /* 单类型：省 chips 行");
+  });
   it("建桌表单：左类型列表 + 右表单 + 进阶折叠", () => {
     expect(OBSERVER_HTML).toContain("ct-wrap");
     expect(OBSERVER_HTML).toContain('class="ct-types" id="ctTypeRow"');

@@ -484,6 +484,17 @@ export const OBSERVER_CSS = String.raw`  :root {
   .intro-steps .istep b { display:block; margin-bottom:4px; font-size:14.5px; }
   .intro-steps .istep .dim { font-size:12.5px; line-height:1.6; }
   /* 底部操作条内的输入聚合（自会话卡迁来）：紧凑化 */
+  /* 紧凑组布局（指挥方下指令/问询方提问等单类型场景）：头行+输入行+展开更多，共 3 行 */
+  .dtbar .bb-head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .dtbar .bb-head h3 { margin:0; font-size:13px; white-space:nowrap; }
+  .dtbar .bb-head .dim { font-size:11.5px; }
+  .dtbar .bb-head .bb-ctl { margin-left:auto; display:flex; gap:6px; }
+  .dtbar .bb-mid { display:flex; gap:8px; align-items:stretch; margin-top:2px; }
+  .dtbar .bb-mid > textarea { flex:1; min-height:54px; max-height:150px; }
+  .dtbar .bb-side { display:flex; flex-direction:column; gap:6px; justify-content:flex-end; }
+  .dtbar .bb-send2 { min-height:54px; align-self:stretch; }
+  .dtbar .bb-more summary { cursor:pointer; font-size:11.5px; color:var(--dim); user-select:none; padding:5px 0 0; }
+  .dtbar .bb-more[open] summary { margin-bottom:2px; }
   .dtbar .cmp-grp { margin-top:10px; }
   .dtbar .cmp-grp h3 { margin:0 0 10px; font-size:12.5px; }
   .dtbar .cmp-grp .dim { margin-bottom:8px; }

@@ -198,7 +198,7 @@ function chatboxCardHtml(d,seats,mySeat,isAsker){
 /* 底部常驻操作条 · 输入聚合（自会话卡迁移至全局，任何 tab 可用）：类型出现条件与旧版一致
    （代答仅轮到本席、提问仅问询方问答期、下指令仅指挥方工作期、索要仅接收方对接期）。
    返回 [类型chips, 输入组] 两段 HTML；无可用类型返回 ''。元素 id 与绑定和旧版完全一致。 */
-function barComposerHtml(d,seats,mySeat,isAsker,stage){
+function barComposerHtml(d,seats,mySeat,isAsker,stage,ctl){
   var t=d.table, turn=t.activeTurn;
   var types=[];
   if(mySeat&&t.phase!=='closed'&&mySeat.role!=='director') types.push(['supp','公开补充'],['priv','私有指令'],['hi','人工指令']);
@@ -209,12 +209,13 @@ function barComposerHtml(d,seats,mySeat,isAsker,stage){
   var parMine=!!(t.parallelDispatch&&t.parallelDispatch.workers.indexOf(d.mySeatId)>=0&&(t.activeTurns||[]).some(function(x){ return x.seatId===d.mySeatId; }));
   if(mySeat&&stage==='running'&&!t.pause&&((turn&&turn.seatId===d.mySeatId)||parMine)) types.unshift(['proxy',parMine?'交付本轮（并行批次）':'代答']);
   if(!types.length) return '';
+  var single=types.length===1; /* 单类型（指挥方=下指令、纯问询方=提问）：省略类型 chips 行，快捷控制并入组头行 */
   var cur=view.cmpType, hit=false, ti;
   for(ti=0;ti<types.length;ti++){ if(types[ti][0]===cur) hit=true; }
   if(!hit) cur=types[0][0];
   view.cmpType=cur;
   var tchips='';
-  types.forEach(function(x){ tchips+='<button class="fbtn'+(x[0]===cur?' on':'')+'" data-ct="'+x[0]+'">'+x[1]+'</button>'; });
+  if(!single) types.forEach(function(x){ tchips+='<button class="fbtn'+(x[0]===cur?' on':'')+'" data-ct="'+x[0]+'">'+x[1]+'</button>'; });
   var h='';
   types.forEach(function(x){
     var g=x[0];
@@ -254,16 +255,20 @@ function barComposerHtml(d,seats,mySeat,isAsker,stage){
     }else if(g==='ask'){
       var aopts='<option value="">广播 · 全体回答方各自作答</option>';
       seats.forEach(function(s){ if(s.role==='answerer') aopts+='<option value="'+esc(s.seatId)+'">定向 · '+esc(s.name)+'</option>'; });
-      h+='<h3>提问（问询方）</h3>'
-        +'<textarea id="askText" placeholder="向回答方提问…（回答方只在各自声明的范围内作答，超范围会明确说明并拒答）"></textarea>'
-        +'<div class="row" style="margin-top:6px"><select id="askTo">'+aopts+'</select><span class="sp"></span><button id="askSend" class="primary">提问</button></div>'
+      h+='<div class="bb-head"><h3>提问</h3><span class="dim">广播或定向 · 回答方只在各自声明的范围内作答，超范围会说明并拒答</span>'
+        +((single&&ctl)?('<span class="sp"></span><span class="bb-ctl">'+ctl+'</span>'):'')+'</div>'
+        +'<div class="bb-mid"><textarea id="askText" rows="2" placeholder="向回答方提问…"></textarea>'
+        +'<div class="bb-side"><select id="askTo">'+aopts+'</select><button id="askSend" class="primary bb-send2">提问</button></div></div>'
         +'<div class="ferr" id="askErr"></div>';
     }else if(g==='dir'){
-      h+='<h3>下达工作指令（指挥方）</h3>'
-        +'<input id="dirTitle" placeholder="标题（可选，一句话概要，如：调整 bd10 搜索框配色）" style="width:100%">'
-        +'<textarea id="dirText" placeholder="指令内容（相对明确的工作要求，如：修改 bd10 页面的搜索框背景颜色为白色；多个改动点可写在同一条或分多条）。执行方 agent 会领单执行并逐条回执；外部成果（如 Figma 设计稿）可在回执中给出链接。"></textarea>'
-        +'<div class="row" style="margin-top:6px"><span class="dim">可随时异步发送，多条指令自动排队；执行方按需攒批（如同类改动合并）后逐单回执</span>'
-        +'<span class="sp"></span><button id="dirSend" class="primary">下达指令</button></div>'
+      /* 紧凑三行：标题+帮助+快捷控制（右） / 指令输入（~80%）+发送（右） / 展开更多（标题等可选项） */
+      h+='<div class="bb-head"><h3>下达工作指令</h3>'
+        +'<span class="dim" title="可随时异步发送，多条指令自动排队；执行方按需攒批（如同类改动合并）后逐单回执">可随时异步发送，多条自动排队 · 执行方可攒批回执</span>'
+        +((single&&ctl)?('<span class="sp"></span><span class="bb-ctl">'+ctl+'</span>'):'')+'</div>'
+        +'<div class="bb-mid"><textarea id="dirText" rows="2" placeholder="指令内容（相对明确的工作要求，如：修改 bd10 页面的搜索框背景颜色为白色；多个改动点可分多条）。执行方领单执行并逐条回执；外部成果（如设计稿）可在回执给出链接。"></textarea>'
+        +'<button id="dirSend" class="primary bb-send2">下达指令</button></div>'
+        +'<details class="bb-more"><summary>展开更多（标题等可选项）</summary>'
+        +'<div class="row" style="margin-top:6px"><input id="dirTitle" placeholder="标题（可选，一句话概要，如：调整 bd10 搜索框配色）" style="flex:1"></div></details>'
         +'<div class="ferr" id="dirErr"></div>';
     }else if(g==='dr'){
       var drOpts='';
@@ -278,7 +283,7 @@ function barComposerHtml(d,seats,mySeat,isAsker,stage){
     }
     h+='</div>';
   });
-  return [tchips,h];
+  return [tchips,h,single];
 }
 
 /* 左栏 tab 切换：记忆手选（sessionStorage 按桌存），重渲染保持当前 tab；切 tab 走 rerenderDetail 保住底部条草稿 */
@@ -935,7 +940,7 @@ function renderDetail(d){
   }
   if(t.pause&&stage!=='ended') gotoH+='<button class="sm" data-goto="mng">会议控制 →</button>';
   /* 底部常驻操作条：输入聚合（桌型×身份自适应类型）+ 快捷控制（阶段×角色，只放最主要的） */
-  var composer=barComposerHtml(d,seats,mySeat,isAsker,stage);
+  /* 快捷控制（阶段×角色）先构建：多类型时放 chips 行右侧；单类型时并入组头行（少占一行） */
   var ctlBtns='';
   var bbSeats=inqFlow?seats.filter(function(s){ return s.role==='answerer'; })
     :dspFlow?seats.filter(function(s){ return s.role==='worker'; })
@@ -953,6 +958,7 @@ function renderDetail(d){
       if(isAsker&&t.phase==='qa') ctlBtns+='<button id="bbInqEnd" class="danger">■ 结束问询</button>';
     }
   }
+  var composer=barComposerHtml(d,seats,mySeat,isAsker,stage,ctlBtns);
   /* ---- 右侧动态栏（窄右 · 全高）：阶段提示 / 邀请码(设定期·建桌人) / 事件流 / 本桌玩法 ---- */
   var railH='', stLabel=phaseLabel(t.tableType,t.phase), railStageH='';
   if(t.phase==='open'){
@@ -1025,8 +1031,10 @@ function renderDetail(d){
   if(composer||ctlBtns){
     barH='<div class="dtbar" id="dtBar"><div class="dtbar-in">'
       +(composer
-        ?'<div class="row" style="align-items:center;flex-wrap:wrap"><div class="tbar" id="cmpTabs" style="margin:0">'+composer[0]+'</div><span class="sp"></span>'
-          +(ctlBtns?'<div class="bb-ctrl">'+ctlBtns+'</div>':'')+'</div>'+composer[1]
+        ?(composer[0] /* 多类型：chips 行（右侧快捷控制）+ 组内容 */
+           ?'<div class="row" style="align-items:center;flex-wrap:wrap"><div class="tbar" id="cmpTabs" style="margin:0">'+composer[0]+'</div><span class="sp"></span>'
+             +(ctlBtns?'<div class="bb-ctrl">'+ctlBtns+'</div>':'')+'</div>'+composer[1]
+           :composer[1]) /* 单类型：省 chips 行（快捷控制已并入组头行） */
         :'<div class="row" style="align-items:center"><span class="dim">当前无可发送的消息类型</span><span class="sp"></span><div class="bb-ctrl">'+ctlBtns+'</div></div>')
       +'<div class="ferr" id="bbErr"></div></div></div>';
   } else if(t.phase==='closed'){

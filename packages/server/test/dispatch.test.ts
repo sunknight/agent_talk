@@ -417,7 +417,7 @@ describe("指挥桌：观察端与 skill 文案", () => {
   it("观察页含指挥桌要素：工作指令卡 / 指令输入组 / 消息标签；skill.md 含指挥流语义", async () => {
     const html = await (await fetch(base + "/")).text();
     expect(html).toContain("工作指令");
-    expect(html).toContain("下达工作指令（指挥方）");
+    expect(html).toContain("下达工作指令</h3>");
     expect(html).toContain("指挥桌（dispatch · 多人指挥 agent 干活）");
     expect(html).toContain("DIRECTIVE_RESULT");
     const skill = await (await fetch(base + "/skill.md")).text();
