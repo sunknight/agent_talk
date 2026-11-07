@@ -5,7 +5,7 @@ import { OBSERVER_HTML } from "../src/observer-html";
 
 describe("观察页 v2：浅色主题", () => {
   it("浅色 tokens 生效，深色主题移除", () => {
-    expect(OBSERVER_HTML).toContain("--bg:#f6f8fa");
+    expect(OBSERVER_HTML).toContain("--bg:#edf0f5");
     expect(OBSERVER_HTML).toContain("--panel:#ffffff");
     expect(OBSERVER_HTML).toContain("--acc:#2e6be6");
     expect(OBSERVER_HTML).not.toContain("--bg:#0f1117");
@@ -90,6 +90,47 @@ describe("观察页 v2：底部常驻操作条", () => {
     for (const k of ["act", "proc", "chat", "ov", "mng", "work", "files"]) {
       expect(OBSERVER_HTML).toContain(`'\\n@@T:${k}@@\\n'`);
     }
+  });
+});
+
+describe("观察页 v2 二轮：三栏工作台与建桌重排", () => {
+  it("返回按钮有背景（button.back，含详情/建桌/入桌/管理台）", () => {
+    expect(OBSERVER_HTML).toContain('<button class="back" id="back"');
+    expect(OBSERVER_HTML).toContain('<button class="back" id="ctBackList"');
+    expect(OBSERVER_HTML).toContain('<button class="back" id="jbBackList"');
+    expect(OBSERVER_HTML).toContain('<button class="back" id="admBack"');
+    expect(OBSERVER_HTML).toContain('.back { display:inline-flex');
+  });
+  it("三栏布局：窄左 tab / 宽中 / 窄右动态栏", () => {
+    expect(OBSERVER_HTML).toContain("grid-template-columns:232px minmax(0,1fr) 300px");
+    expect(OBSERVER_HTML).toContain('class="dt-rail"');
+    expect(OBSERVER_HTML).toContain('rail-card');
+    expect(OBSERVER_HTML).toContain('id="inviteBox"'); // 邀请码移至右栏
+  });
+  it("右栏内容：阶段提示/事件流跳会话/本桌玩法/就绪名单", () => {
+    expect(OBSERVER_HTML).toContain("当前状态");
+    expect(OBSERVER_HTML).toContain("本桌怎么玩");
+    expect(OBSERVER_HTML).toContain("app.querySelectorAll('.ev')");
+    expect(OBSERVER_HTML).toContain("switchDtTab('chat')");
+    expect(OBSERVER_HTML).toContain("已就绪':'未就绪'"); // 暂停期就绪名单
+  });
+  it("详情头按桌型着色（tt-* 渐变与顶条）", () => {
+    expect(OBSERVER_HTML).toContain("dt-head tt-'+esc(t.tableType)");
+    for (const tt of ["review", "collab", "brainstorm", "decision", "inquiry", "dispatch", "relay"]) {
+      expect(OBSERVER_HTML).toContain(`.dt-head.tt-${tt} {`);
+      expect(OBSERVER_HTML).toContain(`.tcard.tt-${tt} {`);
+    }
+  });
+  it("输入区 zcode 化：中列底部 sticky 圆角外框，不再全宽 fixed", () => {
+    expect(OBSERVER_HTML).toContain(".dtbar { position:sticky; bottom:12px;");
+    expect(OBSERVER_HTML).not.toContain(".dtbar { position:fixed");
+    expect(OBSERVER_HTML).toContain("margin-top:auto");
+  });
+  it("建桌表单：左类型列表 + 右表单 + 进阶折叠", () => {
+    expect(OBSERVER_HTML).toContain("ct-wrap");
+    expect(OBSERVER_HTML).toContain('class="ct-types" id="ctTypeRow"');
+    expect(OBSERVER_HTML).toContain("进阶设定");
+    expect(OBSERVER_HTML).toContain("创建圆桌</button>");
   });
 });
 

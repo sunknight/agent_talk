@@ -2,7 +2,7 @@
    设计语言：浅色工作台——白卡片 + 细边框 + 柔和色块 + 蓝主色；详情页为左栏 tab 工作台 + 底部常驻操作条。
    模板内禁用反引号约束不变。 */
 export const OBSERVER_CSS = String.raw`  :root {
-    --bg:#f6f8fa; --panel:#ffffff; --panel-2:#f3f6fa; --panel-3:#e9eef5;
+    --bg:#edf0f5; --panel:#ffffff; --panel-2:#f4f6fb; --panel-3:#e8ecf3;
     --line:#e4e9f0; --line-2:#ccd5e1;
     --fg:#1e2635; --dim:#68738a; --faint:#9aa4b8;
     --acc:#2e6be6; --acc-deep:#1f55c0; --acc-bg:rgba(46,107,230,.08); --acc-line:rgba(46,107,230,.32);
@@ -11,7 +11,7 @@ export const OBSERVER_CSS = String.raw`  :root {
     --err:#d64545; --err-bg:rgba(214,69,69,.08); --err-line:rgba(214,69,69,.32);
     --gold:#8a6d1d; --goldline:#c9a64b; --gold-bg:rgba(201,166,75,.14);
     --vote:#7952d3; --vote-bg:rgba(121,82,211,.09); --vote-line:rgba(121,82,211,.32);
-    --shadow:0 1px 2px rgba(16,24,40,.05); --shadow-lg:0 12px 32px rgba(16,24,40,.14);
+    --shadow:0 1px 3px rgba(16,24,40,.07); --shadow-lg:0 12px 32px rgba(16,24,40,.14);
     --r:8px; --r-lg:14px; --tt:.18s;
   }
   * { box-sizing:border-box; }
@@ -32,8 +32,7 @@ export const OBSERVER_CSS = String.raw`  :root {
   button:disabled { opacity:.45; cursor:not-allowed; }
   :focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
   main { padding:20px; max-width:1560px; margin:0 auto; }
-  main.detail { max-width:1800px; padding-bottom:170px; }
-  @media (max-width:760px) { main.detail { padding-bottom:210px; } }
+  main.detail { max-width:1800px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:14px; box-shadow:var(--shadow); }
   .tables { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
   .tcard { cursor:pointer; transition:border-color var(--tt),background var(--tt),box-shadow var(--tt); }
@@ -65,8 +64,9 @@ export const OBSERVER_CSS = String.raw`  :root {
   .section { margin-top:10px; }
   .section h3 { font-size:13px; color:var(--dim); margin:14px 0 6px; font-weight:600; }
   textarea { width:100%; min-height:72px; }
-  .back { color:var(--acc); cursor:pointer; user-select:none; }
-  .back:hover { text-decoration:underline; }
+  /* 返回按钮（有背景的胶囊按钮，详情/建桌/入桌/管理台通用） */
+  .back { display:inline-flex; align-items:center; gap:4px; padding:4px 14px; border-radius:99px; border:1px solid var(--line-2); background:var(--panel); color:var(--fg); font-size:13px; font-weight:500; cursor:pointer; user-select:none; transition:border-color var(--tt),color var(--tt),background var(--tt); }
+  .back:hover { border-color:var(--acc); color:var(--acc); background:var(--acc-bg); text-decoration:none; }
   /* 分区卡头（详情页各区统一：标题 + dim 说明 + 右侧操作） */
   .shead { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin:0 0 10px; }
   .shead > b { font-size:14px; }
@@ -335,7 +335,15 @@ export const OBSERVER_CSS = String.raw`  :root {
   .phasediv::before,.phasediv::after { content:''; flex:1; height:1px; background:var(--line); }
   /* ============ 详情页工作台（v2）：常驻头 + 左栏 tab + 内容区 + 底部操作条 ============ */
   /* 详情头卡：主题 + 徽章 + 复制链接 */
-  .dt-head { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); padding:14px 18px 10px; margin-bottom:12px; box-shadow:var(--shadow); }
+  .dt-head { background:var(--panel); border:1px solid var(--line); border-top:3px solid var(--acc); border-radius:var(--r-lg); padding:14px 18px 10px; margin-bottom:12px; box-shadow:var(--shadow); }
+  /* 七桌型着色：顶条色 + 左上浅色渐变（视觉落点） */
+  .dt-head.tt-review { border-top-color:#2e6be6; background:linear-gradient(120deg,#eaf1fe,#ffffff 58%); }
+  .dt-head.tt-collab { border-top-color:#7952d3; background:linear-gradient(120deg,#f1edfc,#ffffff 58%); }
+  .dt-head.tt-brainstorm { border-top-color:#d98f1f; background:linear-gradient(120deg,#fdf3e3,#ffffff 58%); }
+  .dt-head.tt-decision { border-top-color:#0e8a5f; background:linear-gradient(120deg,#e8f6f0,#ffffff 58%); }
+  .dt-head.tt-inquiry { border-top-color:#0d9bb5; background:linear-gradient(120deg,#e6f6fa,#ffffff 58%); }
+  .dt-head.tt-dispatch { border-top-color:#d95f2b; background:linear-gradient(120deg,#fdeee6,#ffffff 58%); }
+  .dt-head.tt-relay { border-top-color:#a07d1c; background:linear-gradient(120deg,#faf3df,#ffffff 58%); }
   .dt-head .shead { margin-bottom:4px; align-items:center; }
   .dt-head .shead > b { font-size:17px; }
   .dt-head .toprow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
@@ -349,7 +357,26 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dt-action.err { background:linear-gradient(90deg,var(--err-bg),rgba(214,69,69,.02)); border-color:var(--err-line); border-left-color:var(--err); }
   .dt-action.err .lbl { color:var(--err); }
   /* 工作台主体：左栏 tab 导航（含我的席位摘要）+ 右侧内容区 */
-  .dt-shell { display:grid; grid-template-columns:236px minmax(0,1fr); gap:16px; align-items:start; }
+  .dt-shell { display:grid; grid-template-columns:232px minmax(0,1fr) 300px; gap:16px; align-items:start; }
+  @media (max-width:1440px) { .dt-shell { grid-template-columns:220px minmax(0,1fr) 262px; } }
+  /* 中列：内容撑满 + 输入区沉底（内容不足一屏时也贴底） */
+  .dt-main { display:flex; flex-direction:column; min-height:calc(100vh - 240px); }
+  .dt-view { flex:1; min-width:0; }
+  /* 右栏 · 动态栏（阶段提示/邀请码/事件流/帮助），全高 sticky */
+  .dt-rail { position:sticky; top:66px; display:flex; flex-direction:column; gap:10px; min-width:0; max-height:calc(100vh - 80px); overflow:auto; }
+  .rail-card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); padding:12px 14px; box-shadow:var(--shadow); font-size:12.5px; }
+  .rail-card > h4 { margin:0 0 8px; font-size:13px; display:flex; gap:7px; align-items:center; }
+  .rail-card > h4::before { content:''; width:4px; height:14px; border-radius:2px; background:var(--acc); flex:none; }
+  .rail-card .kv { font-size:12.5px; margin:4px 0; }
+  .rail-card ul { margin:4px 0; padding-left:18px; }
+  .rail-card li { margin:4px 0; line-height:1.55; }
+  /* 事件流行：点击跳会话 */
+  .ev { display:flex; gap:7px; align-items:baseline; padding:5px 2px; border-bottom:1px dashed var(--line); cursor:pointer; transition:background var(--tt); }
+  .ev:hover { background:var(--acc-bg); }
+  .ev:last-child { border-bottom:none; }
+  .ev .t { color:var(--faint); font-size:11px; white-space:nowrap; flex:none; }
+  .ev .txt { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ev .mt { margin-right:0; flex:none; }
   .dt-side { position:sticky; top:66px; display:flex; flex-direction:column; gap:10px; min-width:0; }
   .dtabs { display:flex; flex-direction:column; gap:2px; background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); padding:6px; box-shadow:var(--shadow); }
   .dtab { display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:8px 12px; border:none; background:transparent; border-radius:var(--r); color:var(--dim); font-size:13.5px; font-weight:500; transition:background var(--tt),color var(--tt); }
@@ -377,9 +404,10 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dt-main .cb-list { max-height:calc(100vh - 330px); min-height:380px; }
   @media (max-width:1200px) { .dt-main .cb-list { max-height:60vh; } }
   /* 底部常驻操作条：所有 tab 可用——主输入（桌型×身份自适应类型）+ 快捷控制（阶段×角色） */
-  .dtbar { position:fixed; left:0; right:0; bottom:0; z-index:14; background:var(--panel); border-top:1px solid var(--line); box-shadow:0 -6px 20px rgba(16,24,40,.07); padding-bottom:max(8px,env(safe-area-inset-bottom)); }
-  .dtbar-in { max-width:1800px; margin:0 auto; padding:8px 20px 0; display:flex; flex-direction:column; gap:6px; }
-  .dtbar-ro { max-width:1800px; margin:0 auto; padding:10px 20px 2px; color:var(--dim); font-size:12.5px; text-align:center; }
+  /* 输入区（zcode 风格）：固定在中间列底部——sticky 贴视口底，内容不足一屏时沉到列底；圆角外框最小高度 */
+  .dtbar { position:sticky; bottom:12px; z-index:14; margin-top:auto; background:var(--panel); border:1px solid var(--line-2); border-radius:16px; box-shadow:0 8px 28px rgba(16,24,40,.12); padding:10px 14px 12px; }
+  .dtbar-in { display:flex; flex-direction:column; gap:6px; min-height:52px; }
+  .dtbar-ro { color:var(--dim); font-size:12.5px; text-align:center; padding:6px 0 2px; }
   .bb-row { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
   .bb-types { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
   .bb-chip { font-size:12px; padding:2px 12px; border-radius:99px; border:1px solid var(--line); color:var(--dim); background:var(--panel); cursor:pointer; transition:color var(--tt),border-color var(--tt),background var(--tt); }
@@ -394,16 +422,17 @@ export const OBSERVER_CSS = String.raw`  :root {
   .bb-ctrl .btn.primary { font-weight:600; }
   .bb-tip { font-size:11.5px; color:var(--faint); padding-bottom:2px; }
   @media (max-width:760px) {
-    .dtbar-in { padding:8px 12px 0; }
     .bb-row { flex-direction:column; align-items:stretch; }
     .bb-input { width:100%; }
     .bb-send { width:100%; }
     .bb-ctrl { justify-content:center; }
+    .dtbar { bottom:8px; }
   }
   /* 工作台响应式：窄屏左栏退化横向 tab，摘要卡入内容区顶部 */
   @media (max-width:1200px) {
     .dt-shell { grid-template-columns:1fr; }
     .dt-side { position:static; }
+    .dt-rail { position:static; max-height:none; order:3; }
     .dtabs { flex-direction:row; overflow-x:auto; padding:5px; gap:4px; }
     .dtab { width:auto; white-space:nowrap; padding:6px 12px; }
     .dtab .cnt { margin-left:4px; }
@@ -413,6 +442,32 @@ export const OBSERVER_CSS = String.raw`  :root {
   .dcols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 14px; align-items:start; }
   .dcol { min-width:0; }
   @media (max-width:980px) { .dcols { grid-template-columns:1fr; } }
+  /* 建桌表单：左类型列表 + 右类型表单（首次使用者第一界面，进阶折叠争取一屏） */
+  .ct-wrap { display:grid; grid-template-columns:250px minmax(0,1fr); gap:16px; align-items:start; }
+  .ct-types { position:sticky; top:66px; display:flex; flex-direction:column; gap:4px; background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg); padding:8px; box-shadow:var(--shadow); }
+  .ct-form .ct-grid2 { display:grid; grid-template-columns:5fr 7fr; gap:0 12px; }
+  .ct-form .rchoice label { min-height:64px; } /* 角色卡等高（含/不含「常用」标注） */
+  @media (max-width:640px) { .ct-form .ct-grid2 { grid-template-columns:1fr; } }
+  .ct-types label { display:flex; align-items:center; gap:8px; padding:9px 12px; border-radius:var(--r); cursor:pointer; font-size:13.5px; font-weight:500; color:var(--dim); transition:background var(--tt),color var(--tt); border:none; }
+  .ct-types label:hover { background:var(--panel-2); color:var(--fg); }
+  .ct-types label:has(input:checked) { background:var(--acc-bg); color:var(--acc); font-weight:700; }
+  .ct-types input { display:none; }
+  .ct-types label .ic { font-size:15px; width:20px; text-align:center; flex:none; }
+  .ct-types label .hint { display:none; }
+  @media (max-width:900px) {
+    .ct-wrap { grid-template-columns:1fr; }
+    .ct-types { position:static; flex-direction:row; overflow-x:auto; }
+    .ct-types label { white-space:nowrap; padding:7px 12px; }
+  }
+  /* 列表桌卡类型顶条（七桌型色，视觉落点） */
+  .tcard { border-top:3px solid var(--line-2); }
+  .tcard.tt-review { border-top-color:#2e6be6; }
+  .tcard.tt-collab { border-top-color:#7952d3; }
+  .tcard.tt-brainstorm { border-top-color:#d98f1f; }
+  .tcard.tt-decision { border-top-color:#0e8a5f; }
+  .tcard.tt-inquiry { border-top-color:#0d9bb5; }
+  .tcard.tt-dispatch { border-top-color:#d95f2b; }
+  .tcard.tt-relay { border-top-color:#a07d1c; }
   /* 未登录引导页：hero + 三步卡 */
   .intro-hero { text-align:center; padding:36px 16px 22px; }
   .intro-hero .ih-title { font-size:24px; font-weight:700; letter-spacing:.03em; }

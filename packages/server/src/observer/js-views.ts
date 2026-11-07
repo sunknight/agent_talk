@@ -48,7 +48,7 @@ function renderList(){
   }
   h+='<div class="tables">';
   list.forEach(function(t){
-    h+='<div class="card tcard" data-tid="'+esc(t.tableId)+'">'
+    h+='<div class="card tcard tt-'+esc(t.tableType)+'" data-tid="'+esc(t.tableId)+'">'
       +'<div class="row" style="align-items:flex-start"><b class="t-title">'+esc(t.topic)+'</b><span class="sp"></span>'+phaseBadge(t.phase,0,t.tableType)+(t.paused?'<span class="badge warn">⏸</span>':'')+'</div>'
       +'<div class="row" style="margin-top:8px">'+typeBadge(t.tableType)
       +(t.mySeatRole?roleBadge(t.mySeatRole)+' <span class="dim">我的席位'+(t.mySeatName?'：'+esc(t.mySeatName):'')+'</span>':'')+'</div>'
@@ -86,7 +86,7 @@ function openAdmin(){
 function renderAdminUsers(d){
   var app=document.getElementById('app');
   var users=d.users||[];
-  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="admBack">← 返回列表</span><span class="sp"></span><b>管理台 · 用户</b><span class="dim">'+users.length+' 个用户</span><button id="admRefresh">刷新</button></div>';
+  var h='<div class="row" style="margin-bottom:12px"><button class="back" id="admBack" type="button">← 返回列表</button><span class="sp"></span><b>管理台 · 用户</b><span class="dim">'+users.length+' 个用户</span><button id="admRefresh">刷新</button></div>';
   h+='<div class="hint" style="margin-bottom:10px">授予/撤销管理员与禁用/启用均即时生效并写入审计；禁用 = 该用户 token 立即失效（agent 席位不受影响），可随时恢复。服务端只存 token 哈希、原始 token 不可取回：要把某用户接入浏览器登录，用「重签token」生成新登录 token（旧的立即失效，新 token 只显示这一次）。</div>';
   if(adminIssuedToken){
     h+='<div class="card alert" style="margin-bottom:10px">'
@@ -160,7 +160,7 @@ function openAdminUserTables(uid,name){
   app.innerHTML='<div class="card dim">加载「'+esc(name)+'」的参桌…</div>';
   api('GET','/api/admin/users/'+encodeURIComponent(uid)+'/tables').then(function(d){
     var list=d.tables||[];
-    var h='<div class="row" style="margin-bottom:12px"><span class="back" id="autBack">← 返回用户管理</span><span class="sp"></span><b>参桌明细 · '+esc(name)+'</b><span class="dim">'+list.length+' 席</span></div>';
+    var h='<div class="row" style="margin-bottom:12px"><button class="back" id="autBack" type="button">← 返回用户管理</button><span class="sp"></span><b>参桌明细 · '+esc(name)+'</b><span class="dim">'+list.length+' 席</span></div>';
     if(!list.length) h+='<div class="card dim">该用户没有任何席位（未建桌也未入席）。</div>';
     h+='<div class="card" style="overflow:auto"><table><tr><th>圆桌</th><th>阶段</th><th>席位名</th><th>角色</th><th>席位状态</th><th>就绪</th><th></th></tr>';
     list.forEach(function(r){
@@ -183,33 +183,43 @@ function openAdminUserTables(uid,name){
 /* ---------- 视图：创建圆桌 ---------- */
 function renderCreateForm(){
   var app=document.getElementById('app');
-  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="ctBackList">← 返回列表</span><span class="sp"></span><b>创建圆桌</b><span class="dim" id="ctModeHint"></span></div>';
-  h+='<div class="card frm">'
-    +'<h4>基本信息</h4>'
-    +'<div class="frow"><label class="t">桌类型 <b>*</b></label><div id="ctTypeRow" class="rchoice two">'
+  var TT_ICON={review:'🔍',collab:'🤝',brainstorm:'💡',decision:'⚖️',inquiry:'❓',dispatch:'📋',relay:'⇄'};
+  var h='<div class="row" style="margin-bottom:12px"><button class="back" id="ctBackList" type="button">← 返回列表</button><span class="sp"></span><b style="font-size:16px">创建圆桌</b><span class="dim" id="ctModeHint"></span></div>';
+  /* 左：桌类型列表（点选切换，? 看模式帮助）；右：所选类型的表单（进阶折叠，争取一屏） */
+  h+='<div class="ct-wrap">'
+    +'<aside class="ct-types" id="ctTypeRow">'
     +TABLE_TYPES.map(function(tt){
-      return '<label><input type="radio" name="ctType" value="'+esc(tt.id)+'"'+(tt.id==='review'?' checked':'')+'><span><b>'+esc(tt.label)+'</b> <button type="button" class="mh-q" data-tt="'+esc(tt.id)+'" title="查看「'+esc(tt.label)+'」模式帮助">?</button><br><span class="hint" style="margin:0">'+esc(tt.description||'')+'</span></span></label>';
+      return '<label title="'+escAttr(tt.description||'')+'"><input type="radio" name="ctType" value="'+esc(tt.id)+'"'+(tt.id==='review'?' checked':'')+'>'
+        +'<span class="ic">'+(TT_ICON[tt.id]||'⬡')+'</span>'+esc(tt.label)
+        +'<button type="button" class="mh-q" data-tt="'+esc(tt.id)+'" title="查看「'+esc(tt.label)+'」模式帮助" style="margin-left:auto">?</button></label>';
     }).join('')
-    +'</div><div class="hint">类型决定流程语义与可选角色；开桌后不可更改。点卡片上的 <b>?</b> 查看该模式的说明、使用方式与最佳实践</div></div>'
-    +'<div class="frow"><label class="t">我的角色</label><div id="ctRoleRow" class="rchoice two"></div>'
-    +'<div class="hint">自建桌＝你以所选角色入席直接参会；选「主持人」＝主持人建桌（只管规则/资料/邀请与调度，不参与评审协作）。问询桌选「问询方」＝你就是要提问的人</div></div>'
+    +'</aside>'
+    +'<section class="card frm ct-form">'
+    +'<div class="frow" style="margin-top:0"><label class="t" for="ctTopic">这桌做什么？一句话主题 <b>*</b></label>'
+    +'<input id="ctTopic" placeholder="如「v2 接口文档评审」「产品白皮书协作撰写」" style="font-size:15px;padding:10px 14px">'
+    +'<div class="hint">类型决定流程语义与可选角色，开桌后不可更改——左侧换类型看角色与提示变化；点「?」看完整玩法</div></div>'
+    +'<div class="ct-grid2">'
+    +'<div class="frow"><label class="t" for="ctSeatName">席位名 <b>*</b></label><input id="ctSeatName"'+(view.userName?' value="'+escAttr(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
+    +'<div class="frow"><label class="t" for="ctAgent">agent 标识（选填）</label><input id="ctAgent" placeholder="如 zcode / claude；留空 = human-only"></div>'
+    +'</div>'
+    +'<div class="frow"><label class="t" id="ctSeatTitle">我的席位（角色）</label><div id="ctRoleRow" class="rchoice two"></div>'
+    +'<div class="hint">自建桌＝你以所选角色入席直接参会；选「主持人」＝只管规则/资料/邀请与调度，不参与评审协作。问询桌选「问询方」＝你就是要提问的人</div></div>'
     +'<div class="frow"><label class="t">开放邀请的角色</label><div class="cchoice" id="ctRoles"></div><div class="hint" id="ctRolesHint"></div></div>'
-    +'<div class="frow"><label class="t" for="ctTopic">主题 <b>*</b></label><input id="ctTopic" placeholder="如「v2 接口文档评审」「产品白皮书协作撰写」"><div class="hint">一句话说清这桌评什么/协作什么</div></div>'
+    +'<details class="sec" style="margin-top:6px"><summary>进阶设定（目标 / 交付物 / 规则 / 参数，默认收起）<span class="dim">全部可选</span></summary><div class="sec-body">'
     +'<div class="frow"><label class="t" for="ctGoals">目标共识</label><input id="ctGoals" placeholder="本次要达成什么（可选）"><div class="hint">会议结束时希望各方同意的结论</div></div>'
     +'<div class="frow"><label class="t" for="ctDeliverables">期望交付物</label><input id="ctDeliverables" placeholder="如「修订后的 api.md」（可选）"></div>'
-    +'<h4>桌规则与角色安排</h4>'
-    +'<div class="frow"><label class="t" for="ctRules">桌规则</label><textarea id="ctRules" placeholder="供各方 agent 阅读遵守，如「逐条审阅」「互审补缺、认领必达」（可选）"></textarea></div>'
-    +'<div class="frow"><label class="t" for="ctRolePlan">角色安排说明</label><textarea id="ctRolePlan" placeholder="对各参与方职责的补充描述，随邀请码发给各方（可选）"></textarea></div>'
-    +'<h4 id="ctSeatTitle">我的席位</h4>'
-    +'<div class="frow"><label class="t" for="ctSeatName">席位名 <b>*</b></label><input id="ctSeatName"'+(view.userName?' value="'+escAttr(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
-    +'<div class="frow"><label class="t" for="ctAgent">agent 标识（选填）</label><input id="ctAgent" placeholder="如 zcode / claude；留空 = human-only（先由人工参与，agent 后续接入）"></div>'
-    +'<h4>高级参数（留空用默认）</h4>'
-    +'<div class="row"><div class="frow" style="flex:1"><label class="t" for="ctRounds">评审轮次上限（默认 2）</label><input id="ctRounds" type="number" min="1" max="10"></div>'
-    +'<div class="frow" style="flex:1"><label class="t" for="ctTurnSec">发言超时秒（默认 300）</label><input id="ctTurnSec" type="number" min="30"></div></div>'
-    +'<div class="frow" id="ctPrecheckRow"><label class="t">系统预审</label><div class="cchoice"><label><input type="checkbox" id="ctPrecheck" checked> 开启——各方 agent 的回合提交先经系统预审（人代答不受影响；建桌后可在「会议控制」随时开关）</label></div></div>'
+    +'<div class="frow"><label class="t" for="ctRules">桌规则</label><textarea id="ctRules" placeholder="供各方 agent 阅读遵守，如「逐条审阅」「互审补缺、认领必达」（可选）" style="min-height:56px"></textarea></div>'
+    +'<div class="frow"><label class="t" for="ctRolePlan">角色安排说明</label><textarea id="ctRolePlan" placeholder="对各参与方职责的补充描述，随邀请码发给各方（可选）" style="min-height:56px"></textarea></div>'
+    +'<div class="ct-grid2">'
+    +'<div class="frow"><label class="t" for="ctRounds">评审轮次上限（默认 2）</label><input id="ctRounds" type="number" min="1" max="10"></div>'
+    +'<div class="frow"><label class="t" for="ctTurnSec">发言超时秒（默认 300）</label><input id="ctTurnSec" type="number" min="30"></div>'
+    +'</div>'
+    +'<div class="frow" id="ctPrecheckRow"><label class="t">系统预审</label><div class="cchoice"><label><input type="checkbox" id="ctPrecheck" checked> 开启——各方 agent 的回合提交先经系统预审（人代答不受影响；建桌后可随时开关）</label></div></div>'
+    +'</div></details>'
     +'<div class="ferr" id="ctErr"></div>'
-    +'<div class="row" style="margin-top:10px"><button id="ctCancel">取消</button><span class="sp"></span><button id="ctSubmit" class="primary">创建</button></div>'
-    +'</div>';
+    +'<div class="dim" style="margin-top:10px">创建后进入详情页：复制邀请码发给参与方 → 全员就绪 → 开始</div>'
+    +'<div class="row" style="margin-top:8px"><span class="sp"></span><button id="ctCancel">取消</button><button id="ctSubmit" class="primary">创建圆桌</button></div>'
+    +'</section></div>';
   app.innerHTML=h;
   var lastRole=null; /* 类型切换时尽量保留已选角色（不在新类型角色集时回落默认） */
   function ctType(){ var r=document.querySelector('input[name="ctType"]:checked'); return r?r.value:'review'; }
@@ -284,10 +294,10 @@ function renderCreateForm(){
         ?'你将成为指挥方（人类成员席位）：执行方就绪后开始工作，你在本页随时下达指令'
         :'你将以'+(ROLE_LABEL[role]||role)+'席位入席参会');
     document.getElementById('ctSeatTitle').textContent = inq&&!hosted
-      ?'问询方信息（不占席位，仅作显示名）'
+      ?'我的身份（问询方 · 不占席位，席位名仅作显示）'
       :hosted
-      ?'我的席位（主持人）'
-      :'我的席位（角色：'+(ROLE_LABEL[role]||role)+'）';
+      ?'我的角色（主持人建桌）'
+      :'我的角色（入席为'+(ROLE_LABEL[role]||role)+'）';
     document.getElementById('ctPrecheckRow').style.display = (inq||tt.flow==='dispatch')?'none':'';
   }
   document.querySelectorAll('input[name="ctType"]').forEach(function(r){ r.onchange=syncType; });
@@ -383,7 +393,7 @@ function renderCreateResult(d,topic){
 /* ---------- 视图：凭邀请码入桌 ---------- */
 function renderJoinForm(){
   var app=document.getElementById('app');
-  var h='<div class="row" style="margin-bottom:12px"><span class="back" id="jbBackList">← 返回列表</span><span class="sp"></span><b>凭邀请码入桌</b><span class="dim">角色由邀请码定死（提案方/评审方/协作者/回答方/执行方/指挥方/观察方），席位不能自封</span></div>';
+  var h='<div class="row" style="margin-bottom:12px"><button class="back" id="jbBackList" type="button">← 返回列表</button><span class="sp"></span><b>凭邀请码入桌</b><span class="dim">角色由邀请码定死（提案方/评审方/协作者/回答方/执行方/指挥方/观察方），席位不能自封</span></div>';
   h+='<div class="card frm">'
     +'<div class="frow"><label class="t" for="jbCode">邀请码 <b>*</b></label><textarea id="jbCode" placeholder="粘贴 10 位邀请码，或整段粘贴收到的「完整邀请」文本"></textarea><div class="hint">先查码确认所属圆桌，再确认入席；查询不消耗码次数</div></div>'
     +'<div class="frow"><label class="t" for="jbSeatName">席位名 <b>*</b></label><input id="jbSeatName"'+(view.userName?' value="'+escAttr(view.userName)+'"':' placeholder="你的显示名"')+'></div>'
