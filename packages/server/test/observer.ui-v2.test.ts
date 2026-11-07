@@ -175,3 +175,26 @@ describe("观察页 v2：模块归属不变量", () => {
     expect(OBSERVER_HTML).toContain("istep");
   });
 });
+
+describe("观察页：桌设定入口与指挥方席位表单（任务 0053）", () => {
+  it("open 阶段桌设定表单扩到自建建桌人（标题按身份切换）", () => {
+    expect(OBSERVER_HTML).toContain("if(isHost||isOwner){");
+    expect(OBSERVER_HTML).toContain("isHost?'主持人':'建桌人'");
+    // 桌设定保存通道（user token）不变，提示带「保存后已入席各方可见」
+    expect(OBSERVER_HTML).toContain("仅设定阶段可改（保存后已入席各方可见）");
+    // 自建建桌人仍有自己的入桌设定分支（director 除外——人类席位无席位设定）
+    expect(OBSERVER_HTML).toContain("if(!isHost){");
+  });
+  it("暂停期立场表单排除指挥方（渲染了也存不进——seat-config 恒 403），改给说明文案", () => {
+    expect(OBSERVER_HTML).toContain("} else if(mySeat.role==='director'){");
+    expect(OBSERVER_HTML).toContain("工作已暂停：指挥方无需设定立场");
+  });
+  it("指挥桌流程/右栏提示带桌设定入口指路", () => {
+    expect(OBSERVER_HTML).toContain("详情页「管理」tab 完善桌设定");
+    expect(OBSERVER_HTML).toContain("桌设定（主题/交付物）在「管理」tab 可改");
+  });
+  it("暂停期会议控制就绪判定按桌型收窄（指挥桌只看执行方，与服务端 doResume 同口径）", () => {
+    expect(OBSERVER_HTML).toContain("dspCtl?s.role==='worker':s.role!=='host'");
+    expect(OBSERVER_HTML).toContain("需全部执行方就绪");
+  });
+});

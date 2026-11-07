@@ -364,6 +364,34 @@ describe("指挥桌：回执状态机", () => {
   });
 });
 
+describe("指挥桌：桌设定（建桌人=director，任务 0053）", () => {
+  it("open 阶段建桌人可改主题/交付物并广播同步已入席执行方；非建桌人 director 403；开始后锁定", async () => {
+    const t = await mkDispatch("桌设定");
+    const w = await joinWorker(t.tableId, t.codes.worker, "桌设定-执行方");
+    const other = await joinDirector(t.tableId, t.codes.director, "桌设定-指挥方乙");
+    // 非建桌人的 director 不可改（not_owner）
+    const no = await call("POST", `/api/tables/${t.tableId}/my/table-config`, { token: other.userToken, body: { topic: "越权改主题" } });
+    expect(no.ok).toBe(false);
+    expect(no.error?.code).toBe("not_owner");
+    // 建桌人（director 身份）改主题 + 交付物
+    const yes = await call("POST", `/api/tables/${t.tableId}/my/table-config`, { token: t.user, body: { topic: "新主题", deliverables: "执行清单 + 成果链接" } });
+    expect(yes.ok, JSON.stringify(yes.error)).toBe(true);
+    expect(yes.data.topic).toBe("新主题");
+    expect(yes.data.deliverables).toBe("执行清单 + 成果链接");
+    // 已入席执行方经消息流看到更新广播（agent 每回合 poll 刷新桌况）
+    const poll = await call("GET", `/api/tables/${t.tableId}/poll?since=0&timeout=0`, { token: w.seatToken });
+    expect(poll.ok).toBe(true);
+    expect(poll.data.table.topic).toBe("新主题");
+    expect(poll.data.messages.some((m: any) => m.type === "INFO" && String(m.payload?.text ?? "").includes("建桌人更新了桌设定"))).toBe(true);
+    // 开始工作后桌设定锁定
+    const s = await call("POST", `/api/tables/${t.tableId}/my/start`, { token: t.user });
+    expect(s.ok).toBe(true);
+    const locked = await call("POST", `/api/tables/${t.tableId}/my/table-config`, { token: t.user, body: { topic: "开工后改" } });
+    expect(locked.ok).toBe(false);
+    expect(locked.error?.code).toBe("already_started");
+  });
+});
+
 describe("指挥桌：暂停与纪要", () => {
   it("working 可暂停（指挥方=建桌人是控制人）：暂停期发指令/回执双 409，恢复后照常", async () => {
     const t = await mkWorking("暂停");

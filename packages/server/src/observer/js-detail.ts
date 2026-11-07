@@ -61,7 +61,9 @@ function seatCfgFormHtml(cfg, pausedMode, midflow){
    内容与元素 id 和旧版长面板一致（绑定不动），仅收纳为可折叠子区块；开合状态存 view.seatOpen 抗轮询重渲染 */
 function ctlBodyHtml(t,seats,turn){
   if(t.pause){
-    var ctlSeats=seats.filter(function(s){ return s.role!=='host'; });
+    /* 就绪判定按桌型收窄（与服务端 doResume 同口径）：指挥桌只看执行方（指挥方人类席位豁免，同 host） */
+    var dspCtl=ttOf(t.tableType).flow==='dispatch';
+    var ctlSeats=seats.filter(function(s){ return dspCtl?s.role==='worker':s.role!=='host'; });
     var ctlReady=ctlSeats.filter(function(s){ return s.config&&s.config.ready; });
     var ctlAll=ctlSeats.length>0&&ctlReady.length===ctlSeats.length;
     var h='';
@@ -69,7 +71,7 @@ function ctlBodyHtml(t,seats,turn){
       h+='<div class="kv">'+esc(s.name)+' '+roleBadge(s.role)+' <span class="badge '+((s.config&&s.config.ready)?'ok':'warn')+'">'+((s.config&&s.config.ready)?'已就绪':'未就绪')+'</span></div>';
     });
     h+='<div class="row" style="margin-top:8px"><button id="ctlResume" class="primary"'+(ctlAll?'':' disabled')+'>▶ 继续会议</button>'
-      +'<span class="dim">恢复到「'+esc(phaseLabel(t.tableType,t.phase))+'」继续；需全员就绪（系统管理员可强制继续）</span></div>'
+      +'<span class="dim">恢复到「'+esc(phaseLabel(t.tableType,t.phase))+'」继续；'+(dspCtl?'需全部执行方就绪':'需全员就绪')+'（系统管理员可强制继续）</span></div>'
       +'<div class="ferr" id="ctlErr"></div>';
     return h;
   }
@@ -504,28 +506,32 @@ function renderDetail(d){
       h+='<div class="section"><h3>凭证恢复 · 更换 agent</h3>'+credBodyHtml()+'</div>';
     } else if(t.phase==='open'){
       /* 设定阶段：设定表单 / 摘要 + 建桌人开始按钮（无代答环节——代答自会议开始起才有） */
-      if(isHost){
-        /* 主持人：不做入桌设定，管桌设定（定规则）+ 就绪名单 + 开始 */
-        h+='<div class="section"><h3>桌设定（主持人 · 定规则）</h3>'
+      if(isHost||isOwner){
+        /* 桌设定（定规则）：hosted=主持人；自建=建桌人（指挥桌 director / 评审 proposer / 协同 collaborator / 对接 provider）。
+           open 阶段随时可改，保存即广播系统消息同步已入席各方（agent 每回合 poll 刷新桌况） */
+        h+='<div class="section"><h3>桌设定（'+(isHost?'主持人':'建桌人')+' · 定规则）</h3>'
           +'<div class="frow"><label class="t">主题</label><input id="tcTopic" value="'+escAttr(t.topic||'')+'"></div>'
           +'<div class="frow"><label class="t">目标共识</label><input id="tcGoals" value="'+escAttr(t.goals||'')+'"></div>'
           +'<div class="frow"><label class="t">期望交付物</label><input id="tcDeliverables" value="'+escAttr(t.deliverables||'')+'"></div>'
           +'<div class="frow"><label class="t">桌规则</label><textarea id="tcRules" placeholder="供各方 agent 阅读遵守，如「逐条审阅」「意见须给出理由」">'+esc(t.rules||'')+'</textarea></div>'
           +'<div class="frow"><label class="t">角色安排说明</label><textarea id="tcRolePlan">'+esc((d.meta&&d.meta.rolePlan)||'')+'</textarea></div>'
           +'<div class="ferr" id="tcErr"></div>'
-          +'<div class="row"><button id="tcSave" class="primary">保存桌设定</button><span class="dim">仅设定阶段可改；资料文档在「资料·纪要」tab 上传（选共享，全桌可见）</span></div></div>';
-      } else if(mySeat.role==='director'){
-        /* 指挥方：人类席位无入桌设定，给出角色说明 */
-        h+='<div class="section dim" style="margin-top:10px">你是指挥方（人类成员）：无需入桌设定；工作开始后用底部输入条选「下指令」安排工作，执行方领单后逐条回执（见「工作指令」tab）。</div>';
-      } else if(!cfg.ready||view.cfgEditing){
-        h+=seatCfgFormHtml(cfg,false);
-      } else {
-        h+='<div class="section"><h3>当前设定 <span class="dim">（已就绪，开始会议前可修改）</span></h3><div class="sumcard">'
-          +'<div class="kv"><span class="k">立场</span>'+esc(cfg.stance||'')+'</div>'
-          +(cfg.style?'<div class="kv"><span class="k">风格</span><span style="white-space:pre-line">'+esc(cfg.style)+'</span></div>':'')
-          +'<div class="kv"><span class="k">讨论范围</span>'+esc(cfg.scope||'（未填写）')+'</div>'
-          +'<div class="kv"><span class="k">数据范围</span>'+((cfg.dataScope||[]).length?cfg.dataScope.map(function(x){ var it=dsItem(x); return '<span class="chip">'+esc(it.text)+'<i class="dgl">'+esc(DS_GRANT_LABEL[it.grant])+'</i></span>'; }).join(' '):'<span class="dim">（未填写）</span>')+'</div>'
-          +'</div><button id="cfgEdit">修改设定</button></div>';
+          +'<div class="row"><button id="tcSave" class="primary">保存桌设定</button><span class="dim">仅设定阶段可改（保存后已入席各方可见）；资料文档在「资料·纪要」tab 上传（选共享，全桌可见）</span></div></div>';
+      }
+      if(!isHost){
+        if(mySeat.role==='director'){
+          /* 指挥方：人类席位无入桌设定，给出角色说明 */
+          h+='<div class="section dim" style="margin-top:10px">你是指挥方（人类成员）：无需入桌设定；工作开始后用底部输入条选「下指令」安排工作，执行方领单后逐条回执（见「工作指令」tab）。</div>';
+        } else if(!cfg.ready||view.cfgEditing){
+          h+=seatCfgFormHtml(cfg,false);
+        } else {
+          h+='<div class="section"><h3>当前设定 <span class="dim">（已就绪，开始会议前可修改）</span></h3><div class="sumcard">'
+            +'<div class="kv"><span class="k">立场</span>'+esc(cfg.stance||'')+'</div>'
+            +(cfg.style?'<div class="kv"><span class="k">风格</span><span style="white-space:pre-line">'+esc(cfg.style)+'</span></div>':'')
+            +'<div class="kv"><span class="k">讨论范围</span>'+esc(cfg.scope||'（未填写）')+'</div>'
+            +'<div class="kv"><span class="k">数据范围</span>'+((cfg.dataScope||[]).length?cfg.dataScope.map(function(x){ var it=dsItem(x); return '<span class="chip">'+esc(it.text)+'<i class="dgl">'+esc(DS_GRANT_LABEL[it.grant])+'</i></span>'; }).join(' '):'<span class="dim">（未填写）</span>')+'</div>'
+            +'</div><button id="cfgEdit">修改设定</button></div>';
+        }
       }
 
       /* 建桌人：就绪名单 + 开始会议 */
@@ -558,9 +564,12 @@ function renderDetail(d){
         h+=seatCfgFormHtml(cfg,false,true);
       }
       if(t.pause){
-        /* 暂停期：人工补充或调整主张（保存时勾选「重新就绪」）；主持人无设定，只看控制区 */
+        /* 暂停期：人工补充或调整主张（保存时勾选「重新就绪」）；主持人/指挥方无席位设定只看控制区
+           （director 的 seat-config 服务端恒 403，表单渲染了也存不进——不渲染） */
         if(isHost){
           h+='<div class="section dim" style="margin-top:10px">会议已暂停：主持人无需设定立场，等待各方补充并重新就绪后，在「管理」tab 会议控制继续会议。</div>';
+        } else if(mySeat.role==='director'){
+          h+='<div class="section dim" style="margin-top:10px">工作已暂停：指挥方无需设定立场（有想法直接在指令里说），等待执行方补充并重新就绪后，在「管理」tab 会议控制继续工作。</div>';
         } else {
           h+=seatCfgFormHtml(cfg,true);
         }
@@ -977,7 +986,7 @@ function renderDetail(d){
       railStageH+='<div class="dim">在「管理」tab 完成桌设定；用下方邀请码把各方请进来，全员就绪后开始。</div>';
     }
     if(meDirector){
-      railStageH+='<div class="dim">指挥方无需设定：等执行方入席就绪，工作开始后用底部输入条下达指令。</div>';
+      railStageH+='<div class="dim">指挥方无需席位设定；桌设定（主题/交付物）在「管理」tab 可改，等执行方入席就绪后开始工作。</div>';
     }
     if(meSeatPlain){
       railStageH+='<div class="dim">到「管理」tab 完成入桌设定（立场/范围/数据范围），勾选<b>就绪</b>并保存；开始后锁定，改动等暂停期。</div>';
